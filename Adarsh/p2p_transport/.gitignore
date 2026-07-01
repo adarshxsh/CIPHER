@@ -1,7 +1,7 @@
 # Go build outputs
 bin/
-peer
-relay
+/peer
+/relay
 
 # Identity Keys & Data (NEVER commit these!)
 *.key
