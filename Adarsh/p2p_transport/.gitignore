@@ -1,0 +1,14 @@
+# Go build outputs
+bin/
+peer
+relay
+
+# Identity Keys (NEVER commit these!)
+*.key
+peer1_data/
+peer2_data/
+
+# OS/IDE files
+.DS_Store
+.idea/
+.vscode/

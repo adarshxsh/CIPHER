@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  peer1:
+    build: .
+    container_name: peer1
+    command: ["-listen", "9000", "-key", "/app/data/identity.key"]
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./peer1_data:/app/data
+
+  peer2:
+    build: .
+    container_name: peer2
+    command: ["-listen", "9001", "-key", "/app/data/identity.key", "-target", "/dns4/peer1/tcp/9000/p2p/12D3KooWLxCmzJzxx3w3vEDxQmwiYdZRP75MARHQ487Pu58kEVc2"]
+    ports:
+      - "9001:9001"
+    depends_on:
+      - peer1
+    volumes:
+      - ./peer2_data:/app/data
