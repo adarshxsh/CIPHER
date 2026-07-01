@@ -8,22 +8,10 @@ Dialing target: Because you updated the docker-compose.yml file with Peer 1's ID
 Connected to peer: The two nodes successfully performed a handshake! The libp2p transport layer negotiated the connection securely using their respective Ed25519 keys.
 Received reply: Peer 2 opened a stream using our custom protocol (/cipher/filetransfer/1.0.0), sent a "Hello", and Peer 1 sent back the message: "Hello from 12D3KooWLxCmz..."
 
-```eraser
-// Nodes
-User [icon: user, label: "User / System"]
-CLI [icon: terminal, label: "CLI Application"]
-Keystore [icon: key, label: "Keystore Module"]
-Host [icon: server, label: "Libp2p Host"]
-UDP [icon: network, label: "UDP / NAT traversal"]
-TCP [icon: network, label: "TCP / Relay"]
-Protocol [icon: activity, label: "Protocol Handler"]
+![Phase 1 Architecture](assets/diagrams/phase1.png)
 
-// Connections
-User > CLI : Generate Key
-CLI > Keystore : Load/Generate
-Keystore > Host : Ed25519 Key
-Host > UDP : Listen
-Host > TCP : Connect
-Host > Protocol : Stream
-Protocol > User : Data
-```
+## Phase 2 Architecture: Relay Bootstrap
+
+In Phase 2, a central Relay node bridges the connection between peers that cannot reach each other directly (e.g. behind strict NATs). Peer 1 requests a reservation on the Relay, and Peer 2 dials the Relay to request a circuit to Peer 1.
+
+![Phase 2 Architecture](assets/diagrams/phase2.png)

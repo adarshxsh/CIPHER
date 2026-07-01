@@ -1,22 +1,34 @@
 version: "3.9"
 
 services:
+  relay:
+    build: .
+    container_name: relay
+    command: ["./relay", "-listen", "9002"]
+    ports:
+      - "9002:9002"
+    volumes:
+      - ./data/relay:/app/data
+
   peer1:
     build: .
     container_name: peer1
-    command: ["-listen", "9000", "-key", "/app/data/identity.key"]
+    command: ["./peer", "-listen", "9000", "-key", "/app/data/identity.key", "-relay", "/dns4/relay/tcp/9002/p2p/RELAY_ID_PLACEHOLDER"]
     ports:
       - "9000:9000"
+    depends_on:
+      - relay
     volumes:
-      - ./peer1_data:/app/data
+      - ./data/peer1:/app/data
 
   peer2:
     build: .
     container_name: peer2
-    command: ["-listen", "9001", "-key", "/app/data/identity.key", "-target", "/dns4/peer1/tcp/9000/p2p/12D3KooWLxCmzJzxx3w3vEDxQmwiYdZRP75MARHQ487Pu58kEVc2"]
+    command: ["./peer", "-listen", "9001", "-key", "/app/data/identity.key", "-relay", "/dns4/relay/tcp/9002/p2p/RELAY_ID_PLACEHOLDER", "-target", "/dns4/peer1/tcp/9000/p2p/PEER1_ID_PLACEHOLDER"]
     ports:
       - "9001:9001"
     depends_on:
+      - relay
       - peer1
     volumes:
-      - ./peer2_data:/app/data
+      - ./data/peer2:/app/data

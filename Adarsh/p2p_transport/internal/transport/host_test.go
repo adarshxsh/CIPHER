@@ -14,8 +14,8 @@ func TestNewHost(t *testing.T) {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 
-	// Create the host using port 0 (random)
-	h, err := NewHost(priv, 0)
+	// Create the host using port 0 (random) and no relays
+	h, err := NewHost(priv, 0, nil)
 	if err != nil {
 		t.Fatalf("Failed to create host: %v", err)
 	}

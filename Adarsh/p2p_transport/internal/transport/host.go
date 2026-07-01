@@ -6,20 +6,34 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // NewHost creates a new libp2p host with the given private key.
-// By default, it listens on all network interfaces on a random port.
-// For Phase 1, we are just standing up a bare libp2p host.
-func NewHost(privKey crypto.PrivKey, listenPort int) (host.Host, error) {
-	// If listenPort is 0, libp2p will choose a random available port.
+// By default, it listens on all network interfaces on a random port (if listenPort is 0).
+// For Phase 2, we can also pass a list of static relay addresses to connect through.
+func NewHost(privKey crypto.PrivKey, listenPort int, relayAddrs []peer.AddrInfo) (host.Host, error) {
 	listenAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
-	// Create the libp2p node
-	h, err := libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
 		libp2p.ListenAddrStrings(listenAddr),
-	)
+		// Phase 2: Enable dialing through relays
+		libp2p.EnableRelay(),
+	}
+
+	// If we have static relays, configure AutoRelay to maintain reservations on them
+	if len(relayAddrs) > 0 {
+		opts = append(opts, 
+			libp2p.EnableAutoRelayWithStaticRelays(relayAddrs),
+			// Force the node to believe it is behind a NAT. 
+			// Otherwise, when testing locally, it thinks it's publicly reachable and WON'T ask the relay for a reservation!
+			libp2p.ForceReachabilityPrivate(),
+		)
+	}
+
+	// Create the libp2p node
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}

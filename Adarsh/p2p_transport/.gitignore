@@ -3,10 +3,10 @@ bin/
 peer
 relay
 
-# Identity Keys (NEVER commit these!)
+# Identity Keys & Data (NEVER commit these!)
 *.key
-peer1_data/
-peer2_data/
+keys/
+data/
 
 # OS/IDE files
 .DS_Store
