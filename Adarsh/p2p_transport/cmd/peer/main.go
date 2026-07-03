@@ -124,6 +124,11 @@ func main() {
 		}
 		slog.Info("Connected to peer", "peer_id", info.ID.String())
 
+		// Phase 3: Give Hole Punching (DCUtR) 3 seconds to upgrade the connection from Relayed to Direct!
+		// Opening streams during the exact moment a connection is being migrated can cause timeouts.
+		slog.Info("Waiting 3 seconds for Hole Punching to establish a direct connection...")
+		time.Sleep(3 * time.Second)
+
 		// Open a stream
 		stream, err := host.NewStream(context.Background(), info.ID, ProtocolID)
 		if err != nil {
