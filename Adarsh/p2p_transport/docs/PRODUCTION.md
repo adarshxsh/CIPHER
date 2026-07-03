@@ -14,16 +14,17 @@ The Relay node currently listens on `0.0.0.0:9002` with no resource limits.
 
 ## 3. Identity Key Management
 Currently, the identity keys (`peer1.key`, `peer2.key`, `relay.key`) are generated dynamically and stored as plain text files in the working directory.
-- **Production Change:** Use secure key vaults or environment variables to inject the Ed25519 seed securely in production.
-- **Production Change:** Do not rely on local disk storage in containerized/ephemeral environments unless mounted to a persistent, encrypted volume.
+- **Production Change:** Cloud platforms like Render use ephemeral storage, meaning disk files are deleted on every restart. We have implemented the `CIPHER_IDENTITY_KEY` environment variable to securely inject a base64-encoded persistent key. This prevents the Relay Peer ID from changing on every deploy.
 
 ## 4. Hole Punching (Phase 3)
 Relayed connections are expensive and slow (high latency, high bandwidth).
-- **Production Change:** Enable `libp2p.EnableHolePunching()` (coming in Phase 3). This allows peers to use the Relay only for the initial handshake and coordinate a direct connection (TCP/UDP hole punching), dropping the Relay from the middle of the transfer.
+- **Production Change:** `libp2p.EnableHolePunching()` allows peers to use the Relay only for the initial handshake and coordinate a direct connection (TCP/UDP hole punching).
+- **CRITICAL WARNING:** When a connection migrates from Relayed to Direct in the background, opening a new stream at that exact moment can cause a `context deadline exceeded` timeout. You must either add a synchronization delay (e.g., `time.Sleep(3s)`) before calling `host.NewStream()`, or manage streams gracefully when migrations happen.
 
 ## 5. Security & TLS
 Currently, `go-libp2p` negotiates security by default (Noise / TLS), but we are binding to plain TCP ports.
 - **Production Change:** Ensure that the host environment (AWS, GCP) correctly passes TCP traffic. You do not need an SSL certificate (like HTTPS) because `libp2p` handles its own encrypted handshakes over raw TCP using the Ed25519 identity keys.
+- **Cloud PaaS Limitations:** Platforms like Render or Heroku actively block raw TCP ports. In these environments, you MUST configure the Relay to listen exclusively on WebSockets (WSS on port 443) to route traffic through their HTTP load balancers.
 
 ## 6. Observability
 We are currently using basic standard output `slog`.
