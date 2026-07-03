@@ -25,10 +25,20 @@ Since Go compiles into a single executable file, you can run the peers entirely 
 
 First, compile the applications:
 ```bash
+# For Mac/Linux
 go build -o cipher-relay ./cmd/relay
 go build -o cipher-peer ./cmd/peer
+
+# For Windows (run this on your Mac to cross-compile)
+GOOS=windows GOARCH=amd64 go build -o cipher-peer.exe ./cmd/peer
 ```
-Then run them using the binaries (e.g. `./cipher-peer -listen 9000 ...`).
+
+**Running on Windows (Peer 2):**
+
+```powershell
+.\cipher-peer.exe -listen 9001 -relay /dns4/<YOUR_APP>.onrender.com/tcp/443/wss/p2p/<RELAY_ID> -target /dns4/<YOUR_APP>.onrender.com/tcp/443/wss/p2p/<RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>
+```
+*(No Makefiles, Go, or Docker required on the Windows machine!)*
 
 ---
 

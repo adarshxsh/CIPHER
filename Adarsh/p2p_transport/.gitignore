@@ -15,3 +15,4 @@ data/
 Peer1
 relay_linux
 .env
+actual_testing.env

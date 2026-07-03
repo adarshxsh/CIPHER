@@ -2,6 +2,7 @@ package identity
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,9 +12,23 @@ import (
 )
 
 // LoadOrGenerateKey reads a private key from the given path.
-// If the file does not exist, it generates a new Ed25519 key and saves it to the path.
+// It first checks if the CIPHER_IDENTITY_KEY environment variable is set.
+// If not, it falls back to reading from the path, generating a new key if the file doesn't exist.
 func LoadOrGenerateKey(path string) (crypto.PrivKey, error) {
-	// Try to open the file
+	// 1. Check if key is provided via Environment Variable (preferred for cloud environments like Render)
+	if envKey := os.Getenv("CIPHER_IDENTITY_KEY"); envKey != "" {
+		keyBytes, err := base64.StdEncoding.DecodeString(envKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 CIPHER_IDENTITY_KEY from env: %w", err)
+		}
+		privKey, err := crypto.UnmarshalPrivateKey(keyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal private key from env: %w", err)
+		}
+		return privKey, nil
+	}
+
+	// 2. Fallback to file on disk
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
