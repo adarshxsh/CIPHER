@@ -19,3 +19,7 @@ For detailed instructions on how to run tests locally (via standard commands or 
 
 In Phase 2, we introduce a lightweight Relay node (`cmd/relay`) and enable `libp2p.EnableRelayService()`. 
 Peers can connect to each other by routing their traffic through this central Relay node, bypassing NATs temporarily before we implement hole punching.
+
+## Phase 3: Hole Punching (DCUtR)
+
+In Phase 3, peers use the central Relay *only* to coordinate a direct TCP/UDP hole punch (Direct Connection Upgrade through Relay). Once coordinated, they punch through their firewalls, establish a direct connection, and drop the Relay to maximize speed and reduce bandwidth costs.

@@ -43,6 +43,8 @@ func main() {
 		libp2p.ListenAddrStrings(listenAddr),
 		// Enable relay service functionality!
 		libp2p.EnableRelayService(),
+		// Phase 3: Enable AutoNAT service so peers can discover their public addresses
+		libp2p.EnableNATService(),
 	)
 	if err != nil {
 		slog.Error("Failed to create libp2p host", "error", err)

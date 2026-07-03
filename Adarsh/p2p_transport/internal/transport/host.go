@@ -20,6 +20,8 @@ func NewHost(privKey crypto.PrivKey, listenPort int, relayAddrs []peer.AddrInfo)
 		libp2p.ListenAddrStrings(listenAddr),
 		// Phase 2: Enable dialing through relays
 		libp2p.EnableRelay(),
+		// Phase 3: Enable hole punching (DCUtR) to upgrade relayed connections to direct connections
+		libp2p.EnableHolePunching(),
 	}
 
 	// If we have static relays, configure AutoRelay to maintain reservations on them

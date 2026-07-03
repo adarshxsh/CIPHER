@@ -15,3 +15,9 @@ Received reply: Peer 2 opened a stream using our custom protocol (/cipher/filetr
 In Phase 2, a central Relay node bridges the connection between peers that cannot reach each other directly (e.g. behind strict NATs). Peer 1 requests a reservation on the Relay, and Peer 2 dials the Relay to request a circuit to Peer 1.
 
 ![Phase 2 Architecture](assets/diagrams/phase2.png)
+
+## Phase 3 Architecture: DCUtR (Hole Punching)
+
+In Phase 3, peers utilize the Relay to coordinate a direct TCP/UDP hole punch (Direct Connection Upgrade through Relay). Once the direct connection is established, the Relay is dropped.
+
+![Phase 3 Architecture](assets/diagrams/phase3.png)

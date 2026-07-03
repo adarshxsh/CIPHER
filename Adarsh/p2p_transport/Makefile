@@ -39,11 +39,11 @@ docker-down:
 
 # Manual Run Shortcuts
 run-peer1:
-	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9000 -key $(KEY1)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9000 -key $(KEY1) $(if $(RELAY),-relay $(RELAY))
 
-# Usage: make run-peer2 TARGET=/ip4/127.0.0.1/tcp/9000/p2p/PEER1_ID
+# Usage: make run-peer2 TARGET=/ip4/127.0.0.1/tcp/9000/p2p/PEER1_ID RELAY=/ip4/...
 run-peer2:
-	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9001 -key $(KEY2) -target $(TARGET)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9001 -key $(KEY2) $(if $(RELAY),-relay $(RELAY)) -target $(TARGET)
 
 run-relay:
 	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/relay/main.go -listen 9002 -key keys/relay.key

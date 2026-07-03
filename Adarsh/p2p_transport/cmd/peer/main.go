@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -154,6 +156,30 @@ func main() {
 	slog.Info("Peer is running. Press Ctrl+C to stop.")
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// Phase 3: Monitor connections periodically to observe direct connection upgrades
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-sigCh:
+				return
+			case <-ticker.C:
+				conns := host.Network().Conns()
+				if len(conns) > 0 {
+					for _, c := range conns {
+						maddr := c.RemoteMultiaddr().String()
+						connType := "Direct"
+						if strings.Contains(maddr, "p2p-circuit") {
+							connType = "Relayed"
+						}
+						slog.Info("Active Connection", "peer", c.RemotePeer().String(), "type", connType, "addr", maddr)
+					}
+				}
+			}
+		}
+	}()
+
 	<-sigCh
 	
 	slog.Info("Shutting down...")

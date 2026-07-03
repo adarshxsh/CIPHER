@@ -19,7 +19,7 @@ make docker-up
 
 ## Manual Testing Commands
 
-*Verifies that peers can connect by routing their traffic through a central Relay node.*
+*Verifies that peers can connect via a Relay, and then upgrade that connection to a Direct Connection via Hole Punching (Phase 3).*
 
 **Terminal 1 (Relay):**
 ```bash
@@ -29,12 +29,16 @@ make run-relay
 
 **Terminal 2 (Peer 1):**
 ```bash
-make run-peer1
+make run-peer1 -relay /ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>
 ```
 *(Copy the Peer 1 ID from the logs)*
 
 **Terminal 3 (Peer 2):**
 ```bash
-make run-peer2 TARGET=/ip4/127.0.0.1/tcp/9000/p2p/<PEER1_ID>
+make run-peer2 -relay /ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID> TARGET=/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>
 ```
-*(Note: To test pure relay routing locally without a direct dial fallback, you can modify the Makefile `TARGET` to use the relayed multiaddress: `/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>`)*
+
+**Verification:**
+Watch the logs on Peer 1 and Peer 2. Every 10 seconds, the active connections are printed. 
+1. Initially, you will see a connection with `type=Relayed`.
+2. Shortly after, the Hole Punching sequence (DCUtR) will trigger, and you should see a new connection to the same peer with `type=Direct`.
