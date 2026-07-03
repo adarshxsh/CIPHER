@@ -19,7 +19,20 @@ make docker-up
 
 ## Manual Testing Commands
 
-*Verifies that peers can connect via a Relay, and then upgrade that connection to a Direct Connection via Hole Punching (Phase 3).*
+### Standalone Execution (No Docker)
+
+Since Go compiles into a single executable file, you can run the peers entirely without Docker! You don't even need to install Go on the other device if you send them the compiled binary.
+
+First, compile the applications:
+```bash
+go build -o cipher-relay ./cmd/relay
+go build -o cipher-peer ./cmd/peer
+```
+Then run them using the binaries (e.g. `./cipher-peer -listen 9000 ...`).
+
+---
+
+### Local Network Testing (Single device or WiFi)
 
 **Terminal 1 (Relay):**
 ```bash
@@ -29,14 +42,36 @@ make run-relay
 
 **Terminal 2 (Peer 1):**
 ```bash
-make run-peer1 -relay /ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>
+# Wait for the relay to fully start, then run:
+make run-peer1 RELAY=/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>
 ```
 *(Copy the Peer 1 ID from the logs)*
 
 **Terminal 3 (Peer 2):**
 ```bash
-make run-peer2 -relay /ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID> TARGET=/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>
+make run-peer2 RELAY=/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID> TARGET=/ip4/127.0.0.1/tcp/9002/p2p/<RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>
 ```
+
+---
+
+### Cloud Testing (Render / VPS)
+
+If your Relay is hosted in the cloud (like Render), you must connect using **WebSockets** (`/wss`) to bypass HTTP-only load balancers. 
+
+First, copy `.env.example` to `.env` and fill in your Render URL and IDs to save typing them out.
+
+**Terminal 1 (Peer 1):**
+```bash
+# Connect to the cloud Relay using Secure WebSockets
+make run-peer1 RELAY=/dns4/<YOUR_APP>.onrender.com/tcp/443/wss/p2p/<CLOUD_RELAY_ID>
+```
+
+**Terminal 2 (Peer 2 on a different network):**
+```bash
+make run-peer2 RELAY=/dns4/<YOUR_APP>.onrender.com/tcp/443/wss/p2p/<CLOUD_RELAY_ID> TARGET=/dns4/<YOUR_APP>.onrender.com/tcp/443/wss/p2p/<CLOUD_RELAY_ID>/p2p-circuit/p2p/<PEER1_ID>
+```
+
+---
 
 **Verification:**
 Watch the logs on Peer 1 and Peer 2. Every 10 seconds, the active connections are printed. 

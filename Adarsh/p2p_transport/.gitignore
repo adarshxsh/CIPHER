@@ -14,3 +14,4 @@ data/
 .vscode/
 Peer1
 relay_linux
+.env
