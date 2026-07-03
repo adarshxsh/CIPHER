@@ -51,13 +51,15 @@ func main() {
 	}
 
 	// 2. Start libp2p Host
+	// NOTE: We intentionally do NOT use libp2p.EnableRelayService() here.
+	// Instead, we call relay.New(host, ...) below with custom resource limits.
+	// Using both creates TWO relay services — reservations on one are invisible to the other,
+	// causing NO_RESERVATION errors when peers try to dial through the circuit.
 	slog.Info("Starting libp2p Relay host", "port", *listenPort, "envPort", envPort)
 	host, err := libp2p.New(
 		libp2p.Identity(privKey),
 		// Listen on the configured addresses
 		libp2p.ListenAddrStrings(listenAddrs...),
-		// Enable relay service functionality!
-		libp2p.EnableRelayService(),
 		// Enable AutoNAT service so peers can discover their public addresses
 		libp2p.EnableNATService(),
 	)
@@ -68,6 +70,7 @@ func main() {
 	defer host.Close()
 
 	// Start the Relay service with demo-grade resource limits.
+	// This is the ONLY relay service — do not also use libp2p.EnableRelayService().
 	// These limits are intentionally generous for development and demonstration.
 	// For production, migrate to a dedicated VPS and tune these down.
 	_, err = relay.New(host,

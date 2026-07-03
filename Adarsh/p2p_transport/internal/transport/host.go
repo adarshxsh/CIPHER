@@ -72,9 +72,11 @@ func NewHostFromConfig(cfg HostConfig) (host.Host, error) {
 		// Keepalive: the ping protocol detects dead connections so we don't hold stale state
 		libp2p.Ping(true),
 
-		// Default transports include TCP + WebSocket, so peers behind HTTP-only
-		// networks (e.g. corporate proxies) can still connect via WS
-		libp2p.DefaultTransports,
+		// NOTE: Do NOT specify libp2p.DefaultTransports explicitly.
+		// When no transport option is set, libp2p.New() automatically includes
+		// TCP, WebSocket, QUIC, AND the relay circuit transport.
+		// Explicitly setting DefaultTransports can interfere with the relay circuit
+		// transport setup and prevent AutoRelay from obtaining reservations.
 	}
 
 	// If we have static relays, configure AutoRelay to maintain reservations on them
