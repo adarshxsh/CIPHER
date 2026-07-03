@@ -34,13 +34,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	listenAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *listenPort)
+	// Check if PORT environment variable is set (used by Render, Heroku, etc.)
+	envPort := os.Getenv("PORT")
+	var listenAddr string
+	var listenAddrWS string
+	if envPort != "" {
+		listenAddr = fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", envPort)
+		listenAddrWS = fmt.Sprintf("/ip4/0.0.0.0/tcp/%s/ws", envPort)
+	} else {
+		listenAddr = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *listenPort)
+		listenAddrWS = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/ws", *listenPort)
+	}
 
 	// 2. Start libp2p Host
-	slog.Info("Starting libp2p Relay host", "port", *listenPort)
+	slog.Info("Starting libp2p Relay host", "port", *listenPort, "envPort", envPort)
 	host, err := libp2p.New(
 		libp2p.Identity(privKey),
-		libp2p.ListenAddrStrings(listenAddr),
+		// Listen on both standard TCP and WebSocket transports
+		libp2p.ListenAddrStrings(listenAddr, listenAddrWS),
 		// Enable relay service functionality!
 		libp2p.EnableRelayService(),
 		// Phase 3: Enable AutoNAT service so peers can discover their public addresses
