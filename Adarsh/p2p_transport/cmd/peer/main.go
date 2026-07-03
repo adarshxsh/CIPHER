@@ -5,10 +5,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,6 +55,7 @@ func main() {
 	targetAddr := flag.String("target", "", "Target peer multiaddress to dial (optional)")
 	keyPath := flag.String("key", "identity.key", "Path to the identity key file")
 	relayAddrStr := flag.String("relay", "", "Multiaddress of a relay to use (optional)")
+	sendFile := flag.String("send", "", "Path to a file to send to target (optional)")
 	flag.Parse()
 
 	// Configure slog
@@ -113,8 +117,14 @@ func main() {
 	// 5. Dial target if provided
 	if *targetAddr != "" {
 		go func() {
-			if err := dialAndExchange(ctx, h, *targetAddr); err != nil {
-				slog.Error("Dial and exchange failed", "error", err)
+			if *sendFile != "" {
+				if err := sendFileToTarget(ctx, h, *targetAddr, *sendFile); err != nil {
+					slog.Error("File transfer failed", "error", err)
+				}
+			} else {
+				if err := dialAndExchange(ctx, h, *targetAddr); err != nil {
+					slog.Error("Dial and exchange failed", "error", err)
+				}
 			}
 		}()
 	}
@@ -139,35 +149,181 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 		"protocol", string(s.Protocol()),
 	)
 
-	// Read message from stream
 	reader := bufio.NewReader(s)
 	msg, err := reader.ReadString('\n')
 	if err != nil {
-		slog.Error("Failed to read from stream", "error", err, "peer", remotePeer)
+		slog.Error("Failed to read header from stream", "error", err, "peer", remotePeer)
 		s.Reset()
 		return
 	}
 
+	header := strings.TrimSpace(msg)
+
+	// Check if this is a file transfer request: FILE:<filename>:<size>
+	if strings.HasPrefix(header, "FILE:") {
+		parts := strings.Split(header, ":")
+		if len(parts) != 3 {
+			slog.Error("Invalid file transfer header", "header", header)
+			s.Reset()
+			return
+		}
+		filename := filepath.Base(parts[1])
+		fileSize, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			slog.Error("Invalid file size in header", "size", parts[2], "error", err)
+			s.Reset()
+			return
+		}
+
+		slog.Info("Incoming file transfer request",
+			"filename", filename,
+			"size", humanBytes(fileSize),
+			"from", remotePeer,
+			"conn_type", connType,
+		)
+
+		// Create output directory
+		outDir := "received"
+		if err := os.MkdirAll(outDir, 0755); err != nil {
+			slog.Error("Failed to create received directory", "error", err)
+			s.Reset()
+			return
+		}
+
+		outPath := filepath.Join(outDir, filename)
+		outFile, err := os.Create(outPath)
+		if err != nil {
+			slog.Error("Failed to create output file", "path", outPath, "error", err)
+			s.Reset()
+			return
+		}
+		defer outFile.Close()
+
+		// Send READY signal to sender
+		if _, err := s.Write([]byte("READY\n")); err != nil {
+			slog.Error("Failed to send READY signal", "error", err)
+			s.Reset()
+			return
+		}
+
+		// Receive data
+		start := time.Now()
+		n, err := io.CopyN(outFile, reader, fileSize)
+		duration := time.Since(start)
+		if err != nil && err != io.EOF {
+			slog.Error("File transfer interrupted", "error", err, "bytes_received", n)
+			s.Reset()
+			return
+		}
+
+		speedMB := (float64(n) / 1024 / 1024) / duration.Seconds()
+		slog.Info("🎉 File received successfully!",
+			"saved_to", outPath,
+			"bytes", n,
+			"duration", duration.Round(time.Millisecond).String(),
+			"speed", fmt.Sprintf("%.2f MB/s", speedMB),
+		)
+		s.Close()
+		return
+	}
+
+	// Default hello message handling
 	slog.Info("Received message",
-		"message", strings.TrimSpace(msg),
+		"message", header,
 		"from", remotePeer,
 		"conn_type", connType,
 	)
 
-	// Send a reply
 	reply := fmt.Sprintf("Hello from %s!\n", h.ID().String())
 	_, err = s.Write([]byte(reply))
 	if err != nil {
-		slog.Error("Failed to write to stream", "error", err, "peer", remotePeer)
+		slog.Error("Failed to write reply", "error", err, "peer", remotePeer)
 		s.Reset()
 		return
 	}
 	s.Close()
 }
 
+// sendFileToTarget sends a local file over a stream to the target peer.
+func sendFileToTarget(ctx context.Context, h host.Host, targetAddrStr string, filePath string) error {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot read file %s: %w", filePath, err)
+	}
+	fileSize := fileInfo.Size()
+	filename := filepath.Base(filePath)
+
+	slog.Info("Preparing to send file", "file", filePath, "size", humanBytes(fileSize), "target", targetAddrStr)
+
+	maddr, err := multiaddr.NewMultiaddr(targetAddrStr)
+	if err != nil {
+		return fmt.Errorf("invalid target multiaddress: %w", err)
+	}
+	info, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		return fmt.Errorf("failed to parse peer info: %w", err)
+	}
+
+	if err := connectWithRetry(ctx, h, *info); err != nil {
+		return fmt.Errorf("failed to connect after retries: %w", err)
+	}
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
+	defer streamCancel()
+
+	stream, err := h.NewStream(streamCtx, info.ID, protocol.ID(ProtocolID))
+	if err != nil {
+		return fmt.Errorf("failed to open stream: %w", err)
+	}
+
+	// Send file header
+	header := fmt.Sprintf("FILE:%s:%d\n", filename, fileSize)
+	if _, err := stream.Write([]byte(header)); err != nil {
+		stream.Reset()
+		return fmt.Errorf("failed to send header: %w", err)
+	}
+
+	// Wait for READY reply
+	reader := bufio.NewReader(stream)
+	reply, err := reader.ReadString('\n')
+	if err != nil {
+		stream.Reset()
+		return fmt.Errorf("failed to receive READY signal: %w", err)
+	}
+	if strings.TrimSpace(reply) != "READY" {
+		stream.Reset()
+		return fmt.Errorf("unexpected reply from receiver: %s", reply)
+	}
+
+	// Open file and stream bytes
+	file, err := os.Open(filePath)
+	if err != nil {
+		stream.Reset()
+		return fmt.Errorf("failed to open input file: %w", err)
+	}
+	defer file.Close()
+
+	slog.Info("Streaming file bytes across peer connection...")
+	start := time.Now()
+	n, err := io.Copy(stream, file)
+	duration := time.Since(start)
+	if err != nil {
+		stream.Reset()
+		return fmt.Errorf("error while streaming file: %w", err)
+	}
+
+	speedMB := (float64(n) / 1024 / 1024) / duration.Seconds()
+	slog.Info("🚀 File sent successfully!",
+		"filename", filename,
+		"bytes", n,
+		"duration", duration.Round(time.Millisecond).String(),
+		"speed", fmt.Sprintf("%.2f MB/s", speedMB),
+	)
+	stream.Close()
+	return nil
+}
+
 // dialAndExchange connects to a target peer and performs the hello exchange.
-// Uses timeout contexts for both Connect and NewStream — never blocks indefinitely.
-// Includes exponential backoff reconnection if the initial dial fails.
 func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) error {
 	slog.Info("Dialing target", "target", targetAddrStr)
 
@@ -181,14 +337,12 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 		return fmt.Errorf("failed to parse peer info from multiaddress: %w", err)
 	}
 
-	// Connect with exponential backoff retry
 	if err := connectWithRetry(ctx, h, *info); err != nil {
 		return fmt.Errorf("failed to connect after retries: %w", err)
 	}
 
 	slog.Info("Connected to peer", "peer_id", info.ID.String())
 
-	// Open a stream with a timeout context — no infinite blocking
 	streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
 	defer streamCancel()
 
@@ -197,7 +351,6 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 		return fmt.Errorf("failed to open stream (timeout=%s): %w", StreamTimeout, err)
 	}
 
-	// Send a message
 	helloMsg := fmt.Sprintf("Hello from %s!\n", h.ID().String())
 	_, err = stream.Write([]byte(helloMsg))
 	if err != nil {
@@ -205,7 +358,6 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 		return fmt.Errorf("failed to write to stream: %w", err)
 	}
 
-	// Read reply
 	reader := bufio.NewReader(stream)
 	reply, err := reader.ReadString('\n')
 	if err != nil {
@@ -223,7 +375,6 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 }
 
 // connectWithRetry attempts to connect to a peer with exponential backoff.
-// This handles transient failures like Render cold starts (free tier spins down on idle).
 func connectWithRetry(ctx context.Context, h host.Host, info peer.AddrInfo) error {
 	delay := ReconnectBaseDelay
 
@@ -246,22 +397,19 @@ func connectWithRetry(ctx context.Context, h host.Host, info peer.AddrInfo) erro
 			"next_retry_in", delay.String(),
 		)
 
-		// Wait for backoff delay or context cancellation
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(delay):
 		}
 
-		// Exponential backoff with cap
 		delay = time.Duration(math.Min(float64(delay*2), float64(ReconnectMaxDelay)))
 	}
 
 	return fmt.Errorf("exhausted %d reconnection attempts to %s", ReconnectMaxAttempts, info.ID.String())
 }
 
-// classifyConnection determines whether a connection is Direct or Relayed
-// based on the remote multiaddress.
+// classifyConnection determines whether a connection is Direct or Relayed.
 func classifyConnection(conn network.Conn) string {
 	maddr := conn.RemoteMultiaddr().String()
 	if strings.Contains(maddr, "p2p-circuit") {
@@ -271,7 +419,6 @@ func classifyConnection(conn network.Conn) string {
 }
 
 // healthMonitor periodically logs the state of all active connections.
-// Provides structured observability into connection health, types, and stream counts.
 func healthMonitor(ctx context.Context, h host.Host) {
 	ticker := time.NewTicker(HealthCheckInterval)
 	defer ticker.Stop()
@@ -300,4 +447,18 @@ func healthMonitor(ctx context.Context, h host.Host) {
 			}
 		}
 	}
+}
+
+// humanBytes converts a byte count to a human-readable string.
+func humanBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%s", float64(b)/float64(div), []string{"KB", "MB", "GB", "TB"}[exp])
 }

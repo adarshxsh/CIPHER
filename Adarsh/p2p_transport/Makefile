@@ -81,7 +81,7 @@ run-peer1:
 # Run Peer 2 (Sender). Dials target and exchanges hello.
 # Usage: make run-peer2 RELAY=/ip4/.../p2p/<RELAY_ID> TARGET=/ip4/.../p2p-circuit/p2p/<PEER1_ID>
 run-peer2:
-	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9001 -key $(KEY2) $(if $(RELAY),-relay $(RELAY)) -target $(TARGET)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) run ./cmd/peer/main.go -listen 9001 -key $(KEY2) $(if $(RELAY),-relay $(RELAY)) -target $(TARGET) $(if $(SEND),-send $(SEND))
 
 # Run the Relay node locally
 run-relay:
