@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -56,7 +58,7 @@ func main() {
 		libp2p.ListenAddrStrings(listenAddrs...),
 		// Enable relay service functionality!
 		libp2p.EnableRelayService(),
-		// Phase 3: Enable AutoNAT service so peers can discover their public addresses
+		// Enable AutoNAT service so peers can discover their public addresses
 		libp2p.EnableNATService(),
 	)
 	if err != nil {
@@ -65,21 +67,74 @@ func main() {
 	}
 	defer host.Close()
 
-	// Optionally start the Relay service explicitly if we need custom config,
-	// but libp2p.EnableRelayService() already injects it into the host.
-	// For reference, circuitv2/relay is enabled by the host option above.
-	_, err = relay.New(host)
+	// Start the Relay service with demo-grade resource limits.
+	// These limits are intentionally generous for development and demonstration.
+	// For production, migrate to a dedicated VPS and tune these down.
+	_, err = relay.New(host,
+		relay.WithResources(relay.Resources{
+			MaxReservations:        128,  // Max peers that can hold reservations
+			MaxCircuits:            64,   // Max simultaneous active circuits
+			BufferSize:             4096, // Read buffer size per circuit
+			MaxReservationsPerPeer: 4,    // Reservations a single peer can hold
+			MaxReservationsPerIP:   8,    // Reservations from a single IP
+		}),
+		relay.WithLimit(&relay.RelayLimit{
+			Duration: 5 * time.Minute, // Per-circuit lifetime (default is 2min, too short for file transfers)
+			Data:     1 << 27,         // 128 MB per circuit (default is much lower)
+		}),
+	)
 	if err != nil {
 		slog.Error("Failed to instantiate relay service", "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("Relay started successfully", "peer_id", host.ID().String())
+	slog.Info("Relay started successfully",
+		"peer_id", host.ID().String(),
+		"max_reservations", 128,
+		"max_circuits", 64,
+		"circuit_duration", "5m",
+		"circuit_data_limit", "128MB",
+	)
 	for _, addr := range host.Addrs() {
 		slog.Info("Relay listening on address", "addr", fmt.Sprintf("%s/p2p/%s", addr, host.ID()))
 	}
 
-	// 3. Wait for termination signal
+	// 3. Start HTTP health endpoint for monitoring (Render health checks, etc.)
+	// This runs on a separate port so it doesn't conflict with libp2p's transport.
+	healthPort := os.Getenv("HEALTH_PORT")
+	if healthPort == "" {
+		healthPort = "8080"
+	}
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			peerCount := len(host.Network().Peers())
+			connCount := len(host.Network().Conns())
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"ok","peer_id":"%s","peers":%d,"connections":%d}`,
+				host.ID().String(), peerCount, connCount)
+		})
+		slog.Info("Health endpoint starting", "port", healthPort)
+		if err := http.ListenAndServe(":"+healthPort, mux); err != nil {
+			slog.Warn("Health endpoint failed to start (non-fatal)", "error", err)
+		}
+	}()
+
+	// 4. Periodic connection logging
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			peers := host.Network().Peers()
+			slog.Info("Relay status",
+				"connected_peers", len(peers),
+				"total_connections", len(host.Network().Conns()),
+			)
+		}
+	}()
+
+	// 5. Wait for termination signal
 	slog.Info("Relay is running. Press Ctrl+C to stop.")
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

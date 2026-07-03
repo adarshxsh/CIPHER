@@ -1,4 +1,33 @@
 
+## Full Roadmap
+
+```
+Phase 1 ─── Identity & Loopback ───── ✅ Complete
+      │
+      ▼
+Phase 2 ─── Relay Bootstrap ────────── ✅ Complete (phase2-stable branch)
+      │     Render WSS, persistent ID
+      │     Connection manager, reconnection
+      │     Resource limits, health endpoint
+      │
+      ├──── Phase 4 ─── Chunk Engine ──── 🔲 Planned
+      │     32KB chunks, AES-GCM
+      │     keccak256 commitments
+      │     Merkle tree
+      │           │
+      │           ▼
+      │     Phase 5 ─── Wire Protocol ─── 🔲 Planned
+      │     ChunkRequest/ChunkResponse
+      │     LotteryTicket/KeyReveal
+      │     Full file transfer
+      │           │
+      │           ▼
+      │     Phase 6 ─── Demo Hardening ── 🔲 Planned
+      │
+      └──── Phase 3 ─── Hole Punching ── ⚠️ Deferred
+            DCUtR event-driven state machine
+            (returns after transport is proven stable)
+```
 
 ## Phase 1 Architecture: Identity & Local Loopback
 
@@ -16,8 +45,32 @@ In Phase 2, a central Relay node bridges the connection between peers that canno
 
 ![Phase 2 Architecture](assets/diagrams/phase2.png)
 
-## Phase 3 Architecture: DCUtR (Hole Punching)
+## Transport Abstraction
+
+The CIPHER protocol is transport-agnostic. It operates on a `network.Stream` (`io.ReadWriter`) regardless of how the underlying connection was established:
+
+```
+┌─────────────────────────────────────────────┐
+│           CIPHER Protocol Layer              │
+│  ChunkRequest → ChunkResponse → LotteryTicket → KeyReveal  │
+│                                               │
+│         Operates on: network.Stream           │
+│         (implements io.ReadWriter)            │
+└──────────────────┬──────────────────────────┘
+                   │
+        ┌──────────┴──────────┐
+        │                     │
+   ┌────┴────┐          ┌────┴────┐
+   │  Direct │          │ Relayed │
+   │   TCP   │          │ Circuit │
+   └─────────┘          └─────────┘
+   (Phase 3)            (Phase 2)
+```
+
+## Phase 3 Architecture: DCUtR (Hole Punching) — Deferred
 
 In Phase 3, peers utilize the Relay to coordinate a direct TCP/UDP hole punch (Direct Connection Upgrade through Relay). Once the direct connection is established, the Relay is dropped.
+
+**Status**: Implemented (`9a5e947`) but reverted (`bd36bda`) due to `NewStream()` race with DCUtR connection migration. Will return with event-driven state machine on `phase3-holepunch` branch.
 
 ![Phase 3 Architecture](assets/diagrams/phase3.png)
