@@ -66,7 +66,11 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Parse relay addr
+	// Only activate AutoRelay (reservation mode) when we are the RECEIVER (no -target flag).
+	// The sender only needs EnableRelay() to dial through circuits; requesting a reservation
+	// while also dialing through the relay causes a yamux write deadlock.
 	var relayAddrs []peer.AddrInfo
+	var relayPeerInfo *peer.AddrInfo
 	if *relayAddrStr != "" {
 		maddr, err := multiaddr.NewMultiaddr(*relayAddrStr)
 		if err != nil {
@@ -78,7 +82,11 @@ func main() {
 			slog.Error("Failed to parse relay peer info", "error", err)
 			os.Exit(1)
 		}
-		relayAddrs = append(relayAddrs, *info)
+		relayPeerInfo = info
+		if *targetAddr == "" {
+			// RECEIVER: activate AutoRelay so we get a reservation and are dialable
+			relayAddrs = append(relayAddrs, *info)
+		}
 	}
 
 	slog.Info("Loading identity key", "path", *keyPath)
@@ -114,7 +122,7 @@ func main() {
 
 	// Sender side: connect once, then provide REPL
 	if *targetAddr != "" {
-		go runSenderLoop(ctx, cancel, h, *targetAddr, *sendFile, len(relayAddrs) > 0)
+		go runSenderLoop(ctx, cancel, h, *targetAddr, *sendFile, relayPeerInfo)
 	}
 
 	go healthMonitor(ctx, h)
@@ -127,7 +135,8 @@ func main() {
 
 // runSenderLoop dials the target once, waits for a confirmed circuit,
 // then provides an interactive REPL for sending files.
-func runSenderLoop(ctx context.Context, cancel context.CancelFunc, h host.Host, targetAddrStr string, initialFile string, usingRelay bool) {
+func runSenderLoop(ctx context.Context, cancel context.CancelFunc, h host.Host, targetAddrStr string, initialFile string, relayInfo *peer.AddrInfo) {
+	usingRelay := relayInfo != nil
 	maddr, err := multiaddr.NewMultiaddr(targetAddrStr)
 	if err != nil {
 		slog.Error("Invalid target multiaddress", "error", err)
@@ -142,11 +151,19 @@ func runSenderLoop(ctx context.Context, cancel context.CancelFunc, h host.Host, 
 	// If we are going through a relay, give Peer 1 time to obtain its
 	// relay reservation before we knock on the circuit.
 	if usingRelay {
+		// Give Peer 1 enough time to obtain its relay reservation.
+		// Without this wait, Peer 2 dials before the relay has confirmed Peer 1's slot.
 		slog.Info("Waiting for Peer 1 relay reservation to be confirmed...", "wait", ReservationWait)
 		select {
 		case <-time.After(ReservationWait):
 		case <-ctx.Done():
 			return
+		}
+		// Pre-connect to the relay so it's in our peerstore; this primes the circuit dial
+		if relayInfo != nil {
+			relayCtx, relayCancel := context.WithTimeout(ctx, 15*time.Second)
+			_ = h.Connect(relayCtx, *relayInfo)
+			relayCancel()
 		}
 	}
 
@@ -402,9 +419,8 @@ func sendFileOverConn(ctx context.Context, h host.Host, peerID peer.ID, filePath
 }
 
 // openStreamWithRetry tries to open a stream with a short timeout per attempt.
-// A short timeout is critical: over relay circuits the yamux negotiation can
-// silently stall. If it does, we close the stale circuit and try again rather
-// than waiting 45 s per attempt.
+// We do NOT close the relay circuit on failure — closing it loses the peer's address
+// from libp2p's routing table, making recovery impossible. Instead we just retry.
 func openStreamWithRetry(ctx context.Context, h host.Host, peerID peer.ID, proto protocol.ID) (network.Stream, error) {
 	delay := ReconnectBaseDelay
 	for attempt := 1; ; attempt++ {
@@ -430,15 +446,9 @@ func openStreamWithRetry(ctx context.Context, h host.Host, peerID peer.ID, proto
 			"error", err,
 			"next_retry_in", delay,
 		)
-
-		// Force-close all stale relay connections to this peer so the
-		// next attempt gets a fresh circuit.
-		for _, c := range h.Network().ConnsToPeer(peerID) {
-			if strings.Contains(c.RemoteMultiaddr().String(), "p2p-circuit") {
-				slog.Info("Closing stale relay circuit", "addr", c.RemoteMultiaddr())
-				c.Close()
-			}
-		}
+		// NOTE: do NOT close the relay circuit here. Closing it removes the
+		// peer's address from the peerstore, which causes "no addresses" on the
+		// next attempt and makes recovery impossible.
 
 		select {
 		case <-ctx.Done():
