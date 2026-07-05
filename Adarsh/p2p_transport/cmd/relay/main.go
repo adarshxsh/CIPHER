@@ -75,15 +75,15 @@ func main() {
 	// For production, migrate to a dedicated VPS and tune these down.
 	_, err = relay.New(host,
 		relay.WithResources(relay.Resources{
-			MaxReservations:        128,  // Max peers that can hold reservations
-			MaxCircuits:            64,   // Max simultaneous active circuits
-			BufferSize:             4096, // Read buffer size per circuit
-			MaxReservationsPerPeer: 4,    // Reservations a single peer can hold
-			MaxReservationsPerIP:   8,    // Reservations from a single IP
+			MaxReservations:        256,    // Max peers that can hold reservations
+			MaxCircuits:            128,    // Max simultaneous active circuits
+			BufferSize:             131072, // 128 KB read buffer per circuit (essential for high-throughput WSS on Render!)
+			MaxReservationsPerPeer: 8,      // Reservations a single peer can hold
+			MaxReservationsPerIP:   16,     // Reservations from a single IP
 		}),
 		relay.WithLimit(&relay.RelayLimit{
-			Duration: 5 * time.Minute, // Per-circuit lifetime (default is 2min, too short for file transfers)
-			Data:     1 << 27,         // 128 MB per circuit (default is much lower)
+			Duration: 30 * time.Minute, // Per-circuit lifetime (30m for large file transfers)
+			Data:     1 << 30,          // 1 GB per circuit (up from 128 MB)
 		}),
 	)
 	if err != nil {
@@ -93,10 +93,11 @@ func main() {
 
 	slog.Info("Relay started successfully",
 		"peer_id", host.ID().String(),
-		"max_reservations", 128,
-		"max_circuits", 64,
-		"circuit_duration", "5m",
-		"circuit_data_limit", "128MB",
+		"max_reservations", 256,
+		"max_circuits", 128,
+		"buffer_size", "128KB",
+		"circuit_duration", "30m",
+		"circuit_data_limit", "1GB",
 	)
 	for _, addr := range host.Addrs() {
 		slog.Info("Relay listening on address", "addr", fmt.Sprintf("%s/p2p/%s", addr, host.ID()))

@@ -302,7 +302,8 @@ func sendFileToTarget(ctx context.Context, h host.Host, targetAddrStr string, fi
 
 	slog.Info("Streaming file bytes across peer connection...")
 	start := time.Now()
-	n, err := io.Copy(stream, file)
+	// Use a 64KB buffer for copying to reduce WebSocket framing overhead across cloud relays
+	n, err := io.CopyBuffer(stream, file, make([]byte, 65536))
 	duration := time.Since(start)
 	if err != nil {
 		stream.Reset()
