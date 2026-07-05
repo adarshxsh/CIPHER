@@ -86,6 +86,8 @@ func NewHostFromConfig(cfg HostConfig) (host.Host, error) {
 			// Force the node to believe it is behind a NAT.
 			// Otherwise, when testing locally, it thinks it's publicly reachable and WON'T ask the relay for a reservation!
 			libp2p.ForceReachabilityPrivate(),
+			// Enable Hole Punching (DCUtR) to upgrade relayed connections to direct connections
+			libp2p.EnableHolePunching(),
 		)
 	}
 

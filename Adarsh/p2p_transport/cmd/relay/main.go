@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 
 	"cipher-p2p/internal/identity"
@@ -68,6 +70,28 @@ func main() {
 		os.Exit(1)
 	}
 	defer host.Close()
+
+	// Enable deep debug logging for relay subsystems
+	golog.SetLogLevel("relay", "debug")
+	golog.SetLogLevel("p2p-circuit", "debug")
+	golog.SetLogLevel("autorelay", "debug")
+
+	// Add detailed connection logging
+	host.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(n network.Network, c network.Conn) {
+			slog.Info("Relay accepted connection",
+				"remote_peer", c.RemotePeer().String(),
+				"remote_addr", c.RemoteMultiaddr().String(),
+				"direction", c.Stat().Direction.String(),
+			)
+		},
+		DisconnectedF: func(n network.Network, c network.Conn) {
+			slog.Info("Relay lost connection",
+				"remote_peer", c.RemotePeer().String(),
+				"remote_addr", c.RemoteMultiaddr().String(),
+			)
+		},
+	})
 
 	// Start the Relay service with demo-grade resource limits.
 	// This is the ONLY relay service — do not also use libp2p.EnableRelayService().
