@@ -34,7 +34,7 @@ const (
 	DialTimeout = 30 * time.Second
 
 	// StreamTimeout is the maximum time allowed for host.NewStream() to open a protocol stream.
-	StreamTimeout = 15 * time.Second
+	StreamTimeout = 45 * time.Second
 
 	// ReconnectBaseDelay is the initial backoff delay between reconnection attempts.
 	ReconnectBaseDelay = 2 * time.Second
@@ -268,10 +268,7 @@ func sendFileToTarget(ctx context.Context, h host.Host, targetAddrStr string, fi
 		return fmt.Errorf("failed to connect after retries: %w", err)
 	}
 
-	streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
-	defer streamCancel()
-
-	stream, err := h.NewStream(streamCtx, info.ID, protocol.ID(ProtocolID))
+	stream, err := openStreamWithRetry(ctx, h, info.ID, protocol.ID(ProtocolID))
 	if err != nil {
 		return fmt.Errorf("failed to open stream: %w", err)
 	}
@@ -343,10 +340,7 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 
 	slog.Info("Connected to peer", "peer_id", info.ID.String())
 
-	streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
-	defer streamCancel()
-
-	stream, err := h.NewStream(streamCtx, info.ID, protocol.ID(ProtocolID))
+	stream, err := openStreamWithRetry(ctx, h, info.ID, protocol.ID(ProtocolID))
 	if err != nil {
 		return fmt.Errorf("failed to open stream (timeout=%s): %w", StreamTimeout, err)
 	}
@@ -372,6 +366,41 @@ func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) err
 	)
 	stream.Close()
 	return nil
+}
+
+// openStreamWithRetry attempts to open a stream with exponential backoff retries.
+// Over cloud relay circuits (like Render WSS), multistream negotiation can occasionally
+// experience transient latency or timeouts.
+func openStreamWithRetry(ctx context.Context, h host.Host, peerID peer.ID, proto protocol.ID) (network.Stream, error) {
+	delay := ReconnectBaseDelay
+	for attempt := 1; ReconnectMaxAttempts == 0 || attempt <= ReconnectMaxAttempts; attempt++ {
+		streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
+		stream, err := h.NewStream(streamCtx, peerID, proto)
+		streamCancel()
+
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("Stream opened successfully after retry", "attempt", attempt, "peer", peerID.String())
+			}
+			return stream, nil
+		}
+
+		slog.Warn("Stream opening attempt failed",
+			"attempt", attempt,
+			"max_attempts", ReconnectMaxAttempts,
+			"error", err,
+			"next_retry_in", delay.String(),
+		)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+
+		delay = time.Duration(math.Min(float64(delay*2), float64(ReconnectMaxDelay)))
+	}
+	return nil, fmt.Errorf("exhausted %d stream opening attempts to %s", ReconnectMaxAttempts, peerID.String())
 }
 
 // connectWithRetry attempts to connect to a peer with exponential backoff.
