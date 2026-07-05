@@ -75,11 +75,11 @@ func main() {
 	// For production, migrate to a dedicated VPS and tune these down.
 	_, err = relay.New(host,
 		relay.WithResources(relay.Resources{
-			MaxReservations:        256,    // Max peers that can hold reservations
-			MaxCircuits:            128,    // Max simultaneous active circuits
-			BufferSize:             131072, // 128 KB read buffer per circuit (essential for high-throughput WSS on Render!)
-			MaxReservationsPerPeer: 8,      // Reservations a single peer can hold
-			MaxReservationsPerIP:   16,     // Reservations from a single IP
+			MaxReservations:        256,  // Max peers that can hold reservations
+			MaxCircuits:            128,  // Max simultaneous active circuits
+			BufferSize:             4096, // 4 KB read buffer per circuit (keeps WSS latency low and prevents NGINX buffer stalling on small multistream packets!)
+			MaxReservationsPerPeer: 8,    // Reservations a single peer can hold
+			MaxReservationsPerIP:   16,   // Reservations from a single IP
 		}),
 		relay.WithLimit(&relay.RelayLimit{
 			Duration: 30 * time.Minute, // Per-circuit lifetime (30m for large file transfers)
@@ -95,7 +95,7 @@ func main() {
 		"peer_id", host.ID().String(),
 		"max_reservations", 256,
 		"max_circuits", 128,
-		"buffer_size", "128KB",
+		"buffer_size", "4KB",
 		"circuit_duration", "30m",
 		"circuit_data_limit", "1GB",
 	)
