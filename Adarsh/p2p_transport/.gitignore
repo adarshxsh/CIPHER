@@ -16,3 +16,9 @@ Peer1
 relay_linux
 .env
 actual_testing.env
+# Windows binary
+cipher-peer.exe
+*.exe
+
+# Built peer binaries
+main
