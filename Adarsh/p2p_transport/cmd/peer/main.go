@@ -28,29 +28,33 @@ import (
 
 const ProtocolID = "/cipher/filetransfer/1.0.0"
 
-// Timeouts — production-grade defaults.
+// Timeouts tuned for cloud WebSocket relay circuits.
 const (
-	// DialTimeout is the maximum time allowed for host.Connect() to establish a connection.
-	DialTimeout = 30 * time.Second
+	// DialTimeout: time to establish the relay circuit (connect-level).
+	DialTimeout = 60 * time.Second
 
-	// StreamTimeout is the maximum time allowed for host.NewStream() to open a protocol stream.
-	StreamTimeout = 45 * time.Second
+	// StreamTimeout: time for a single NewStream + multistream negotiation.
+	// Keep short so a stale/zombie relay circuit is detected quickly.
+	StreamTimeout = 15 * time.Second
 
-	// ReconnectBaseDelay is the initial backoff delay between reconnection attempts.
-	ReconnectBaseDelay = 2 * time.Second
+	// ReservationWait: how long Peer 2 waits after dialing the relay before
+	// trying to reach Peer 1. Peer 1 needs ~5-10 s to obtain its relay slot.
+	ReservationWait = 12 * time.Second
 
-	// ReconnectMaxDelay is the maximum backoff delay between reconnection attempts.
-	ReconnectMaxDelay = 60 * time.Second
+	// ReconnectBaseDelay is the initial back-off between retries.
+	ReconnectBaseDelay = 3 * time.Second
 
-	// ReconnectMaxAttempts is the maximum number of consecutive reconnection attempts (0 = unlimited).
-	ReconnectMaxAttempts = 10
+	// ReconnectMaxDelay caps the back-off.
+	ReconnectMaxDelay = 30 * time.Second
 
-	// HealthCheckInterval is how often the health monitor logs active connection state.
+	// ReconnectMaxAttempts – 0 = unlimited.
+	ReconnectMaxAttempts = 0
+
+	// HealthCheckInterval is how often the health monitor fires.
 	HealthCheckInterval = 10 * time.Second
 )
 
 func main() {
-	// Parse command-line flags
 	listenPort := flag.Int("listen", 0, "Port to listen on (0 for random)")
 	targetAddr := flag.String("target", "", "Target peer multiaddress to dial (optional)")
 	keyPath := flag.String("key", "identity.key", "Path to the identity key file")
@@ -58,13 +62,10 @@ func main() {
 	sendFile := flag.String("send", "", "Path to a file to send to target (optional)")
 	flag.Parse()
 
-	// Configure slog
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 
-	// Parse Relay Addr if provided
+	// Parse relay addr
 	var relayAddrs []peer.AddrInfo
 	if *relayAddrStr != "" {
 		maddr, err := multiaddr.NewMultiaddr(*relayAddrStr)
@@ -80,7 +81,6 @@ func main() {
 		relayAddrs = append(relayAddrs, *info)
 	}
 
-	// 1. Load or Generate Identity Key
 	slog.Info("Loading identity key", "path", *keyPath)
 	privKey, err := identity.LoadOrGenerateKey(*keyPath)
 	if err != nil {
@@ -88,7 +88,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 2. Start libp2p Host
 	slog.Info("Starting libp2p host", "port", *listenPort)
 	h, err := transport.NewHost(privKey, *listenPort, relayAddrs)
 	if err != nil {
@@ -102,41 +101,135 @@ func main() {
 		slog.Info("Listening on address", "addr", fmt.Sprintf("%s/p2p/%s", addr, h.ID()))
 	}
 
-	// 3. Set up Stream Handler for incoming connections
+	// Register incoming stream handler
 	h.SetStreamHandler(ProtocolID, func(s network.Stream) {
-		handleIncomingStream(h, s)
+		go handleIncomingStream(h, s)
 	})
 
-	// 4. Set up termination signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// 5. Dial target if provided
+	// Sender side: connect once, then provide REPL
 	if *targetAddr != "" {
-		go func() {
-			if *sendFile != "" {
-				if err := sendFileToTarget(ctx, h, *targetAddr, *sendFile); err != nil {
-					slog.Error("File transfer failed", "error", err)
-				}
-			} else {
-				if err := dialAndExchange(ctx, h, *targetAddr); err != nil {
-					slog.Error("Dial and exchange failed", "error", err)
-				}
-			}
-		}()
+		go runSenderLoop(ctx, cancel, h, *targetAddr, *sendFile, len(relayAddrs) > 0)
 	}
 
-	// 6. Start health monitor — periodically log active connections
 	go healthMonitor(ctx, h)
 
-	// 7. Wait for termination
 	slog.Info("Peer is running. Press Ctrl+C to stop.")
 	<-sigCh
 	cancel()
 	slog.Info("Shutting down...")
+}
+
+// runSenderLoop dials the target once, waits for a confirmed circuit,
+// then provides an interactive REPL for sending files.
+func runSenderLoop(ctx context.Context, cancel context.CancelFunc, h host.Host, targetAddrStr string, initialFile string, usingRelay bool) {
+	maddr, err := multiaddr.NewMultiaddr(targetAddrStr)
+	if err != nil {
+		slog.Error("Invalid target multiaddress", "error", err)
+		return
+	}
+	info, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		slog.Error("Failed to parse peer info from target address", "error", err)
+		return
+	}
+
+	// If we are going through a relay, give Peer 1 time to obtain its
+	// relay reservation before we knock on the circuit.
+	if usingRelay {
+		slog.Info("Waiting for Peer 1 relay reservation to be confirmed...", "wait", ReservationWait)
+		select {
+		case <-time.After(ReservationWait):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	// Connect with unlimited retries until ctx is cancelled
+	slog.Info("Connecting to target peer...", "peer_id", info.ID.String(), "addr", targetAddrStr)
+	if err := connectWithRetry(ctx, h, *info); err != nil {
+		slog.Error("Failed to connect to target — giving up", "error", err)
+		return
+	}
+
+	connType := "Direct"
+	conns := h.Network().ConnsToPeer(info.ID)
+	if len(conns) > 0 && strings.Contains(conns[0].RemoteMultiaddr().String(), "p2p-circuit") {
+		connType = "Relayed (via Azure WebSocket Relay)"
+	}
+	slog.Info("✅ Persistent connection established!", "peer_id", info.ID.String(), "conn_type", connType)
+
+	// Send initial file immediately if specified on the CLI
+	if initialFile != "" {
+		slog.Info("Sending initial file...", "file", initialFile)
+		if err := sendFileOverConn(ctx, h, info.ID, initialFile); err != nil {
+			slog.Error("Initial file transfer failed", "error", err)
+		}
+	}
+
+	// Interactive REPL — the connection stays open between transfers
+	fmt.Println("\n=======================================================")
+	fmt.Println("🚀  CIPHER — Persistent File Transfer")
+	fmt.Println("Commands:")
+	fmt.Println("  send <filepath>   — transfer a file to the remote peer")
+	fmt.Println("  status            — show current connection info")
+	fmt.Println("  exit / quit       — shut down")
+	fmt.Println("=======================================================\n")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("CIPHER> ")
+		if !scanner.Scan() {
+			break
+		}
+		line := strings.TrimSpace(scanner.Text())
+		switch {
+		case line == "":
+			// nothing
+		case line == "exit" || line == "quit":
+			cancel()
+			return
+		case line == "status":
+			printStatus(h, info.ID)
+		case strings.HasPrefix(line, "send "):
+			filePath := strings.TrimSpace(strings.TrimPrefix(line, "send "))
+			if filePath == "" {
+				fmt.Println("❌ Usage: send <filepath>")
+				continue
+			}
+			if err := sendFileOverConn(ctx, h, info.ID, filePath); err != nil {
+				slog.Error("File transfer failed", "error", err)
+				// Reconnect if the relay circuit was lost
+				slog.Info("Attempting to reconnect for next transfer...")
+				if err2 := connectWithRetry(ctx, h, *info); err2 != nil {
+					slog.Error("Reconnect failed", "error", err2)
+				} else {
+					slog.Info("Reconnected — ready for next transfer.")
+				}
+			}
+		default:
+			fmt.Println("❌ Unknown command. Try: send <filepath>")
+		}
+	}
+}
+
+// printStatus logs the current connections to the target peer.
+func printStatus(h host.Host, peerID peer.ID) {
+	conns := h.Network().ConnsToPeer(peerID)
+	if len(conns) == 0 {
+		fmt.Println("⚠️  No active connection to target peer.")
+		return
+	}
+	for _, c := range conns {
+		connType := classifyConnection(c)
+		fmt.Printf("Connection: type=%s addr=%s streams=%d\n",
+			connType, c.RemoteMultiaddr().String(), len(c.GetStreams()))
+	}
 }
 
 // handleIncomingStream processes an incoming stream on the CIPHER protocol.
@@ -149,6 +242,10 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 		"protocol", string(s.Protocol()),
 	)
 
+	// Set a deadline so a misbehaving sender cannot block the handler forever.
+	s.SetDeadline(time.Now().Add(10 * time.Minute))
+	defer s.SetDeadline(time.Time{})
+
 	reader := bufio.NewReader(s)
 	msg, err := reader.ReadString('\n')
 	if err != nil {
@@ -159,7 +256,6 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 
 	header := strings.TrimSpace(msg)
 
-	// Check if this is a file transfer request: FILE:<filename>:<size>
 	if strings.HasPrefix(header, "FILE:") {
 		parts := strings.Split(header, ":")
 		if len(parts) != 3 {
@@ -175,14 +271,13 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 			return
 		}
 
-		slog.Info("Incoming file transfer request",
+		slog.Info("Incoming file transfer",
 			"filename", filename,
 			"size", humanBytes(fileSize),
 			"from", remotePeer,
 			"conn_type", connType,
 		)
 
-		// Create output directory
 		outDir := "received"
 		if err := os.MkdirAll(outDir, 0755); err != nil {
 			slog.Error("Failed to create received directory", "error", err)
@@ -199,14 +294,13 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 		}
 		defer outFile.Close()
 
-		// Send READY signal to sender
+		// Signal sender that we are ready
 		if _, err := s.Write([]byte("READY\n")); err != nil {
 			slog.Error("Failed to send READY signal", "error", err)
 			s.Reset()
 			return
 		}
 
-		// Receive data
 		start := time.Now()
 		n, err := io.CopyN(outFile, reader, fileSize)
 		duration := time.Since(start)
@@ -216,7 +310,8 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 			return
 		}
 
-		speedMB := (float64(n) / 1024 / 1024) / duration.Seconds()
+		sec := math.Max(duration.Seconds(), 0.001)
+		speedMB := (float64(n) / 1024 / 1024) / sec
 		slog.Info("🎉 File received successfully!",
 			"saved_to", outPath,
 			"bytes", n,
@@ -227,13 +322,8 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 		return
 	}
 
-	// Default hello message handling
-	slog.Info("Received message",
-		"message", header,
-		"from", remotePeer,
-		"conn_type", connType,
-	)
-
+	// Default: echo hello
+	slog.Info("Received message", "message", header, "from", remotePeer, "conn_type", connType)
 	reply := fmt.Sprintf("Hello from %s!\n", h.ID().String())
 	_, err = s.Write([]byte(reply))
 	if err != nil {
@@ -244,43 +334,35 @@ func handleIncomingStream(h host.Host, s network.Stream) {
 	s.Close()
 }
 
-// sendFileToTarget sends a local file over a stream to the target peer.
-func sendFileToTarget(ctx context.Context, h host.Host, targetAddrStr string, filePath string) error {
+// sendFileOverConn opens a new multiplexed stream over the EXISTING connection
+// and transfers the file. It does NOT re-dial.
+func sendFileOverConn(ctx context.Context, h host.Host, peerID peer.ID, filePath string) error {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return fmt.Errorf("cannot read file %s: %w", filePath, err)
+		return fmt.Errorf("cannot stat file %s: %w", filePath, err)
 	}
 	fileSize := fileInfo.Size()
 	filename := filepath.Base(filePath)
 
-	slog.Info("Preparing to send file", "file", filePath, "size", humanBytes(fileSize), "target", targetAddrStr)
+	slog.Info("Opening stream for file transfer", "file", filename, "size", humanBytes(fileSize))
 
-	maddr, err := multiaddr.NewMultiaddr(targetAddrStr)
-	if err != nil {
-		return fmt.Errorf("invalid target multiaddress: %w", err)
-	}
-	info, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse peer info: %w", err)
-	}
-
-	if err := connectWithRetry(ctx, h, *info); err != nil {
-		return fmt.Errorf("failed to connect after retries: %w", err)
-	}
-
-	stream, err := openStreamWithRetry(ctx, h, info.ID, protocol.ID(ProtocolID))
+	stream, err := openStreamWithRetry(ctx, h, peerID, protocol.ID(ProtocolID))
 	if err != nil {
 		return fmt.Errorf("failed to open stream: %w", err)
 	}
+	defer stream.Close()
 
-	// Send file header
+	// Set a transfer deadline: 5 min should be generous for most files.
+	stream.SetDeadline(time.Now().Add(5 * time.Minute))
+
+	// Send header
 	header := fmt.Sprintf("FILE:%s:%d\n", filename, fileSize)
 	if _, err := stream.Write([]byte(header)); err != nil {
 		stream.Reset()
 		return fmt.Errorf("failed to send header: %w", err)
 	}
 
-	// Wait for READY reply
+	// Wait for READY
 	reader := bufio.NewReader(stream)
 	reply, err := reader.ReadString('\n')
 	if err != nil {
@@ -289,160 +371,132 @@ func sendFileToTarget(ctx context.Context, h host.Host, targetAddrStr string, fi
 	}
 	if strings.TrimSpace(reply) != "READY" {
 		stream.Reset()
-		return fmt.Errorf("unexpected reply from receiver: %s", reply)
+		return fmt.Errorf("unexpected READY reply: %s", reply)
 	}
 
-	// Open file and stream bytes
 	file, err := os.Open(filePath)
 	if err != nil {
 		stream.Reset()
-		return fmt.Errorf("failed to open input file: %w", err)
+		return fmt.Errorf("failed to open local file: %w", err)
 	}
 	defer file.Close()
 
-	slog.Info("Streaming file bytes across peer connection...")
+	slog.Info("Streaming file bytes...")
 	start := time.Now()
-	// Use a 64KB buffer for copying to reduce WebSocket framing overhead across cloud relays
 	n, err := io.CopyBuffer(stream, file, make([]byte, 65536))
 	duration := time.Since(start)
 	if err != nil {
 		stream.Reset()
-		return fmt.Errorf("error while streaming file: %w", err)
+		return fmt.Errorf("error while streaming: %w", err)
 	}
 
-	speedMB := (float64(n) / 1024 / 1024) / duration.Seconds()
+	sec := math.Max(duration.Seconds(), 0.001)
+	speedMB := (float64(n) / 1024 / 1024) / sec
 	slog.Info("🚀 File sent successfully!",
 		"filename", filename,
 		"bytes", n,
 		"duration", duration.Round(time.Millisecond).String(),
 		"speed", fmt.Sprintf("%.2f MB/s", speedMB),
 	)
-	stream.Close()
 	return nil
 }
 
-// dialAndExchange connects to a target peer and performs the hello exchange.
-func dialAndExchange(ctx context.Context, h host.Host, targetAddrStr string) error {
-	slog.Info("Dialing target", "target", targetAddrStr)
-
-	maddr, err := multiaddr.NewMultiaddr(targetAddrStr)
-	if err != nil {
-		return fmt.Errorf("invalid target multiaddress: %w", err)
-	}
-
-	info, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse peer info from multiaddress: %w", err)
-	}
-
-	if err := connectWithRetry(ctx, h, *info); err != nil {
-		return fmt.Errorf("failed to connect after retries: %w", err)
-	}
-
-	slog.Info("Connected to peer", "peer_id", info.ID.String())
-
-	stream, err := openStreamWithRetry(ctx, h, info.ID, protocol.ID(ProtocolID))
-	if err != nil {
-		return fmt.Errorf("failed to open stream (timeout=%s): %w", StreamTimeout, err)
-	}
-
-	helloMsg := fmt.Sprintf("Hello from %s!\n", h.ID().String())
-	_, err = stream.Write([]byte(helloMsg))
-	if err != nil {
-		stream.Reset()
-		return fmt.Errorf("failed to write to stream: %w", err)
-	}
-
-	reader := bufio.NewReader(stream)
-	reply, err := reader.ReadString('\n')
-	if err != nil {
-		stream.Reset()
-		return fmt.Errorf("failed to read reply: %w", err)
-	}
-
-	slog.Info("Received reply",
-		"message", strings.TrimSpace(reply),
-		"from", info.ID.String(),
-		"conn_type", classifyConnection(h.Network().ConnsToPeer(info.ID)[0]),
-	)
-	stream.Close()
-	return nil
-}
-
-// openStreamWithRetry attempts to open a stream with exponential backoff retries.
-// Over cloud relay circuits (like Render WSS), multistream negotiation can occasionally
-// experience transient latency or timeouts.
+// openStreamWithRetry tries to open a stream with a short timeout per attempt.
+// A short timeout is critical: over relay circuits the yamux negotiation can
+// silently stall. If it does, we close the stale circuit and try again rather
+// than waiting 45 s per attempt.
 func openStreamWithRetry(ctx context.Context, h host.Host, peerID peer.ID, proto protocol.ID) (network.Stream, error) {
 	delay := ReconnectBaseDelay
-	for attempt := 1; ReconnectMaxAttempts == 0 || attempt <= ReconnectMaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		streamCtx, streamCancel := context.WithTimeout(ctx, StreamTimeout)
 		stream, err := h.NewStream(streamCtx, peerID, proto)
 		streamCancel()
 
 		if err == nil {
 			if attempt > 1 {
-				slog.Info("Stream opened successfully after retry", "attempt", attempt, "peer", peerID.String())
+				slog.Info("Stream opened after retry", "attempt", attempt)
 			}
 			return stream, nil
 		}
 
-		slog.Warn("Stream opening attempt failed",
+		slog.Warn("Stream open failed — will retry",
 			"attempt", attempt,
-			"max_attempts", ReconnectMaxAttempts,
 			"error", err,
-			"next_retry_in", delay.String(),
+			"next_retry_in", delay,
 		)
+
+		// Force-close all stale relay connections to this peer so the
+		// next attempt gets a fresh circuit.
+		for _, c := range h.Network().ConnsToPeer(peerID) {
+			if strings.Contains(c.RemoteMultiaddr().String(), "p2p-circuit") {
+				slog.Info("Closing stale relay circuit", "addr", c.RemoteMultiaddr())
+				c.Close()
+			}
+		}
 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(delay):
 		}
-
 		delay = time.Duration(math.Min(float64(delay*2), float64(ReconnectMaxDelay)))
 	}
-	return nil, fmt.Errorf("exhausted %d stream opening attempts to %s", ReconnectMaxAttempts, peerID.String())
 }
 
-// connectWithRetry attempts to connect to a peer with exponential backoff.
+// connectWithRetry dials info with unlimited retries. Backs off on
+// NO_RESERVATION errors so Peer 1 has time to obtain its relay slot.
 func connectWithRetry(ctx context.Context, h host.Host, info peer.AddrInfo) error {
 	delay := ReconnectBaseDelay
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-	for attempt := 1; ReconnectMaxAttempts == 0 || attempt <= ReconnectMaxAttempts; attempt++ {
 		dialCtx, dialCancel := context.WithTimeout(ctx, DialTimeout)
 		err := h.Connect(dialCtx, info)
 		dialCancel()
 
 		if err == nil {
 			if attempt > 1 {
-				slog.Info("Reconnected successfully", "attempt", attempt, "peer", info.ID.String())
+				slog.Info("Connected successfully", "attempt", attempt, "peer", info.ID)
 			}
 			return nil
 		}
 
-		slog.Warn("Connection attempt failed",
-			"attempt", attempt,
-			"max_attempts", ReconnectMaxAttempts,
-			"error", err,
-			"next_retry_in", delay.String(),
-		)
+		isNoReservation := strings.Contains(err.Error(), "NO_RESERVATION")
+		if isNoReservation {
+			slog.Warn("Relay has no reservation for Peer 1 yet — waiting longer...",
+				"attempt", attempt,
+				"next_retry_in", delay,
+			)
+		} else {
+			slog.Warn("Connection attempt failed",
+				"attempt", attempt,
+				"error", err,
+				"next_retry_in", delay,
+			)
+		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(delay):
 		}
-
 		delay = time.Duration(math.Min(float64(delay*2), float64(ReconnectMaxDelay)))
 	}
-
-	return fmt.Errorf("exhausted %d reconnection attempts to %s", ReconnectMaxAttempts, info.ID.String())
 }
 
 // classifyConnection determines whether a connection is Direct or Relayed.
 func classifyConnection(conn network.Conn) string {
-	maddr := conn.RemoteMultiaddr().String()
-	if strings.Contains(maddr, "p2p-circuit") {
+	if strings.Contains(conn.RemoteMultiaddr().String(), "p2p-circuit") {
 		return "Relayed"
 	}
 	return "Direct"
@@ -452,7 +506,6 @@ func classifyConnection(conn network.Conn) string {
 func healthMonitor(ctx context.Context, h host.Host) {
 	ticker := time.NewTicker(HealthCheckInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -463,12 +516,10 @@ func healthMonitor(ctx context.Context, h host.Host) {
 				slog.Debug("Health check: no active connections")
 				continue
 			}
-
 			for _, c := range conns {
-				connType := classifyConnection(c)
 				slog.Info("Active Connection",
 					"peer", c.RemotePeer().String(),
-					"type", connType,
+					"type", classifyConnection(c),
 					"addr", c.RemoteMultiaddr().String(),
 					"direction", c.Stat().Direction.String(),
 					"opened", c.Stat().Opened.Format(time.RFC3339),
@@ -492,3 +543,4 @@ func humanBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f%s", float64(b)/float64(div), []string{"KB", "MB", "GB", "TB"}[exp])
 }
+
