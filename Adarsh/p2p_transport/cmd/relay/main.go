@@ -87,10 +87,15 @@ func main() {
 			BufferSize:             4096,
 			MaxReservationsPerPeer: 8,
 			MaxReservationsPerIP:   16,
+			// ReservationTTL MUST be set explicitly.
+			// relay.WithResources() replaces the entire Resources struct, so all
+			// unset fields get Go zero values — overriding the library's 1-hour
+			// default and causing reservations to expire immediately (0 duration).
+			ReservationTTL: 2 * time.Hour,
 		}),
 		relay.WithLimit(&relay.RelayLimit{
-			Duration: 30 * time.Minute,
-			Data:     1 << 30, // 1 GB
+			Duration: 60 * time.Minute, // max lifetime of a single relayed circuit
+			Data:     1 << 30,          // 1 GB per circuit
 		}),
 	)
 	if err != nil {
