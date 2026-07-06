@@ -11,6 +11,12 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 )
 
+// Note: RelayAddrs in HostConfig is retained for API compatibility but AutoRelay
+// (EnableAutoRelayWithStaticRelays / ForceReachabilityPrivate) has been removed.
+// Relay reservations are now obtained explicitly via maintainRelayReservation in
+// cmd/peer/main.go using the circuitv2 relay client directly, which is far more
+// reliable than AutoRelay on cloud VMs that have a public IP.
+
 // HostConfig contains all configuration options for creating a libp2p host.
 // This separates configuration from construction, making the host testable and composable.
 type HostConfig struct {
@@ -79,15 +85,14 @@ func NewHostFromConfig(cfg HostConfig) (host.Host, error) {
 		// transport setup and prevent AutoRelay from obtaining reservations.
 	}
 
-	// If we have static relays, configure AutoRelay to maintain reservations on them
-	if len(cfg.RelayAddrs) > 0 {
-		opts = append(opts,
-			libp2p.EnableAutoRelayWithStaticRelays(cfg.RelayAddrs),
-			// Force the node to believe it is behind a NAT.
-			// Otherwise, when testing locally, it thinks it's publicly reachable and WON'T ask the relay for a reservation!
-			libp2p.ForceReachabilityPrivate(),
-		)
-	}
+	// AutoRelay (EnableAutoRelayWithStaticRelays + ForceReachabilityPrivate) has been
+	// intentionally removed. On cloud VMs with public IPs, AutoRelay silently refuses
+	// to request a reservation even with ForceReachabilityPrivate(), resulting in
+	// persistent streams=0 and NO_RESERVATION errors on the dialer side.
+	//
+	// Relay reservations are now managed explicitly by maintainRelayReservation() in
+	// cmd/peer/main.go using client.Reserve() from the circuitv2 relay client package.
+	_ = cfg.RelayAddrs // kept in config for API compatibility
 
 	// Create the libp2p node
 	h, err := libp2p.New(opts...)

@@ -1,7 +1,5 @@
 # Go build outputs
 bin/
-/peer
-/relay
 
 # Identity Keys & Data (NEVER commit these!)
 *.key
@@ -19,6 +17,7 @@ actual_testing.env
 # Windows binary
 cipher-peer.exe
 *.exe
-
+Relay 
+peer
 # Built peer binaries
 main

@@ -20,6 +20,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	relayclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/multiformats/go-multiaddr"
 
 	"cipher-p2p/internal/identity"
@@ -34,8 +35,9 @@ const (
 	DialTimeout = 60 * time.Second
 
 	// StreamTimeout: time for a single NewStream + multistream negotiation.
-	// Keep short so a stale/zombie relay circuit is detected quickly.
-	StreamTimeout = 15 * time.Second
+	// 60s because relay circuits add significant round-trip latency on top of
+	// the inner TLS + yamux handshake that runs over the relay pipe.
+	StreamTimeout = 60 * time.Second
 
 	// ReservationWait: how long Peer 2 waits after dialing the relay before
 	// trying to reach Peer 1. Peer 1 needs ~5-10 s to obtain its relay slot.
@@ -120,6 +122,13 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Receiver side: obtain and maintain a relay reservation so the sender can dial us
+	// through the relay circuit. AutoRelay is not used because it silently fails on
+	// cloud VMs that have a public IP, even when ForceReachabilityPrivate() is set.
+	if *targetAddr == "" && relayPeerInfo != nil {
+		go maintainRelayReservation(ctx, h, *relayPeerInfo)
+	}
+
 	// Sender side: connect once, then provide REPL
 	if *targetAddr != "" {
 		go runSenderLoop(ctx, cancel, h, *targetAddr, *sendFile, relayPeerInfo)
@@ -131,6 +140,83 @@ func main() {
 	<-sigCh
 	cancel()
 	slog.Info("Shutting down...")
+}
+
+// maintainRelayReservation connects to the relay, obtains a circuit relay v2
+// reservation, logs the relay address the receiver is reachable at, and
+// automatically renews the reservation before it expires.
+//
+// This replaces AutoRelay (EnableAutoRelayWithStaticRelays) which silently
+// fails on cloud VMs with public IPs even when ForceReachabilityPrivate() is
+// set, because autonat v2 can race and override the forced reachability state.
+func maintainRelayReservation(ctx context.Context, h host.Host, relayInfo peer.AddrInfo) {
+	slog.Info("Relay reservation manager starting", "relay", relayInfo.ID)
+
+	// Connect to the relay first — client.Reserve() requires an existing connection.
+	for {
+		connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := h.Connect(connectCtx, relayInfo)
+		connectCancel()
+		if err == nil {
+			break
+		}
+		slog.Warn("Failed to connect to relay, retrying in 5s...", "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+	slog.Info("Connected to relay, requesting reservation...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		reserveCtx, reserveCancel := context.WithTimeout(ctx, 30*time.Second)
+		reservation, err := relayclient.Reserve(reserveCtx, h, relayInfo)
+		reserveCancel()
+
+		if err != nil {
+			slog.Warn("Relay reservation failed, retrying in 10s...", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			continue
+		}
+
+		slog.Info("✅ Relay reservation obtained!",
+			"expires", reservation.Expiration.Format(time.RFC3339),
+			"limit_duration", reservation.LimitDuration,
+			"limit_data", reservation.LimitData,
+		)
+		// Log each relay address the receiver is now reachable at —
+		// the sender must dial one of these as its -target.
+		for _, addr := range reservation.Addrs {
+			slog.Info("📡 Receiver reachable via relay circuit",
+				"circuit_addr", fmt.Sprintf("%s/p2p-circuit/p2p/%s", addr, h.ID()),
+			)
+		}
+
+		// Renew 60 seconds before the reservation expires.
+		renewIn := time.Until(reservation.Expiration) - 60*time.Second
+		if renewIn < 10*time.Second {
+			renewIn = 10 * time.Second
+		}
+		slog.Info("Relay reservation active, will renew", "in", renewIn.Round(time.Second))
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(renewIn):
+			slog.Info("Renewing relay reservation...")
+		}
+	}
 }
 
 // runSenderLoop dials the target once, waits for a confirmed circuit,
