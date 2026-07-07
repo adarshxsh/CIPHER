@@ -72,8 +72,20 @@ func main() {
 
 	if *target != "" {
 		log.Printf("Dialing target peer: %s", *target)
-		if err := transport.ConnectAndSayHello(ctx, h, *target); err != nil {
+		t := transport.NewTransport(h)
+		
+		addrInfo, err := t.Connect(ctx, *target)
+		if err != nil {
 			log.Fatalf("Failed to connect to target: %v", err)
+		}
+		
+		s, err := t.OpenStream(ctx, addrInfo)
+		if err != nil {
+			log.Fatalf("Failed to open stream to target: %v", err)
+		}
+		
+		if err := t.InitiateFileTransfer(s); err != nil {
+			log.Fatalf("Failed to initiate file transfer: %v", err)
 		}
 	}
 
