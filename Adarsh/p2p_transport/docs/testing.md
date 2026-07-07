@@ -48,14 +48,29 @@ CGO_ENABLED=0 go test -v ./...
      3. Ensure it outputs `Relay Service Started!` and prints its multiaddresses (e.g., `/ip4/127.0.0.1/tcp/4001/p2p/...`).
      4. To verify routing traffic, proceed to the **Relay Connectivity** step below.
 
-   - **Relay Connectivity (NAT Traversal)**: To verify that a peer (e.g., Mac) can connect to another peer (e.g., Windows) through a public relay (e.g., Ubuntu server):
+   - **Relay Connectivity & File Transfer**: To verify that a peer (e.g., Mac) can connect to another peer (e.g., Windows) through a public relay (e.g., Ubuntu server) and transfer a file:
      1. Start your public relay node on the Ubuntu server and copy its multiaddress (e.g., `/ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`).
      2. On **Peer A** (Listener, e.g., Windows), start the peer and configure it to use the static relay:
         `./bin/peer -p 55555 -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`
      3. Take note of Peer A's generated Relay Multiaddress from its logs (it will end in `/p2p-circuit/p2p/<PEER-A-ID>`).
-     4. On **Peer B** (Dialer, e.g., Mac), start the peer, provide the static relay, and dial Peer A's relayed address:
-        `./bin/peer -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID>`
-     5. Observe the logs. Peer B should log `Connected to ..., sending hello...` and Peer A should reply, proving successful relayed file-transfer connectivity.
+     4. On **Peer B** (Dialer, e.g., Mac), create a test file (e.g., `dd if=/dev/urandom of=test.bin bs=1M count=5`).
+     5. Start Peer B, provide the static relay, dial Peer A's relayed address, and specify the file to send:
+        `./bin/peer -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -send test.bin`
+     6. **Verify Hole Punching**: After the initial relayed connection, both peers should log `[DCUtR] Hole Punch Event: StartHolePunch`. Following a successful attempt, you should see `EndHolePunch`, and the `[Network] Active connections to ...` log will enumerate a newly established `Direct` connection (e.g., `/ip4/.../tcp/...` without the `/p2p-circuit` postfix). Subsequent streams will automatically route over this direct connection.
+     7. **Verify Transfer Integrity**: Peer B will log `Sending: test.bin` with progress tracking. Peer A will automatically download the file to the `downloads/` directory, compute its SHA-256 hash, compare it against the sender's hash, and log `Integrity: VERIFIED` along with the transfer duration and throughput.
+
+## Transport Layer Test Matrix
+
+Before moving to the final CIPHER chunking protocol (Milestone 8), the transport layer is considered validated only after all the following manual tests pass:
+
+- [ ] **Small Payload**: 1 KB file transfer
+- [ ] **Medium Payload**: 1 MB file transfer
+- [ ] **Large Payload**: 50–100 MB file transfer
+- [ ] **Binary Format**: e.g., ZIP or JPEG file
+- [ ] **Bidirectional**: Transfer A→B and B→A
+- [ ] **Relay Fallback**: Transfer over relay only (disable DCUtR / hole punching)
+- [ ] **Direct Upgrade**: Transfer naturally switches to direct path after successful DCUtR
+- [ ] **Integrity**: SHA-256 verification succeeds for every single transfer
 
 ## Continuous Integration
 Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.

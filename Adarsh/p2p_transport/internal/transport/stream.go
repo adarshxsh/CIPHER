@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log"
@@ -13,51 +12,16 @@ import (
 	"github.com/multiformats/go-multiaddr"
 
 	"cipher/internal/protocol"
+	"cipher/internal/transfer"
 )
 
 // SetupStreamHandler configures the host to handle incoming streams for the file transfer protocol.
 func SetupStreamHandler(h host.Host) {
-	h.SetStreamHandler(protocol.FileTransferProtocolID, handleStream)
-}
-
-func handleStream(s network.Stream) {
-	log.Printf("Got a new stream from %s!", s.Conn().RemotePeer())
-
-	// Create a buffer stream for non blocking read and write.
-	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-
-	go readData(rw)
-}
-
-func readData(rw *bufio.ReadWriter) {
-	for {
-		str, err := rw.ReadString('\n')
-		if err != nil {
-			log.Println("Error reading from buffer:", err)
-			return
+	h.SetStreamHandler(protocol.FileTransferProtocolID, func(s network.Stream) {
+		if err := transfer.Receive(s); err != nil {
+			log.Printf("Error receiving file: %v", err)
 		}
-
-		if str == "" {
-			return
-		}
-		if str != "\n" {
-			log.Printf("Received: %s", str)
-			// Automatically send "hello back\n" when "hello\n" is received for verification
-			if str == "hello\n" {
-				log.Println("Sending hello back...")
-				_, err := rw.WriteString("hello back\n")
-				if err != nil {
-					log.Println("Error writing to buffer:", err)
-					return
-				}
-				err = rw.Flush()
-				if err != nil {
-					log.Println("Error flushing buffer:", err)
-					return
-				}
-			}
-		}
-	}
+	})
 }
 
 // Transport wraps the libp2p host to provide a simpler abstraction for connection and stream management.
@@ -107,21 +71,4 @@ func (t *Transport) OpenStream(ctx context.Context, target *peer.AddrInfo) (netw
 	}
 
 	return s, nil
-}
-
-// InitiateFileTransfer starts the application protocol over an established stream.
-func (t *Transport) InitiateFileTransfer(s network.Stream) error {
-	log.Printf("Connected to %s, sending hello...", s.Conn().RemotePeer())
-	
-	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-	
-	if _, err := rw.WriteString("hello\n"); err != nil {
-		return err
-	}
-	if err := rw.Flush(); err != nil {
-		return err
-	}
-	
-	go readData(rw)
-	return nil
 }

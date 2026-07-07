@@ -8,7 +8,7 @@
 ## Phase 2: Enhanced Connectivity
 - [x] Milestone 4: Bare Relay Service (Basic `circuitv2` relay node creation)
 - [x] Milestone 5: Relay Connectivity (Routing application streams over `circuitv2` limited connections)
-- [ ] Milestone 6: Hole Punching & DCUtR (Upgrading relay connections to direct TCP/UDP via hole punching)
+- [x] Milestone 6: Hole Punching & DCUtR (Upgrading relay connections to direct TCP/UDP via hole punching)
 - [ ] Milestone 7: Discovery (mDNS & DHT routing)
 
 ## Phase 3: Protocol Refinement
