@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"cipher/internal/identity"
+	"cipher/internal/transfer"
 	"cipher/internal/transport"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -26,6 +27,7 @@ func main() {
 	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
+	sendFile := flag.String("send", "", "Path to the file you want to send to the target peer")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,7 +72,7 @@ func main() {
 		}
 	}
 
-	if *target != "" {
+	if *target != "" && *sendFile != "" {
 		log.Printf("Dialing target peer: %s", *target)
 		t := transport.NewTransport(h)
 		
@@ -84,9 +86,11 @@ func main() {
 			log.Fatalf("Failed to open stream to target: %v", err)
 		}
 		
-		if err := t.InitiateFileTransfer(s); err != nil {
-			log.Fatalf("Failed to initiate file transfer: %v", err)
+		if err := transfer.Send(s, *sendFile); err != nil {
+			log.Fatalf("Failed to send file: %v", err)
 		}
+	} else if *target != "" && *sendFile == "" {
+		log.Fatalf("Target peer specified but no file to send. Please use the -send flag.")
 	}
 
 	// Wait for termination signal
