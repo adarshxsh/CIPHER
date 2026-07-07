@@ -13,6 +13,7 @@ import (
 	"cipher/internal/transport"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 )
 
 func main() {
@@ -46,13 +47,17 @@ func main() {
 	if *relayAddr != "" {
 		relayInfo, err := peer.AddrInfoFromString(*relayAddr)
 		if err == nil {
-			// Proactively connect to the relay to establish the circuit reservation
+			// Proactively connect and explicitly reserve a slot on the relay
 			if err := h.Connect(ctx, *relayInfo); err != nil {
 				log.Printf("Warning: Failed to connect to relay: %v", err)
 			} else {
-				log.Printf("\n[✓] Successfully connected to relay!")
-				log.Printf("Your Relayed Multiaddress (Share this with peers to connect to you):")
-				log.Printf("  - %s/p2p-circuit/p2p/%s\n", *relayAddr, h.ID().String())
+				if _, err := client.Reserve(ctx, h, *relayInfo); err != nil {
+					log.Printf("Warning: Failed to reserve slot on relay: %v", err)
+				} else {
+					log.Printf("\n[✓] Successfully connected to relay and reserved slot!")
+					log.Printf("Your Relayed Multiaddress (Share this with peers to connect to you):")
+					log.Printf("  - %s/p2p-circuit/p2p/%s\n", *relayAddr, h.ID().String())
+				}
 			}
 		}
 	}
