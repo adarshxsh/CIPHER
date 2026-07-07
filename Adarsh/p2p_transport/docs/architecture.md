@@ -20,13 +20,18 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
 ## Network Topology
 The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
 
+### Relay Connectivity Strategy (Circuit v2)
+CIPHER leverages go-libp2p's `circuitv2` protocol for relaying traffic. By default, `circuitv2` establishes **limited** (transient) connections designed strictly for lightweight coordination protocols (like DCUtR Hole Punching), rather than bulk application data transfer. 
+- During **Milestone 5 (Relay Validation)**, CIPHER explicitly permits the custom file transfer protocol (`/cipher/filetransfer/1.0.0`) to run over limited relay connections using `network.WithAllowLimitedConn`.
+- During **Milestone 6 (Hole Punching)**, this explicit permission will be removed, as the DCUtR subsystem will automatically upgrade the limited relay connection into a direct, non-limited TCP/UDP connection via UDP hole punching, drastically improving throughput and latency.
+
 ```mermaid
 graph TD
     subgraph Direct Connection
         PeerA["Peer A (Listener)"] <-->|"/cipher/filetransfer/1.0.0"| PeerB["Peer B (Dialer)"]
     end
     subgraph Relayed Connection
-        PeerC["Peer C (NAT)"] --> Relay["Relay Node"]
-        Relay --> PeerD["Peer D (NAT)"]
+        PeerC["Peer C (NAT)"] -->|Circuit v2 Reservation| Relay["Relay Node"]
+        Relay -->|Relayed Stream| PeerD["Peer D (NAT)"]
     end
 ```
