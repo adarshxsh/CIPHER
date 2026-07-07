@@ -119,6 +119,14 @@ func ConnectAndSayHello(ctx context.Context, h host.Host, target string) error {
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
 	
+	// Milestone 5: Explicitly allow application streams over limited (transient) relay connections.
+	// Note: This is a temporary configuration for relay-only validation. During Milestone 6, 
+	// after DCUtR successfully upgrades the connection to a direct connection, 
+	// application streams should no longer rely on `WithAllowLimitedConn()`.
+	if hasCircuit {
+		streamCtx = network.WithAllowLimitedConn(streamCtx, "file-transfer-relay")
+	}
+
 	s, err := h.NewStream(streamCtx, addrInfo.ID, protocol.FileTransferProtocolID)
 	if err != nil {
 		return fmt.Errorf("NewStream failed: %w", err)
