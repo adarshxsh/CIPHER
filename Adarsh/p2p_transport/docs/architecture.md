@@ -18,11 +18,15 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
 - **merkle**: Implements Merkle trees for data verification and integrity checks.
 
 ## Network Topology
-Currently, the network utilizes a direct peer-to-peer topology. Standard peers connect to one another directly over the `/cipher/filetransfer/1.0.0` protocol to exchange data.
+The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
 
 ```mermaid
 graph TD
     subgraph Direct Connection
         PeerA["Peer A (Listener)"] <-->|"/cipher/filetransfer/1.0.0"| PeerB["Peer B (Dialer)"]
+    end
+    subgraph Relayed Connection
+        PeerC["Peer C (NAT)"] --> Relay["Relay Node"]
+        Relay --> PeerD["Peer D (NAT)"]
     end
 ```
