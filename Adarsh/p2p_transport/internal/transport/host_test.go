@@ -9,7 +9,7 @@ func TestNewNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	host, err := NewNode(ctx, 0, nil)
+	host, err := NewNode(ctx, 0, nil, "")
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
