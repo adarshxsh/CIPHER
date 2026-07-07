@@ -14,9 +14,15 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
+	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
+	// Enable libp2p debug logging for circuit v2 and identify
+	golog.SetLogLevel("relay", "debug")
+	golog.SetLogLevel("autorelay", "debug")
+	golog.SetLogLevel("p2p-circuit", "debug")
+	golog.SetLogLevel("identify", "debug")
 	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
@@ -51,10 +57,12 @@ func main() {
 			if err := h.Connect(ctx, *relayInfo); err != nil {
 				log.Printf("Warning: Failed to connect to relay: %v", err)
 			} else {
-				if _, err := client.Reserve(ctx, h, *relayInfo); err != nil {
+				if res, err := client.Reserve(ctx, h, *relayInfo); err != nil {
 					log.Printf("Warning: Failed to reserve slot on relay: %v", err)
 				} else {
 					log.Printf("\n[✓] Successfully connected to relay and reserved slot!")
+					log.Printf("    Reservation Expiration: %s", res.Expiration.String())
+					log.Printf("    Relay Peer ID: %s", relayInfo.ID.String())
 					log.Printf("Your Relayed Multiaddress (Share this with peers to connect to you):")
 					log.Printf("  - %s/p2p-circuit/p2p/%s\n", *relayAddr, h.ID().String())
 				}

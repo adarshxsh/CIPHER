@@ -3,7 +3,9 @@ package transport
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -70,13 +72,56 @@ func ConnectAndSayHello(ctx context.Context, h host.Host, target string) error {
 		return err
 	}
 	
-	if err := h.Connect(ctx, *addrInfo); err != nil {
-		return err
+	// Create a context with timeout for connecting
+	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dialCancel()
+	
+	if err := h.Connect(dialCtx, *addrInfo); err != nil {
+		return fmt.Errorf("h.Connect failed: %w", err)
 	}
 	
-	s, err := h.NewStream(ctx, addrInfo.ID, protocol.FileTransferProtocolID)
+	log.Printf("[DIAGNOSTIC] Connect() succeeded. Connectedness: %s", h.Network().Connectedness(addrInfo.ID))
+	
+	// Enumerate existing connections to this peer
+	conns := h.Network().ConnsToPeer(addrInfo.ID)
+	log.Printf("[DIAGNOSTIC] Active connections to peer (%d):", len(conns))
+	hasCircuit := false
+	for i, conn := range conns {
+		log.Printf("  Conn %d: Local: %s | Remote: %s", i, conn.LocalMultiaddr(), conn.RemoteMultiaddr())
+		if _, err := conn.RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			hasCircuit = true
+		}
+	}
+	if !hasCircuit {
+		log.Printf("[WARNING] No active /p2p-circuit connection found. Stream might drop or attempt direct dial.")
+	} else {
+		log.Printf("[DIAGNOSTIC] Relay circuit path verified.")
+	}
+
+	// Wait briefly to allow the Identify protocol to populate the PeerStore
+	log.Printf("[DIAGNOSTIC] Waiting for Identify protocol to populate PeerStore...")
+	time.Sleep(2 * time.Second)
+	
+	addrs := h.Peerstore().Addrs(addrInfo.ID)
+	log.Printf("[DIAGNOSTIC] Known PeerStore addresses for %s:", addrInfo.ID)
+	hasCircuitAddr := false
+	for _, a := range addrs {
+		log.Printf("  - %s", a.String())
+		if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			hasCircuitAddr = true
+		}
+	}
+	if !hasCircuitAddr {
+		log.Printf("[WARNING] Target peer does not have a /p2p-circuit address in PeerStore! Stream may fail.")
+	}
+
+	// Create a context with timeout for stream opening
+	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer streamCancel()
+	
+	s, err := h.NewStream(streamCtx, addrInfo.ID, protocol.FileTransferProtocolID)
 	if err != nil {
-		return err
+		return fmt.Errorf("NewStream failed: %w", err)
 	}
 	
 	log.Printf("Connected to %s, sending hello...", addrInfo.ID)
