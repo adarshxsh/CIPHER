@@ -15,6 +15,7 @@ This repository contains the P2P transport module for the CIPHER project.
 
 - [Architecture](docs/architecture.md): Overview of the project's modular design and libp2p network topology.
 - [Testing Strategy](docs/testing.md): Instructions and guidelines for unit and integration testing.
+- [Relay Deployment](docs/relay_deployment.md): Instructions on how to deploy a public relay node on Linux.
 
 ## Setup
 
