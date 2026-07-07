@@ -42,5 +42,20 @@ CGO_ENABLED=0 go test -v ./...
      5. Observe Peer A's logs: It should log `Got a new stream from ...`, `Received: hello`, and `Sending hello back...`.
      6. Observe Peer B's logs: It should log `Connected to ..., sending hello...` and then `Received: hello back`.
 
+   - **Relay Node Deployment**: To manually test the relay functionality (without full NAT traversal logic yet, just connection):
+     1. Build the relay binary: `go build -o bin/relay ./cmd/relay`
+     2. Start the relay: `./bin/relay`
+     3. Ensure it outputs `Relay Service Started!` and prints its multiaddresses (e.g., `/ip4/127.0.0.1/tcp/4001/p2p/...`).
+     4. To verify routing traffic, proceed to the **Relay Connectivity** step below.
+
+   - **Relay Connectivity (NAT Traversal)**: To verify that a peer (e.g., Mac) can connect to another peer (e.g., Windows) through a public relay (e.g., Ubuntu server):
+     1. Start your public relay node on the Ubuntu server and copy its multiaddress (e.g., `/ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`).
+     2. On **Peer A** (Listener, e.g., Windows), start the peer and configure it to use the static relay:
+        `./bin/peer -p 55555 -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`
+     3. Take note of Peer A's generated Relay Multiaddress from its logs (it will end in `/p2p-circuit/p2p/<PEER-A-ID>`).
+     4. On **Peer B** (Dialer, e.g., Mac), start the peer, provide the static relay, and dial Peer A's relayed address:
+        `./bin/peer -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID>`
+     5. Observe the logs. Peer B should log `Connected to ..., sending hello...` and Peer A should reply, proving successful relayed file-transfer connectivity.
+
 ## Continuous Integration
 Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.

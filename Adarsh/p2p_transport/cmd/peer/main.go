@@ -16,6 +16,7 @@ import (
 func main() {
 	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
+	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -26,7 +27,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, err := transport.NewNode(ctx, *port, priv)
+	h, err := transport.NewNode(ctx, *port, priv, *relayAddr)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
@@ -34,7 +35,11 @@ func main() {
 	// Setup protocol handler
 	transport.SetupStreamHandler(h)
 
-	log.Printf("Peer started at %s/p2p/%s", h.Addrs()[0].String(), h.ID().String())
+	log.Printf("Peer initialized with ID: %s", h.ID().String())
+	log.Println("Listening on the following addresses:")
+	for _, addr := range h.Addrs() {
+		log.Printf("  - %s/p2p/%s", addr.String(), h.ID().String())
+	}
 
 	if *target != "" {
 		log.Printf("Dialing target peer: %s", *target)
