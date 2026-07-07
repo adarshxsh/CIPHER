@@ -11,6 +11,8 @@ import (
 
 	"cipher/internal/identity"
 	"cipher/internal/transport"
+
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func main() {
@@ -36,9 +38,23 @@ func main() {
 	transport.SetupStreamHandler(h)
 
 	log.Printf("Peer initialized with ID: %s", h.ID().String())
-	log.Println("Listening on the following addresses:")
+	log.Println("Listening on the following local addresses:")
 	for _, addr := range h.Addrs() {
 		log.Printf("  - %s/p2p/%s", addr.String(), h.ID().String())
+	}
+
+	if *relayAddr != "" {
+		relayInfo, err := peer.AddrInfoFromString(*relayAddr)
+		if err == nil {
+			// Proactively connect to the relay to establish the circuit reservation
+			if err := h.Connect(ctx, *relayInfo); err != nil {
+				log.Printf("Warning: Failed to connect to relay: %v", err)
+			} else {
+				log.Printf("\n[✓] Successfully connected to relay!")
+				log.Printf("Your Relayed Multiaddress (Share this with peers to connect to you):")
+				log.Printf("  - %s/p2p-circuit/p2p/%s\n", *relayAddr, h.ID().String())
+			}
+		}
 	}
 
 	if *target != "" {
