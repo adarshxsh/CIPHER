@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"cipher/internal/identity"
 
@@ -39,8 +40,16 @@ func main() {
 		log.Fatalf("Failed to create libp2p relay node: %v", err)
 	}
 
+	// Configure custom relay resources for development/testing.
+	// Production or public relays should stick to relay.DefaultResources() to prevent bandwidth abuse,
+	// as relay fallback connections are typically only intended for lightweight protocol coordination.
+	rc := relay.DefaultResources()
+	rc.Limit.Data = 512 * 1024 * 1024 // 512 MB data limit per connection
+	rc.Limit.Duration = 15 * time.Minute // 15 minute duration limit
+	rc.MaxReservations = 100
+
 	// Instantiate the circuit v2 relay service
-	_, err = relay.New(h)
+	_, err = relay.New(h, relay.WithResources(rc))
 	if err != nil {
 		log.Fatalf("Failed to instantiate relay service: %v", err)
 	}
