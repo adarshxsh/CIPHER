@@ -11,9 +11,13 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
+	// Enable libp2p debug logging for circuit v2
+	golog.SetLogLevel("relay", "debug")
+	golog.SetLogLevel("p2p-circuit", "debug")
 
 	// Load persistent identity for the relay
 	priv, err := identity.LoadOrCreate()
