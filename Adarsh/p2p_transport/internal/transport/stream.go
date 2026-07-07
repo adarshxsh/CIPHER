@@ -60,92 +60,68 @@ func readData(rw *bufio.ReadWriter) {
 	}
 }
 
-// ConnectAndSayHello connects to a target peer and sends a "hello" message.
-func ConnectAndSayHello(ctx context.Context, h host.Host, target string) error {
+// Transport wraps the libp2p host to provide a simpler abstraction for connection and stream management.
+type Transport struct {
+	host host.Host
+}
+
+// NewTransport creates a new Transport abstraction.
+func NewTransport(h host.Host) *Transport {
+	return &Transport{host: h}
+}
+
+// Connect dials the target peer and establishes the initial connection (likely a relayed connection).
+func (t *Transport) Connect(ctx context.Context, target string) (*peer.AddrInfo, error) {
 	maddr, err := multiaddr.NewMultiaddr(target)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("invalid multiaddress: %w", err)
 	}
-	
+
 	addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to extract peer info: %w", err)
 	}
-	
-	// Create a context with timeout for connecting
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer dialCancel()
-	
-	if err := h.Connect(dialCtx, *addrInfo); err != nil {
-		return fmt.Errorf("h.Connect failed: %w", err)
-	}
-	
-	log.Printf("[DIAGNOSTIC] Connect() succeeded. Connectedness: %s", h.Network().Connectedness(addrInfo.ID))
-	
-	// Enumerate existing connections to this peer
-	conns := h.Network().ConnsToPeer(addrInfo.ID)
-	log.Printf("[DIAGNOSTIC] Active connections to peer (%d):", len(conns))
-	hasCircuit := false
-	for i, conn := range conns {
-		log.Printf("  Conn %d: Local: %s | Remote: %s", i, conn.LocalMultiaddr(), conn.RemoteMultiaddr())
-		if _, err := conn.RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-			hasCircuit = true
-		}
-	}
-	if !hasCircuit {
-		log.Printf("[WARNING] No active /p2p-circuit connection found. Stream might drop or attempt direct dial.")
-	} else {
-		log.Printf("[DIAGNOSTIC] Relay circuit path verified.")
+
+	if err := t.host.Connect(dialCtx, *addrInfo); err != nil {
+		return nil, fmt.Errorf("h.Connect failed: %w", err)
 	}
 
-	// Wait briefly to allow the Identify protocol to populate the PeerStore
-	log.Printf("[DIAGNOSTIC] Waiting for Identify protocol to populate PeerStore...")
-	time.Sleep(2 * time.Second)
-	
-	addrs := h.Peerstore().Addrs(addrInfo.ID)
-	log.Printf("[DIAGNOSTIC] Known PeerStore addresses for %s:", addrInfo.ID)
-	hasCircuitAddr := false
-	for _, a := range addrs {
-		log.Printf("  - %s", a.String())
-		if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-			hasCircuitAddr = true
-		}
-	}
-	if !hasCircuitAddr {
-		log.Printf("[WARNING] Target peer does not have a /p2p-circuit address in PeerStore! Stream may fail.")
-	}
+	return addrInfo, nil
+}
 
-	// Create a context with timeout for stream opening
+// OpenStream opens a new application stream to the target peer. It uses the best available connection.
+func (t *Transport) OpenStream(ctx context.Context, target *peer.AddrInfo) (network.Stream, error) {
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
-	
-	// Milestone 5: Explicitly allow application streams over limited (transient) relay connections.
-	// Note: This is a temporary configuration for relay-only validation. During Milestone 6, 
-	// after DCUtR successfully upgrades the connection to a direct connection, 
-	// application streams should no longer rely on `WithAllowLimitedConn()`.
-	if hasCircuit {
-		streamCtx = network.WithAllowLimitedConn(streamCtx, "file-transfer-relay")
+
+	// WithAllowLimitedConn serves as a fallback. If a direct connection (from DCUtR) is available,
+	// libp2p will prefer it. If not, the application stream can still flow over the limited relay connection.
+	streamCtx = network.WithAllowLimitedConn(streamCtx, "file-transfer-relay")
+
+	s, err := t.host.NewStream(streamCtx, target.ID, protocol.FileTransferProtocolID)
+	if err != nil {
+		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
 
-	s, err := h.NewStream(streamCtx, addrInfo.ID, protocol.FileTransferProtocolID)
-	if err != nil {
-		return fmt.Errorf("NewStream failed: %w", err)
-	}
-	
-	log.Printf("Connected to %s, sending hello...", addrInfo.ID)
+	return s, nil
+}
+
+// InitiateFileTransfer starts the application protocol over an established stream.
+func (t *Transport) InitiateFileTransfer(s network.Stream) error {
+	log.Printf("Connected to %s, sending hello...", s.Conn().RemotePeer())
 	
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 	
-	_, err = rw.WriteString("hello\n")
-	if err != nil {
+	if _, err := rw.WriteString("hello\n"); err != nil {
 		return err
 	}
-	err = rw.Flush()
-	if err != nil {
+	if err := rw.Flush(); err != nil {
 		return err
 	}
 	
 	go readData(rw)
-	
 	return nil
 }
