@@ -13,8 +13,7 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
 - **transport**: Manages the initialization of libp2p hosts, connection establishment, and multiplexing.
 - **identity**: Handles peer ID generation, key management, and cryptographic identities. It includes a persistent identity system that ensures a node's `PeerID` remains constant across restarts by storing an Ed25519 private key in the user's OS-level configuration directory (`~/.config/cipher/`, `Library/Application Support/CIPHER/`, or `AppData/Roaming/CIPHER/`).
 - **crypto**: Provides standard cryptographic primitives for the broader application.
-- **transfer**: Defines the binary, length-prefixed file transfer protocol with end-to-end SHA-256 integrity verification, keeping the application decoupled from the transport.
-- **protocol**: Defines the custom network protocol IDs used by CIPHER, currently including `/cipher/filetransfer/1.0.0` for direct P2P communication.
+- **protocol**: Defines the custom network protocol IDs and handling used by CIPHER, currently including `/cipher/chunk/1.0.0` for direct, content-addressed P2P communication.
 - **content**: The Content Engine Foundation. A completely decoupled pipeline that manages data ingestion above the transport layer. It contains:
   - **chunker**: Splits files into variable-sized or fixed-sized chunks based on engine config.
   - **crypto**: Encrypts and decrypts chunks independently using XChaCha20-Poly1305.
@@ -107,7 +106,7 @@ sequenceDiagram
 ```mermaid
 graph TD
     subgraph Direct Connection
-        PeerA["Peer A (Listener)"] <-->|"/cipher/filetransfer/1.0.0"| PeerB["Peer B (Dialer)"]
+        PeerA["Peer A (Listener)"] <-->|"/cipher/chunk/1.0.0"| PeerB["Peer B (Dialer)"]
     end
     subgraph Relayed Connection
         PeerC["Peer C (NAT)"] -->|Circuit v2 Reservation| Relay["Relay Node"]
