@@ -74,9 +74,13 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 }
 
 func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
+	total := len(chunkIDs)
 	for i, chunkID := range chunkIDs {
+		processed := i + 1
+		
 		// 1. Skip logic (Resume Support)
 		if c.session != nil && i < len(c.session.Completed) && c.session.Completed[i] {
+			fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%) - Skipped", processed, total, float64(processed)/float64(total)*100)
 			continue
 		}
 		has, _ := c.engine.HasChunk(ctx, chunkID)
@@ -87,6 +91,7 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 			if c.sm != nil && c.session != nil {
 				c.sm.Save(c.session)
 			}
+			fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%) - Skipped", processed, total, float64(processed)/float64(total)*100)
 			continue
 		}
 
@@ -155,6 +160,12 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 		if c.sm != nil && c.session != nil {
 			c.sm.Save(c.session)
 		}
+		
+		fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%)", processed, total, float64(processed)/float64(total)*100)
+	}
+
+	if total > 0 {
+		fmt.Println() // Newline after progress bar completes
 	}
 
 	return nil
