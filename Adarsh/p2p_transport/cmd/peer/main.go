@@ -27,6 +27,7 @@ func main() {
 	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
+	forceRelay := flag.Bool("force-relay", false, "Disable hole punching and force traffic over the relay")
 	sendFile := flag.String("send", "", "Path to the file you want to send to the target peer")
 	flag.Parse()
 
@@ -38,7 +39,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, err := transport.NewNode(ctx, *port, priv, *relayAddr)
+	h, err := transport.NewNode(ctx, *port, priv, *relayAddr, *forceRelay)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}

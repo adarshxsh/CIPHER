@@ -16,7 +16,7 @@ import (
 )
 
 // NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr string) (host.Host, error) {
+func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, error) {
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 	
 	opts := []libp2p.Option{
@@ -39,8 +39,10 @@ func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr
 		}
 		opts = append(opts, 
 			libp2p.EnableAutoRelayWithStaticRelays([]peer.AddrInfo{*addrInfo}),
-			libp2p.EnableHolePunching(holepunch.WithTracer(&holePunchTracer{})),
 		)
+		if !forceRelay {
+			opts = append(opts, libp2p.EnableHolePunching(holepunch.WithTracer(&holePunchTracer{})))
+		}
 	}
 
 	h, err := libp2p.New(opts...)
