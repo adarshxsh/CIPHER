@@ -9,10 +9,17 @@ import (
 	"os/signal"
 	"syscall"
 
+	"cipher/internal/content/core"
+	"cipher/internal/content/crypto"
+	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
+	"cipher/internal/content/storage"
+	"cipher/internal/content/verifier"
 	"cipher/internal/identity"
-	"cipher/internal/transfer"
+	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
 
+	"encoding/hex"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	golog "github.com/ipfs/go-log/v2"
@@ -28,7 +35,12 @@ func main() {
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	forceRelay := flag.Bool("force-relay", false, "Disable hole punching and force traffic over the relay")
-	sendFile := flag.String("send", "", "Path to the file you want to send to the target peer")
+	
+	// Milestone 8 flags
+	ingestFile := flag.String("ingest", "", "Path to file to ingest locally")
+	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
+	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
+	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -44,8 +56,20 @@ func main() {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
 
+	// Setup Content Engine
+	storeDir := "./content_store"
+	if err := storage.NewFSStorage(storeDir); err != nil {
+		log.Fatalf("Failed to create store dir: %v", err)
+	}
+	config := core.EngineConfig{ChunkSize: 256 * 1024}
+	enc := crypto.NewXChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := engine.NewLocalKeyProvider()
+	store := storage.NewFSStore(storeDir)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+
 	// Setup protocol handler
-	transport.SetupStreamHandler(h)
+	chunk.NewStreamHandler(h, eng)
 
 	log.Printf("Peer initialized with ID: %s", h.ID().String())
 	log.Println("Listening on the following local addresses:")
@@ -73,7 +97,29 @@ func main() {
 		}
 	}
 
-	if *target != "" && *sendFile != "" {
+	if *ingestFile != "" {
+		log.Printf("Ingesting file: %s", *ingestFile)
+		f, err := os.Open(*ingestFile)
+		if err != nil {
+			log.Fatalf("Failed to open ingest file: %v", err)
+		}
+		defer f.Close()
+
+		m, err := eng.Ingest(ctx, f, manifest.TypeFile)
+		if err != nil {
+			log.Fatalf("Failed to ingest: %v", err)
+		}
+		// Save manifest bytes to engine memory so it can be served
+		mBytes, _ := m.Serialize()
+		eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
+		
+		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		log.Printf("[✓] Ingest complete!")
+		log.Printf("    ContentID: %x", m.Descriptor.ID)
+		log.Printf("    Key: %x", key)
+	}
+
+	if *target != "" && *fetchID != "" {
 		log.Printf("Dialing target peer: %s", *target)
 		t := transport.NewTransport(h)
 		
@@ -81,17 +127,57 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to connect to target: %v", err)
 		}
-		
-		s, err := t.OpenStream(ctx, addrInfo)
+
+		cIDBytes, err := hex.DecodeString(*fetchID)
+		if err != nil || len(cIDBytes) != 32 {
+			log.Fatalf("Invalid ContentID hex")
+		}
+		var contentID core.ContentID
+		copy(contentID[:], cIDBytes)
+
+		if *keyHex != "" {
+			kBytes, err := hex.DecodeString(*keyHex)
+			if err != nil || len(kBytes) != 32 {
+				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
+			}
+			keys.Put(ctx, contentID, kBytes)
+		}
+
+		client, err := chunk.NewClient(ctx, h, addrInfo.ID, eng)
 		if err != nil {
-			log.Fatalf("Failed to open stream to target: %v", err)
+			log.Fatalf("Failed to create chunk client: %v", err)
 		}
-		
-		if err := transfer.Send(s, *sendFile); err != nil {
-			log.Fatalf("Failed to send file: %v", err)
+		defer client.Close()
+
+		log.Printf("Resolving manifest for ContentID: %x", contentID)
+		mData, err := client.Resolve(ctx, contentID)
+		if err != nil {
+			log.Fatalf("Failed to resolve manifest: %v", err)
 		}
-	} else if *target != "" && *sendFile == "" {
-		log.Fatalf("Target peer specified but no file to send. Please use the -send flag.")
+
+		m, err := manifest.Deserialize(mData)
+		if err != nil {
+			log.Fatalf("Failed to deserialize manifest: %v", err)
+		}
+
+		log.Printf("Downloading %d chunks...", len(m.ChunkIDs))
+		if err := client.Download(ctx, m.ChunkIDs); err != nil {
+			log.Fatalf("Download failed: %v", err)
+		}
+
+		log.Printf("[✓] Download complete!")
+
+		if *reassembleOut != "" {
+			outF, err := os.Create(*reassembleOut)
+			if err != nil {
+				log.Fatalf("Failed to create out file: %v", err)
+			}
+			defer outF.Close()
+			if err := eng.Reassemble(ctx, m, outF); err != nil {
+				log.Fatalf("Reassemble failed: %v", err)
+			}
+			log.Printf("[✓] Reassembled to: %s", *reassembleOut)
+		}
 	}
 
 	// Wait for termination signal
