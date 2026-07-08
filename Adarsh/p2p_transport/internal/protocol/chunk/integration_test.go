@@ -72,7 +72,7 @@ func TestChunkProtocol_Integration(t *testing.T) {
 	eng1.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
 
 	// Peer 2 wants to fetch it
-	client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2)
+	client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	eng2 := createTestEngine(t)
 	chunk.NewStreamHandler(h1, eng1)
 
-	client, err := chunk.NewClient(context.Background(), h2, h1.ID(), eng2)
+	client, err := chunk.NewClient(context.Background(), h2, h1.ID(), eng2, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}

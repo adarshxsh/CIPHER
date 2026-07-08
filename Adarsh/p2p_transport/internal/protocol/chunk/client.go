@@ -13,23 +13,28 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/transfer/session"
 )
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream  network.Stream
+	engine  *engine.ContentEngine
+	digest  core.Digest
+	session *session.TransferSession
+	sm      session.SessionManager
 }
 
-func NewClient(ctx context.Context, h host.Host, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
-	s, err := h.NewStream(ctx, peerID, protocol.ChunkTransportProtocolID)
+func NewClient(ctx context.Context, h host.Host, peerID peer.ID, eng *engine.ContentEngine, sm session.SessionManager, s *session.TransferSession) (*Client, error) {
+	stream, err := h.NewStream(ctx, peerID, protocol.ChunkTransportProtocolID)
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
-		stream: s,
-		engine: eng,
-		digest: verifier.NewSHA256Digest(),
+		stream:  stream,
+		engine:  eng,
+		digest:  verifier.NewSHA256Digest(),
+		session: s,
+		sm:      sm,
 	}, nil
 }
 
@@ -70,36 +75,58 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 
 func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 	for i, chunkID := range chunkIDs {
-		// 1. Request Chunk
-		req := BuildRequestChunk(chunkID)
-		if err := WriteMessage(c.stream, req); err != nil {
-			return fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
+		// 1. Skip logic (Resume Support)
+		if c.session != nil && i < len(c.session.Completed) && c.session.Completed[i] {
+			continue
+		}
+		has, _ := c.engine.HasChunk(ctx, chunkID)
+		if has {
+			if c.session != nil && i < len(c.session.Completed) {
+				c.session.Completed[i] = true
+			}
+			if c.sm != nil && c.session != nil {
+				c.sm.Save(c.session)
+			}
+			continue
 		}
 
-		// 2. Receive Chunk
-		resp, err := ReadMessage(c.stream)
+		// 2. Request & Receive Chunk with Retry
+		var chunk *core.Chunk
+		err := session.ExecuteWithRetry(ctx, session.DefaultRetryPolicy, func() error {
+			req := BuildRequestChunk(chunkID)
+			if err := WriteMessage(c.stream, req); err != nil {
+				return fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
+			}
+
+			resp, err := ReadMessage(c.stream)
+			if err != nil {
+				return fmt.Errorf("failed to read response: %w", err)
+			}
+
+			if resp.Type == MsgError {
+				code, msg, _ := ParseError(resp.Payload)
+				return fmt.Errorf("remote error (code %d): %s", code, msg)
+			}
+
+			if resp.Type != MsgChunk {
+				return fmt.Errorf("expected CHUNK, got %d", resp.Type)
+			}
+
+			var parseErr error
+			chunk, parseErr = ParseChunk(resp.Payload)
+			if parseErr != nil {
+				return fmt.Errorf("failed to parse chunk: %w", parseErr)
+			}
+			return nil
+		})
+		
 		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
-
-		if resp.Type == MsgError {
-			code, msg, _ := ParseError(resp.Payload)
-			return fmt.Errorf("remote error on chunk %d (code %d): %s", i, code, msg)
-		}
-
-		if resp.Type != MsgChunk {
-			return fmt.Errorf("expected CHUNK, got %d", resp.Type)
-		}
-
-		chunk, err := ParseChunk(resp.Payload)
-		if err != nil {
-			return fmt.Errorf("failed to parse chunk: %w", err)
+			return fmt.Errorf("failed to fetch chunk %d after retries: %w", i, err)
 		}
 
 		// 3. Verify Hash matches ChunkID
 		hash := c.digest.Sum(chunk.Data)
 		if hash != core.Hash(chunkID) {
-			// Notify remote peer of corruption
 			errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
 			WriteMessage(c.stream, errMsg)
 			return fmt.Errorf("corrupted chunk %x received", chunkID)
@@ -119,6 +146,14 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 		ack := BuildAck(chunkID, 0)
 		if err := WriteMessage(c.stream, ack); err != nil {
 			log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
+		}
+
+		// 6. Persist Progress
+		if c.session != nil && i < len(c.session.Completed) {
+			c.session.Completed[i] = true
+		}
+		if c.sm != nil && c.session != nil {
+			c.sm.Save(c.session)
 		}
 	}
 
