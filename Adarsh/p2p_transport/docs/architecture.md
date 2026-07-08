@@ -23,7 +23,9 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
   - **storage**: Defines `ChunkSource` and `ChunkSink` interfaces. Currently implemented using local, content-addressed files.
   - **engine**: The coordinator that wires the pipeline together (ingest and reassembly).
 
-### Content Engine Pipeline
+### Content Engine Data Flow
+
+The Content Engine completely decouples the application's data ingestion from the transport layer. It operates as an independent pipeline designed for a future decentralized encrypted CDN.
 
 ```mermaid
 graph TD
@@ -33,7 +35,7 @@ graph TD
         Chunker[Chunker<br/>Splits into 256KB chunks] --> Crypto
         Crypto[Crypto<br/>Encrypts via XChaCha20-Poly1305] --> Verifier
         Verifier[Verifier<br/>Hashes ciphertext via SHA-256] --> Storage
-        Storage[(ContentStore<br/>FS-backed by Hash)]
+        Storage[(ContentStore<br/>Local FS-backed CAS)]
         
         ManifestBuilder[Manifest Builder]
         Verifier -.->|Generates Chunk IDs| ManifestBuilder
@@ -41,6 +43,21 @@ graph TD
     
     ManifestBuilder -->|Outputs| Manifest[Immutable Manifest]
 ```
+
+#### 1. Core Data Structures
+- **Chunk & Headers**: Data is explicitly split into `ChunkHeader` and `Data` payload. This ensures headers (containing metadata like `Version`, `PlainSize`, and `CipherSize`) can be evaluated independently of the encrypted payload during network transmission.
+- **Strong Typing**: The engine uses strict `[32]byte` types for `ChunkID` and `ContentID` to avoid string-encoding bugs, maximize comparison speed, and reduce heap allocations.
+
+#### 2. Cryptography & Verification
+- **Chunk Encryption (XChaCha20-Poly1305)**: Every chunk is encrypted independently. The engine generates secure 192-bit (24-byte) nonces automatically. Because chunks are encrypted independently, the engine natively supports out-of-order decryption and random access required by swarming protocols.
+- **Content-Addressing**: Chunks are identified strictly by the SHA-256 hash of their **ciphertext**. 
+
+#### 3. Content-Addressed Storage (CAS)
+- **Decoupled Sinks**: The storage layer is abstracted behind `ChunkSource` and `ChunkSink` interfaces, ensuring the engine never touches the filesystem directly.
+- **Sharded Local Storage**: The current `FSStore` implementation shards chunks using their hex-encoded hash prefixes (e.g., `store/ab/cd/abcdef123...`). This architecture mimics Git/IPFS to prevent filesystem degradation and inode limits when millions of chunks are persisted.
+
+#### 4. Immutable Manifests
+The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users.
 
 ## Network Topology
 The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
