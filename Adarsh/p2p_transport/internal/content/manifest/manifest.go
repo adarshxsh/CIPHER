@@ -1,6 +1,10 @@
 package manifest
 
-import "cipher/internal/content/core"
+import (
+	"encoding/json"
+	
+	"cipher/internal/content/core"
+)
 
 type ContentType string
 
@@ -36,4 +40,16 @@ type UserMetadata struct {
 	Filename  string `json:"filename"`
 	MimeType  string `json:"mime_type"`
 	CreatedAt int64  `json:"created_at"`
+}
+
+func (m *Manifest) Serialize() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+func Deserialize(data []byte) (*Manifest, error) {
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
