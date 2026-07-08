@@ -9,11 +9,11 @@
 - [x] Milestone 4: Bare Relay Service (Basic `circuitv2` relay node creation)
 - [x] Milestone 5: Relay Connectivity (Routing application streams over `circuitv2` limited connections)
 - [x] Milestone 6: Hole Punching & DCUtR (Upgrading relay connections to direct TCP/UDP via hole punching)
-- [ ] Milestone 7: Discovery (mDNS & DHT routing)
 
 ## Phase 3: Protocol Refinement
-- [ ] Milestone 8: Chunking & Merkle Verification
-- [ ] Milestone 9: Encryption & Authentication
+- [x] Milestone 7: Content Engine Foundation (Chunking, Cryptography, Content-Addressed Storage, Manifests)
+- [ ] Milestone 8: Discovery (mDNS & DHT routing)
+- [ ] Milestone 9: Deduplication, Proof-of-Storage & CDN Scheduling
 
 ## Phase 4: Release
 - [ ] Milestone 10: End-to-End Testing & Polish

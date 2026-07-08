@@ -78,7 +78,7 @@ CGO_ENABLED=0 go test -v ./...
 
 ## Transport Layer Test Matrix
 
-Before moving to the final CIPHER chunking protocol (Milestone 8), the transport layer is considered validated only after all the following manual tests pass:
+Before moving to the Content Engine Foundation (Milestone 7), the transport layer is considered validated only after all the following manual tests pass:
 
 - [☑️] **Small Payload**: 1 KB file transfer
 - [☑️] **Medium Payload**: 1 MB file transfer
@@ -88,6 +88,48 @@ Before moving to the final CIPHER chunking protocol (Milestone 8), the transport
 - [☑️] **Relay Fallback**: Transfer over relay only (disable DCUtR / hole punching)
 - [☑️] **Direct Upgrade**: Transfer naturally switches to direct path after successful DCUtR
 - [☑️] **Integrity**: SHA-256 verification succeeds for every single transfer
+
+## Content Engine Test Matrix (Milestone 7)
+
+The Content Engine Foundation completely decouples the filesystem from the transport layer. It is tested strictly via local automation before any P2P network integration.
+
+To run the Content Engine test suite:
+```bash
+go test -v ./internal/content/...
+```
+
+The engine is considered validated only after all the following automated tests pass:
+
+- [☑️] **Chunking**: Streams are correctly split into precisely sized chunks based on dynamic configuration.
+- [☑️] **Encryption (XChaCha20-Poly1305)**: Every chunk is independently encrypted in-place using a 192-bit nonce, modifying the `CipherSize` correctly.
+- [☑️] **Integrity & Hashing**: `Digest` (SHA-256) correctly hashes ciphertexts to yield `ChunkID`s, and securely verifies them before decryption.
+- [☑️] **Decoupled Storage**: The `ChunkSource` and `ChunkSink` interfaces successfully store and retrieve chunks from the filesystem using content-addressed filenames.
+- [☑️] **End-to-End Reassembly**: A large data stream is successfully ingested, chunked, encrypted, hashed, stored, retrieved, decrypted, and accurately reassembled back into its original sequence using the immutable `Manifest`.
+- [☑️] **Corruption Handling**: Altering a stored chunk reliably triggers a `hash mismatch` or decryption failure upon reassembly.
+
+### Manual Testing (Content Engine CLI)
+
+To manually test the pipeline, you can use the `content-test` CLI utility which ingests a file, processes it through the pipeline, stores the chunks in `./content_store`, and outputs a `manifest.json`.
+
+1. **Build the Test CLI**:
+   ```bash
+   go build -o bin/content-test ./cmd/content-test
+   ```
+
+2. **Ingest a File**:
+   Create a sample file and run the ingest command:
+   ```bash
+   echo "This is a test file for the content engine." > sample.txt
+   ./bin/content-test -ingest sample.txt -manifest test_manifest.json
+   ```
+   *Expected Output*: The CLI will log the total chunks created and save `test_manifest.json` in your current directory. Check the `./content_store/` directory to see the stored encrypted chunks named by their SHA-256 hashes.
+
+3. **Reassemble the File**:
+   Using only the generated manifest and the chunks in the local store, reassemble the original file:
+   ```bash
+   ./bin/content-test -manifest test_manifest.json -out restored.txt
+   ```
+   *Expected Output*: The `restored.txt` file will be created and its contents should perfectly match `sample.txt`.
 
 ## Continuous Integration
 Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.

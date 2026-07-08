@@ -15,8 +15,32 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
 - **crypto**: Provides standard cryptographic primitives for the broader application.
 - **transfer**: Defines the binary, length-prefixed file transfer protocol with end-to-end SHA-256 integrity verification, keeping the application decoupled from the transport.
 - **protocol**: Defines the custom network protocol IDs used by CIPHER, currently including `/cipher/filetransfer/1.0.0` for direct P2P communication.
-- **chunk** & **packet**: Handles the chunking and packetization of data for efficient transmission.
-- **merkle**: Implements Merkle trees for data verification and integrity checks.
+- **content**: The Content Engine Foundation. A completely decoupled pipeline that manages data ingestion above the transport layer. It contains:
+  - **chunker**: Splits files into variable-sized or fixed-sized chunks based on engine config.
+  - **crypto**: Encrypts and decrypts chunks independently using XChaCha20-Poly1305.
+  - **verifier**: Hashes and verifies chunk/file integrity using SHA-256.
+  - **manifest**: Manages immutable content capabilities (Chunk IDs, Hashes, Descriptors) decoupled from decryption rights.
+  - **storage**: Defines `ChunkSource` and `ChunkSink` interfaces. Currently implemented using local, content-addressed files.
+  - **engine**: The coordinator that wires the pipeline together (ingest and reassembly).
+
+### Content Engine Pipeline
+
+```mermaid
+graph TD
+    App[Application] -->|Raw File/Stream| Chunker
+    
+    subgraph Content Engine
+        Chunker[Chunker<br/>Splits into 256KB chunks] --> Crypto
+        Crypto[Crypto<br/>Encrypts via XChaCha20-Poly1305] --> Verifier
+        Verifier[Verifier<br/>Hashes ciphertext via SHA-256] --> Storage
+        Storage[(ContentStore<br/>FS-backed by Hash)]
+        
+        ManifestBuilder[Manifest Builder]
+        Verifier -.->|Generates Chunk IDs| ManifestBuilder
+    end
+    
+    ManifestBuilder -->|Outputs| Manifest[Immutable Manifest]
+```
 
 ## Network Topology
 The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
