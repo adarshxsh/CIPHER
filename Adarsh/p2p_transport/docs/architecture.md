@@ -21,6 +21,7 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
   - **manifest**: Manages immutable content capabilities (Chunk IDs, Hashes, Descriptors) decoupled from decryption rights.
   - **storage**: Defines `ChunkSource` and `ChunkSink` interfaces. Currently implemented using local, content-addressed files.
   - **engine**: The coordinator that wires the pipeline together (ingest and reassembly).
+- **transfer**: High-level orchestrator of network downloads. It currently implements session persistence via `internal/transfer/session`, enabling resilient, resumable downloads without altering the stateless network protocol.
 
 ### Content Engine Data Flow
 
@@ -57,6 +58,9 @@ graph TD
 
 #### 4. Immutable Manifests
 The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users.
+
+#### 5. Local Session Management & Resiliency
+Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume and recovery. The `SessionManager` tracks progress using a boolean bitset and persists it locally (e.g., `sessions/<ContentID>.json`). Upon restart, the client skips chunks that are locally present and executes an exponential backoff retry policy for missing chunks. The underlying `/cipher/chunk/1.0.0` protocol remains fully stateless.
 
 ## Network Topology
 The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
