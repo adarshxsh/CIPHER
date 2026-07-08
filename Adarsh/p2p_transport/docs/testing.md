@@ -76,6 +76,16 @@ CGO_ENABLED=0 go test -v ./...
      1. This is automatically tested on every block fetched by the client via the verify-then-store mechanism.
      2. If a chunk gets corrupted, the client drops the transfer with a hash mismatch error before the chunk touches the disk.
 
+## Reliable Content Transfer (Milestone 9)
+
+Milestone 9 introduces client-side transfer session tracking, retry policies, and resume capability while maintaining a strictly stateless `/cipher/chunk/1.0.0` protocol.
+
+- [☑️] **Local Session Persistence**: `TransferSession` correctly persists progress in `sessions/` directory.
+- [☑️] **Skip Logic (Idempotency)**: The downloader verifies local chunk presence via `HasChunk()` and successfully skips downloading already retrieved chunks.
+- [☑️] **Resume Interrupted Downloads**: Killing a peer (`Ctrl+C`) halfway through a transfer and running `-resume` correctly starts from the remaining chunks without duplicates.
+- [☑️] **Retry Policy**: Transient network failures safely trigger an exponential backoff instead of terminating the download.
+- [☑️] **Session Management CLI**: `-transfer-status` and `-cancel` accurately list and clear local session state.
+
 ## Content Transport Integration Test Matrix (Milestone 8)
 
 The transport layer leverages `/cipher/chunk/1.0.0` to explicitly separate network transmission from filesystem storage. It is considered validated only after all the following tests pass:
