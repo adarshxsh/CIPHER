@@ -76,18 +76,15 @@ CGO_ENABLED=0 go test -v ./...
      1. This is automatically tested on every block fetched by the client via the verify-then-store mechanism.
      2. If a chunk gets corrupted, the client drops the transfer with a hash mismatch error before the chunk touches the disk.
 
-## Transport Layer Test Matrix
+## Content Transport Integration Test Matrix (Milestone 8)
 
-Before moving to the Content Engine Foundation (Milestone 7), the transport layer is considered validated only after all the following manual tests pass:
+The transport layer leverages `/cipher/chunk/1.0.0` to explicitly separate network transmission from filesystem storage. It is considered validated only after all the following tests pass:
 
-- [☑️] **Small Payload**: 1 KB file transfer
-- [☑️] **Medium Payload**: 1 MB file transfer
-- [☑️] **Large Payload**: 50–100 MB file transfer
-- [☑️] **Binary Format**: e.g., ZIP or JPEG file
-- [☑️] **Bidirectional**: Transfer A→B and B→A
-- [☑️] **Relay Fallback**: Transfer over relay only (disable DCUtR / hole punching)
-- [☑️] **Direct Upgrade**: Transfer naturally switches to direct path after successful DCUtR
-- [☑️] **Integrity**: SHA-256 verification succeeds for every single transfer
+- [☑️] **Message Serialization**: Symmetric Message envelope (Version, Type, Payload) handles valid and malformed structures correctly.
+- [☑️] **Verify-Then-Store**: Chunks are verified against their SHA-256 ContentID before being written to the engine store.
+- [☑️] **Interruption Handling**: Peer disconnects midway through manifest or chunk transfers are caught and resources are freed safely.
+- [☑️] **Decoupled Cryptography**: Reassembling downloaded chunks correctly fails without the explicit out-of-band encryption Key.
+- [☑️] **Transport Benchmark**: Baseline transfer rate established (~490 MB/s over loopback).
 
 ## Content Engine Test Matrix (Milestone 7)
 
