@@ -107,9 +107,25 @@ The engine is considered validated only after all the following automated tests 
 - [☑️] **End-to-End Reassembly**: A large data stream is successfully ingested, chunked, encrypted, hashed, stored, retrieved, decrypted, and accurately reassembled back into its original sequence using the immutable `Manifest`.
 - [☑️] **Corruption Handling**: Altering a stored chunk reliably triggers a `hash mismatch` or decryption failure upon reassembly.
 
+### Robustness Tests (Advanced Validation)
+
+While the above matrix represents the minimum acceptance criteria for the Content Engine, the following robustness tests validate its readiness for a decentralized network environment:
+
+- [ ] **Boundary Testing**: File sizes precisely hitting chunk boundaries (e.g., 0B, 1B, 31KB, 32KB, 32KB+1B, 1MB, 100MB).
+- [ ] **Randomized Inputs**: End-to-end ingest and reassembly of randomly generated binary files (not just text) with verification via SHA-256.
+- [ ] **Out-of-Order Reconstruction**: Reassembling a stream from chunks requested and returned in a completely random sequence.
+- [ ] **Duplicate Chunk Handling**: Simulating swarming by providing duplicate chunks and verifying no corruption or duplicate writes occur.
+- [ ] **Missing Chunk Handling**: Explicitly deleting a chunk and asserting the engine cleanly returns `ErrMissingChunk` rather than panicking or producing partial output.
+- [ ] **Cryptographic Rejection**: Providing the wrong decryption key and ensuring the engine fails securely.
+- [ ] **Manifest Validation**: Rejecting invalid manifests (duplicate IDs, invalid offsets, malformed JSON, etc) before any processing begins.
+- [ ] **Determinism**: Asserting that ingesting the exact same file twice with the same key produces the expected object behavior (independent ciphertexts due to nonces).
+- [ ] **Performance & Streaming**: Ingesting a 500MB file and asserting that memory remains strictly bounded (no full-file buffering).
+- [ ] **API Contracts**: Running identical test suites against any future `ChunkSource` (e.g. Memory, IPFS, S3) to ensure seamless swapping.
+- [ ] **The 1000-Iteration Gauntlet**: Running 1000 loops of: Generate random file -> Random chunk size -> Random key -> Ingest -> Shuffle chunks -> Restore -> Compare SHA-256.
+
 ### Manual Testing (Content Engine CLI)
 
-To manually test the pipeline, you can use the `content-test` CLI utility which ingests a file, processes it through the pipeline, stores the chunks in `./content_store`, and outputs a `manifest.json`.
+To manually test the pipeline, you can use the `content-test` CLI utility. As development progresses, this tool supports extensive commands for debugging and manual validation.
 
 1. **Build the Test CLI**:
    ```bash
@@ -119,17 +135,28 @@ To manually test the pipeline, you can use the `content-test` CLI utility which 
 2. **Ingest a File**:
    Create a sample file and run the ingest command:
    ```bash
-   echo "This is a test file for the content engine." > sample.txt
-   ./bin/content-test -ingest sample.txt -manifest test_manifest.json
+   mkdir -p test_files
+   echo "This is a test file for the content engine." > test_files/sample.txt
+   ./bin/content-test -ingest test_files/sample.txt
    ```
-   *Expected Output*: The CLI will log the total chunks created and save `test_manifest.json` in your current directory. Check the `./content_store/` directory to see the stored encrypted chunks named by their SHA-256 hashes.
+   *Expected Output*: The CLI will log the total chunks created and save `test_files/manifest.json`. Check the `./test_files/content_store/` directory to see the stored encrypted chunks sharded by their SHA-256 hashes.
 
 3. **Reassemble the File**:
    Using only the generated manifest and the chunks in the local store, reassemble the original file:
    ```bash
-   ./bin/content-test -manifest test_manifest.json -out restored.txt
+   ./bin/content-test -out test_files/restored.txt
    ```
    *Expected Output*: The `restored.txt` file will be created and its contents should perfectly match `sample.txt`.
+
+4. **Future CLI Commands (Planned)**:
+   For debugging future distributed networks, the CLI will support advanced validation:
+   ```bash
+   ./bin/content-test verify test_manifest.json
+   ./bin/content-test inspect test_manifest.json
+   ./bin/content-test list
+   ./bin/content-test corrupt <chunkID>
+   ./bin/content-test delete <chunkID>
+   ```
 
 ## Continuous Integration
 Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.

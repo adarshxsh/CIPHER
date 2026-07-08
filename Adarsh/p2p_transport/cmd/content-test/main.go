@@ -20,7 +20,7 @@ import (
 func main() {
 	ingestFile := flag.String("ingest", "", "File to ingest and chunk")
 	reassembleOut := flag.String("out", "", "Output file for reassembled data (requires -manifest)")
-	manifestFile := flag.String("manifest", "manifest.json", "Manifest JSON file (output for ingest, input for reassemble)")
+	manifestFile := flag.String("manifest", "test_files/manifest.json", "Manifest JSON file (output for ingest, input for reassemble)")
 	flag.Parse()
 
 	if *ingestFile == "" && *reassembleOut == "" {
@@ -33,7 +33,7 @@ func main() {
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 
-	storeDir := "./content_store"
+	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}

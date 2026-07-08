@@ -30,6 +30,10 @@ func NewFSStore(baseDir string) *FSStorage {
 
 func (s *FSStorage) pathForChunk(id core.ChunkID) string {
 	encoded := hex.EncodeToString(id[:])
+	if len(encoded) >= 4 {
+		// Shard by first 2 bytes (4 hex chars), e.g. ab/cd/abcdef...
+		return filepath.Join(s.baseDir, encoded[0:2], encoded[2:4], encoded)
+	}
 	return filepath.Join(s.baseDir, encoded)
 }
 
@@ -46,6 +50,10 @@ func (s *FSStorage) HasChunk(ctx context.Context, id core.ChunkID) (bool, error)
 
 func (s *FSStorage) PutChunk(ctx context.Context, chunk *core.Chunk) error {
 	path := s.pathForChunk(chunk.Header.ID)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create shard dir: %w", err)
+	}
 
 	f, err := os.Create(path)
 	if err != nil {
