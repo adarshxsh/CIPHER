@@ -6,8 +6,10 @@ This repository contains the P2P transport module for the CIPHER project.
 
 - `cmd/peer`: Entry point for standard peers.
 - `cmd/relay`: Entry point for relay peers.
-- `internal/transport`: libp2p host creation and transport management.
-- `internal/...`: Other modules placeholder (identity, protocol, crypto, chunk, merkle, packet).
+- `internal/transport`: libp2p host creation, connection management, and hole punching (DCUtR).
+- `internal/content`: The Content Engine Foundation (Chunking, Encryption, Hashing, Manifests, Storage).
+- `internal/identity`: Persistent Ed25519 identity generation.
+- `internal/protocol`: Custom libp2p protocol definitions.
 - `configs/`: Configuration files.
 - `data/`: Data storage directories.
 
@@ -23,7 +25,11 @@ This repository contains the P2P transport module for the CIPHER project.
 # Build the project into the bin directory
 go build -o bin/peer ./cmd/peer
 go build -o bin/relay ./cmd/relay
+go build -o bin/content-test ./cmd/content-test
 
-# Run tests
+# Run core transport network tests
 go test ./...
+
+# Run Content Engine robustness tests
+go test -v ./test/robustness/...
 ```
