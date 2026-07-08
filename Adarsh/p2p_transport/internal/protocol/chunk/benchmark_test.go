@@ -32,7 +32,7 @@ func BenchmarkChunkTransport_Sequential(b *testing.B) {
 	b.ResetTimer()
 	
 	for i := 0; i < b.N; i++ {
-		client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2)
+		client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2, nil, nil)
 		if err != nil {
 			b.Fatalf("Failed to create client: %v", err)
 		}

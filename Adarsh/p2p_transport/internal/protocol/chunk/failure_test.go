@@ -26,7 +26,7 @@ func TestChunkProtocol_InterruptedTransfer(t *testing.T) {
 	eng1.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
 	
 	// Create client
-	client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2)
+	client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}

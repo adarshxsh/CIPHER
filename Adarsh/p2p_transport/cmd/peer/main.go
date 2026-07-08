@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
@@ -18,6 +19,7 @@ import (
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
+	"cipher/internal/transfer/session"
 
 	"encoding/hex"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -41,6 +43,9 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	resumeID := flag.String("resume", "", "ContentID to resume downloading")
+	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
+	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,6 +72,36 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(storeDir)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+
+	sm, err := session.NewFileSessionManager(storeDir + "/sessions")
+	if err != nil {
+		log.Fatalf("Failed to create session manager: %v", err)
+	}
+
+	if *transferStatus {
+		sessions, err := sm.List()
+		if err != nil {
+			log.Fatalf("Failed to list sessions: %v", err)
+		}
+		if len(sessions) == 0 {
+			fmt.Println("No active transfer sessions.")
+		} else {
+			fmt.Println("Transfer Sessions:")
+			for _, s := range sessions {
+				fmt.Printf(" - ContentID: %x | Status: %s | Progress: %d/%d chunks | Target: %s\n", s.ContentID, s.Status, s.CompletedCount(), s.TotalChunks, s.TargetPeer.String())
+			}
+		}
+		return
+	}
+
+	if *cancelID != "" {
+		cIDBytes, _ := hex.DecodeString(*cancelID)
+		var cID core.ContentID
+		copy(cID[:], cIDBytes)
+		sm.Delete(cID)
+		fmt.Printf("Session %x cancelled.\n", cID)
+		return
+	}
 
 	// Setup protocol handler
 	chunk.NewStreamHandler(h, eng)
@@ -119,7 +154,14 @@ func main() {
 		log.Printf("    Key: %x", key)
 	}
 
-	if *target != "" && *fetchID != "" {
+	var targetContentIDHex string
+	if *fetchID != "" {
+		targetContentIDHex = *fetchID
+	} else if *resumeID != "" {
+		targetContentIDHex = *resumeID
+	}
+
+	if *target != "" && targetContentIDHex != "" {
 		log.Printf("Dialing target peer: %s", *target)
 		t := transport.NewTransport(h)
 		
@@ -128,7 +170,7 @@ func main() {
 			log.Fatalf("Failed to connect to target: %v", err)
 		}
 
-		cIDBytes, err := hex.DecodeString(*fetchID)
+		cIDBytes, err := hex.DecodeString(targetContentIDHex)
 		if err != nil || len(cIDBytes) != 32 {
 			log.Fatalf("Invalid ContentID hex")
 		}
@@ -143,7 +185,20 @@ func main() {
 			keys.Put(ctx, contentID, kBytes)
 		}
 
-		client, err := chunk.NewClient(ctx, h, addrInfo.ID, eng)
+		sess, err := sm.Open(contentID)
+		if err != nil {
+			log.Fatalf("Failed to load session: %v", err)
+		}
+		if sess == nil {
+			sess = &session.TransferSession{
+				ContentID:  contentID,
+				TargetPeer: addrInfo.ID,
+				Status:     session.StatusInProgress,
+				StartedAt:  time.Now(),
+			}
+		}
+
+		client, err := chunk.NewClient(ctx, h, addrInfo.ID, eng, sm, sess)
 		if err != nil {
 			log.Fatalf("Failed to create chunk client: %v", err)
 		}
@@ -160,11 +215,21 @@ func main() {
 			log.Fatalf("Failed to deserialize manifest: %v", err)
 		}
 
+		if len(sess.Completed) == 0 {
+			sess.Completed = make([]bool, len(m.ChunkIDs))
+			sess.TotalChunks = len(m.ChunkIDs)
+			sm.Save(sess)
+		}
+
 		log.Printf("Downloading %d chunks...", len(m.ChunkIDs))
 		if err := client.Download(ctx, m.ChunkIDs); err != nil {
+			sess.Status = session.StatusFailed
+			sm.Save(sess)
 			log.Fatalf("Download failed: %v", err)
 		}
 
+		sess.Status = session.StatusCompleted
+		sm.Save(sess)
 		log.Printf("[✓] Download complete!")
 
 		if *reassembleOut != "" {

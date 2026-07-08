@@ -175,12 +175,6 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 
 // -- Transport Layer APIs --
 
-// HasChunk returns whether the chunk exists in the underlying store.
-func (e *ContentEngine) HasChunk(ctx context.Context, id core.ChunkID) (bool, error) {
-	return e.source.HasChunk(ctx, id)
-}
-
-// GetChunk reads a chunk from the underlying local store.
 func (e *ContentEngine) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk, error) {
 	return e.source.GetChunk(ctx, id)
 }
