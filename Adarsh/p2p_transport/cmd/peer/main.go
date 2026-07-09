@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
-	"time"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
@@ -18,8 +18,8 @@ import (
 	"cipher/internal/content/verifier"
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transfer/manager"
 	"cipher/internal/transport"
-	"cipher/internal/transfer/session"
 
 	"encoding/hex"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -37,6 +37,7 @@ func main() {
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	forceRelay := flag.Bool("force-relay", false, "Disable hole punching and force traffic over the relay")
+	storePath := flag.String("store", "./content_store", "Path to the local content store directory")
 	
 	// Milestone 8 flags
 	ingestFile := flag.String("ingest", "", "Path to file to ingest locally")
@@ -62,18 +63,17 @@ func main() {
 	}
 
 	// Setup Content Engine
-	storeDir := "./content_store"
-	if err := storage.NewFSStorage(storeDir); err != nil {
+	if err := storage.NewFSStorage(*storePath); err != nil {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
 	enc := crypto.NewXChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
-	store := storage.NewFSStore(storeDir)
+	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
 
-	sm, err := session.NewFileSessionManager(storeDir + "/sessions")
+	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
 		log.Fatalf("Failed to create session manager: %v", err)
 	}
@@ -162,12 +162,24 @@ func main() {
 	}
 
 	if *target != "" && targetContentIDHex != "" {
-		log.Printf("Dialing target peer: %s", *target)
+		log.Printf("Dialing target peer(s): %s", *target)
 		t := transport.NewTransport(h)
 		
-		addrInfo, err := t.Connect(ctx, *target)
-		if err != nil {
-			log.Fatalf("Failed to connect to target: %v", err)
+		var targetPeers []peer.ID
+		for _, targetStr := range strings.Split(*target, ",") {
+			targetStr = strings.TrimSpace(targetStr)
+			if targetStr == "" {
+				continue
+			}
+			addrInfo, err := t.Connect(ctx, targetStr)
+			if err != nil {
+				log.Fatalf("Failed to connect to target %s: %v", targetStr, err)
+			}
+			targetPeers = append(targetPeers, addrInfo.ID)
+		}
+
+		if len(targetPeers) == 0 {
+			log.Fatalf("No valid target peers specified")
 		}
 
 		cIDBytes, err := hex.DecodeString(targetContentIDHex)
@@ -185,27 +197,16 @@ func main() {
 			keys.Put(ctx, contentID, kBytes)
 		}
 
-		sess, err := sm.Open(contentID)
-		if err != nil {
-			log.Fatalf("Failed to load session: %v", err)
-		}
-		if sess == nil {
-			sess = &session.TransferSession{
-				ContentID:  contentID,
-				TargetPeer: addrInfo.ID,
-				Status:     session.StatusInProgress,
-				StartedAt:  time.Now(),
-			}
-		}
-
-		client, err := chunk.NewClient(ctx, h, addrInfo.ID, eng, sm, sess)
+		// Resolve manifest from the first peer
+		client, err := chunk.NewClient(ctx, h, targetPeers[0], eng)
 		if err != nil {
 			log.Fatalf("Failed to create chunk client: %v", err)
 		}
-		defer client.Close()
-
-		log.Printf("Resolving manifest for ContentID: %x", contentID)
+		
+		log.Printf("Resolving manifest for ContentID: %x from %s", contentID, targetPeers[0])
 		mData, err := client.Resolve(ctx, contentID)
+		client.Close() // Can close after resolve, workers will make their own
+		
 		if err != nil {
 			log.Fatalf("Failed to resolve manifest: %v", err)
 		}
@@ -215,21 +216,13 @@ func main() {
 			log.Fatalf("Failed to deserialize manifest: %v", err)
 		}
 
-		if len(sess.Completed) == 0 {
-			sess.Completed = make([]bool, len(m.ChunkIDs))
-			sess.TotalChunks = len(m.ChunkIDs)
-			sm.Save(sess)
-		}
-
-		log.Printf("Downloading %d chunks...", len(m.ChunkIDs))
-		if err := client.Download(ctx, m.ChunkIDs); err != nil {
-			sess.Status = session.StatusFailed
-			sm.Save(sess)
+		log.Printf("Downloading %d chunks from %d peers...", len(m.ChunkIDs), len(targetPeers))
+		
+		tm := manager.NewTransferManager(sm, eng, h)
+		if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 			log.Fatalf("Download failed: %v", err)
 		}
 
-		sess.Status = session.StatusCompleted
-		sm.Save(sess)
 		log.Printf("[✓] Download complete!")
 
 		if *reassembleOut != "" {

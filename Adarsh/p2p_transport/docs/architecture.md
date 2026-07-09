@@ -21,7 +21,9 @@ The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a 
   - **manifest**: Manages immutable content capabilities (Chunk IDs, Hashes, Descriptors) decoupled from decryption rights.
   - **storage**: Defines `ChunkSource` and `ChunkSink` interfaces. Currently implemented using local, content-addressed files.
   - **engine**: The coordinator that wires the pipeline together (ingest and reassembly).
-- **transfer**: High-level orchestrator of network downloads. It currently implements session persistence via `internal/transfer/session`, enabling resilient, resumable downloads without altering the stateless network protocol.
+- **transfer**: High-level orchestrator of network downloads with strict separation of concerns:
+  - **manager**: Owns transfer lifecycle, session state (resume/retry), and progress tracking without blocking.
+  - **scheduler**: Owns work distribution. It maintains a lock-free queue and spins up a worker pool to fetch chunks concurrently from multiple source peers.
 
 ### Content Engine Data Flow
 
@@ -59,8 +61,30 @@ graph TD
 #### 4. Immutable Manifests
 The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users.
 
-#### 5. Local Session Management & Resiliency
-Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume and recovery. The `SessionManager` tracks progress using a boolean bitset and persists it locally (e.g., `sessions/<ContentID>.json`). Upon restart, the client skips chunks that are locally present and executes an exponential backoff retry policy for missing chunks. The underlying `/cipher/chunk/1.0.0` protocol remains fully stateless.
+#### 5. Local Session Management & Swarming
+Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume, recovery, and swarming. 
+The network transfer pipeline follows a strict hierarchy:
+
+```text
+Application (CLI, Gateway)
+        │
+        ▼
+TransferManager (Session, Progress, Retry Policy)
+        │
+        ▼
+Scheduler (Queue, Source Maps)
+        │
+        ▼
+Workers (Concurrent Fetching)
+        │
+        ▼
+Chunk Protocol (Stateless Network Comms)
+        │
+        ▼
+Content Engine (Verification & Storage)
+```
+
+The `TransferManager` tracks progress using a boolean bitset and persists it locally (e.g., `sessions/<ContentID>.json`). Upon restart or failure, missing chunks are automatically queued into the `Scheduler`, which assigns them to available `Worker`s connecting to seed peers. The underlying `/cipher/chunk/1.0.0` protocol remains fully stateless and completely decoupled from orchestration logic.
 
 ## Network Topology
 The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.

@@ -165,5 +165,32 @@ To manually test the pipeline, you can use the `content-test` CLI utility. As de
    ./bin/content-test delete <chunkID>
    ```
 
+## Multi-peer Swarming (Milestone 10)
+
+Milestone 10 introduced a deterministic chunk scheduler that enables concurrent downloading from multiple peers using a worker pool.
+
+- [☑️] **Concurrent Downloading**: The scheduler distributes `ChunkTask` assignments to available workers via a thread-safe `ChunkQueue`, executing parallel downloads.
+- [☑️] **Architectural Isolation**: `TransferManager` cleanly owns session state, lifecycle, and progress, while `Scheduler` solely handles work distribution. 
+- [☑️] **Resilient Retry Policy**: Failed chunk fetches correctly push tasks back to the queue (up to a max attempt limit) rather than failing the entire download or infinitely looping.
+- [☑️] **Multiple Target Input**: The CLI accepts a comma-separated list of multiaddresses (e.g., `-d <addr1>,<addr2>`) to dial multiple seeds simultaneously.
+
+### Manual Swarm Testing (Phases)
+1. **Phase 1: Concurrency**
+   - *Important Note:* The Content Engine encrypts chunks independently using random 24-byte nonces. You cannot ingest the same file on three peers to simulate swarming, as they will generate different ContentIDs. Instead, ingest it once and have the others download it to become identical seeds.
+   - **Step 1:** Start Peer A and ingest the file: 
+     `CIPHER_CONFIG_DIR=/tmp/peerA ./bin/peer -p 55555 -store ./storeA -ingest test.mp4`
+   - **Step 2:** Start Peer B and fetch from Peer A to become a seed:
+     `CIPHER_CONFIG_DIR=/tmp/peerB ./bin/peer -p 55556 -store ./storeB -d <Peer A Address> -fetch <ContentID>`
+   - **Step 3:** Start Peer C and fetch from Peer A (or B) to become a seed:
+     `CIPHER_CONFIG_DIR=/tmp/peerC ./bin/peer -p 55557 -store ./storeC -d <Peer A Address> -fetch <ContentID>`
+   - **Step 4:** Start the Downloader (Peer D) and fetch from all three seeds concurrently:
+     `CIPHER_CONFIG_DIR=/tmp/peerD ./bin/peer -store ./storeD -d <PeerA_Addr>,<PeerB_Addr>,<PeerC_Addr> -fetch <ContentID> -reassemble out.mp4`
+   - Verify that chunks are downloaded concurrently from all peers and reassembled correctly.
+2. **Phase 2: Recovery**
+   - Disconnect Peer B midway through the download.
+   - Verify the scheduler correctly handles the network error, requeues the chunks, and finishes the download via Peers A and C.
+3. **Phase 3: Partial Availability (Future)**
+   - Test scheduling when peers only possess specific chunk ranges.
+
 ## Continuous Integration
 Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.

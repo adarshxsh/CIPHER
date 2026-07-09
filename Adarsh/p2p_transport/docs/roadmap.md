@@ -12,8 +12,11 @@
 
 ## Phase 3: Protocol Refinement
 - [x] Milestone 7: Content Engine Foundation (Chunking, Cryptography, Content-Addressed Storage, Manifests)
-- [ ] Milestone 8: Discovery (mDNS & DHT routing)
-- [ ] Milestone 9: Deduplication, Proof-of-Storage & CDN Scheduling
+- [x] Milestone 8: Content-Addressed Protocol & Integration
+- [x] Milestone 9: Reliable Content Transfer (Session Management, Resume, Retry)
+- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling
 
-## Phase 4: Release
-- [ ] Milestone 10: End-to-End Testing & Polish
+## Phase 4: Decentralization & Scaling
+- [ ] Milestone 11: Discovery (mDNS & DHT routing)
+- [ ] Milestone 12: Deduplication, Proof-of-Storage & CDN Cache Placement
+- [ ] Milestone 13: End-to-End Testing & Polish
