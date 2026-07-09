@@ -14,7 +14,7 @@
 - [x] Milestone 7: Content Engine Foundation (Chunking, Cryptography, Content-Addressed Storage, Manifests)
 - [x] Milestone 8: Content-Addressed Protocol & Integration
 - [x] Milestone 9: Reliable Content Transfer (Session Management, Resume, Retry)
-- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling *(Validated across multiple devices & NATs via public relays!)*
+- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling *(Successfully validated across multiple devices & NATs via public relays!)*
 
 ## Phase 4: Decentralization & Scaling
 - [x] Milestone 11: Decentralized Discovery (Kademlia DHT server mode, CID generation, periodic Provider Republisher daemon)
