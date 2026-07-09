@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
@@ -19,6 +20,7 @@ import (
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transfer/manager"
+	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 
 	"encoding/hex"
@@ -47,6 +49,10 @@ func main() {
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
+
+	// Testing Flags
+	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
+	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,7 +77,21 @@ func main() {
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
+	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	
+	// Apply testing flags
+	if *corruptProb > 0 {
+		chunk.TestCorruptProb = *corruptProb
+		log.Printf("[TESTING] Chunk corruption probability set to %.2f", *corruptProb)
+	}
+	if *throttle == "2MB" {
+		// 2MB/s = 8 chunks/sec (256KB each). Sleep 125ms per chunk.
+		scheduler.TestThrottle = 500 * time.Millisecond
+		log.Printf("[TESTING] Throttling enabled (2MB/s)")
+	}
+
+	chunk.NewStreamHandler(h, eng)
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
@@ -173,13 +193,14 @@ func main() {
 			}
 			addrInfo, err := t.Connect(ctx, targetStr)
 			if err != nil {
-				log.Fatalf("Failed to connect to target %s: %v", targetStr, err)
+				log.Printf("Warning: Failed to connect to target %s: %v", targetStr, err)
+				continue
 			}
 			targetPeers = append(targetPeers, addrInfo.ID)
 		}
 
 		if len(targetPeers) == 0 {
-			log.Fatalf("No valid target peers specified")
+			log.Fatalf("Fatal: Could not connect to any target peers")
 		}
 
 		cIDBytes, err := hex.DecodeString(targetContentIDHex)

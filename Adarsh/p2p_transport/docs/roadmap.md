@@ -14,7 +14,7 @@
 - [x] Milestone 7: Content Engine Foundation (Chunking, Cryptography, Content-Addressed Storage, Manifests)
 - [x] Milestone 8: Content-Addressed Protocol & Integration
 - [x] Milestone 9: Reliable Content Transfer (Session Management, Resume, Retry)
-- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling
+- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling *(Successfully validated across multiple devices & NATs via public relays!)*
 
 ## Phase 4: Decentralization & Scaling
 - [ ] Milestone 11: Discovery (mDNS & DHT routing)

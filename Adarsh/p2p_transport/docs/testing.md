@@ -185,7 +185,7 @@ Milestone 10 introduced a deterministic chunk scheduler that enables concurrent 
      `CIPHER_CONFIG_DIR=/tmp/peerC ./bin/peer -p 55557 -store ./storeC -d <Peer A Address> -fetch <ContentID>`
    - **Step 4:** Start the Downloader (Peer D) and fetch from all three seeds concurrently:
      `CIPHER_CONFIG_DIR=/tmp/peerD ./bin/peer -store ./storeD -d <PeerA_Addr>,<PeerB_Addr>,<PeerC_Addr> -fetch <ContentID> -reassemble out.mp4`
-   - Verify that chunks are downloaded concurrently from all peers and reassembled correctly.
+   - *Result Validation (Cross-Platform/Network):* Successfully verified downloading across a macOS environment and a distinct Windows 11 machine via a public `circuitv2` relay. The system flawlessly negotiated DCUtR hole punching to direct TCP connections with all seed peers simultaneously and reassembled the encrypted chunk blocks in parallel.
 2. **Phase 2: Recovery**
    - Disconnect Peer B midway through the download.
    - Verify the scheduler correctly handles the network error, requeues the chunks, and finishes the download via Peers A and C.

@@ -31,7 +31,7 @@ func NewScheduler(h host.Host, eng *engine.ContentEngine, maxAttempts int) *Sche
 	}
 }
 
-func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- ChunkTask) error {
+func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
@@ -77,7 +77,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res.Task
+				completions <- res
 				pendingTasks--
 			}
 		}

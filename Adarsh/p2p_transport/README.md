@@ -2,6 +2,11 @@
 
 This repository contains the P2P transport module for the CIPHER project.
 
+### 🚀 Current Status (Milestone 10 Achieved!)
+The CIPHER transport layer has successfully achieved **End-to-End Multi-Peer Swarming**. The system can now ingest files into a decoupled Content Engine (which chunks, encrypts via XChaCha20, and hashes via SHA-256), and dynamically download those encrypted chunks concurrently from multiple peers across the Internet. 
+
+It natively supports NAT traversal by leveraging libp2p `circuitv2` public relays and automatically upgrades to high-speed direct TCP/UDP connections in the background via **DCUtR (Hole Punching)**.
+
 ## Structure
 
 - `cmd/peer`: Entry point for standard peers.
