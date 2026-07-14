@@ -10,6 +10,7 @@ test_files/
 *.mp4
 
 # Test Artifacts
+.gocache/
 store*
 .finalStore
 *.bin

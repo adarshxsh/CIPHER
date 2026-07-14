@@ -21,7 +21,7 @@ type Client struct {
 	digest core.Digest
 }
 
-func NewClient(ctx context.Context, h host.Host, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
+func NewClient(ctx context.Context, h host.Host, peerID peer.ID, eng *engine.ContentEngine, _ ...any) (*Client, error) {
 	stream, err := h.NewStream(ctx, peerID, protocol.ChunkTransportProtocolID)
 	if err != nil {
 		return nil, err
@@ -66,6 +66,19 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 
 	return data, nil
+}
+
+func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
+	for _, chunkID := range chunkIDs {
+		chunk, err := c.FetchChunk(ctx, chunkID)
+		if err != nil {
+			return err
+		}
+		if err := c.engine.PutChunk(ctx, chunk); err != nil {
+			return fmt.Errorf("failed to store chunk %x: %w", chunkID, err)
+		}
+	}
+	return nil
 }
 
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
@@ -114,4 +127,3 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	return chunk, nil
 }
-
