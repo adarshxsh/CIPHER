@@ -59,12 +59,15 @@ const (
 	// small protocol metadata.
 	MaxChunkRequestSize = 512
 
-	// ChunkResponse contains encrypted chunk data, its Merkle proof,
-	// identifiers and bounded metadata.
-	MaxChunkResponseSize = MaxCiphertextSize +
-		MaxMerkleProofSize +
-		MaxMetadataSize +
-		512 // fixed-field and encoding allowance
+	// MaxFrameSize matches the existing ReadMessage frame cap.
+	MaxFrameSize = 2 * 1024 * 1024
+
+	// MaxMessagePayloadSize subtracts the version and type fields that live
+	// inside the length-prefixed frame.
+	MaxMessagePayloadSize = MaxFrameSize - 3
+
+	// ChunkResponse carries a binary ChunkHeader plus encrypted chunk data.
+	MaxChunkResponseSize = MaxMessagePayloadSize
 
 	// KeyReveal normally contains a key and small identifying fields.
 	MaxKeyRevealSize = 256
@@ -72,8 +75,9 @@ const (
 	// MaxProtocolErrorSize limits encoded protocol error responses.
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
-	// MaxFrameSize is the maximum payload accepted by the chunk protocol.
-	MaxFrameSize = MaxChunkResponseSize
+	// Manifest responses can be larger than request payloads but remain bound
+	// by the frame cap.
+	MaxManifestSize = MaxMessagePayloadSize
 )
 
 const (
@@ -107,7 +111,7 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 		return MaxChunkRequestSize
 
 	case MsgManifest:
-		return MaxChunkResponseSize
+		return MaxManifestSize
 
 	case MsgRequestChunk:
 		return MaxChunkRequestSize
