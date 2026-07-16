@@ -6,21 +6,53 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
 )
 
+type bufferPool struct {
+	mu       sync.Mutex
+	buffers  [][]byte
+	capLimit uint32
+}
+
+func (p *bufferPool) Get() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := len(p.buffers)
+	if n > 0 {
+		buf := p.buffers[n-1]
+		p.buffers = p.buffers[:n-1]
+		return buf
+	}
+	return make([]byte, p.capLimit)
+}
+
+func (p *bufferPool) Put(buf []byte) {
+	if uint32(cap(buf)) > p.capLimit {
+		// Capacity Guardrail: Reject buffers exceeding limit to prevent memory bloat.
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.buffers = append(p.buffers, buf[:cap(buf)])
+}
+
 type ContentEngine struct {
-	config    core.EngineConfig
-	chunker   *chunker.Chunker
-	encryptor core.Encryptor
-	digest    core.Digest
-	source    core.ChunkSource
-	sink      core.ChunkSink
+	config        core.EngineConfig
+	chunker       *chunker.Chunker
+	encryptor     core.Encryptor
+	digest        core.Digest
+	source        core.ChunkSource
+	sink          core.ChunkSink
 	manifestStore core.ManifestStore
-	keys      core.KeyProvider
+	keys          core.KeyProvider
+
+	plainPool  *bufferPool
+	cipherPool *bufferPool
 }
 
 func NewContentEngine(
@@ -32,15 +64,19 @@ func NewContentEngine(
 	keys core.KeyProvider,
 	manifestStore core.ManifestStore,
 ) *ContentEngine {
+	plainPool := &bufferPool{capLimit: config.ChunkSize}
+	cipherPool := &bufferPool{capLimit: config.ChunkSize + 16}
 	return &ContentEngine{
 		config:        config,
-		chunker:       chunker.NewChunker(config),
+		chunker:       chunker.NewChunker(config, plainPool),
 		encryptor:     encryptor,
 		digest:        digest,
 		source:        source,
 		sink:          sink,
 		manifestStore: manifestStore,
 		keys:          keys,
+		plainPool:     plainPool,
+		cipherPool:    cipherPool,
 	}
 }
 
@@ -70,10 +106,22 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 	// Read all chunks, encrypt, hash, and store
 	for chunk := range chunkCh {
+		plainData := chunk.Data
+		
+		cipherBuf := e.cipherPool.Get()
+		if cap(cipherBuf) < int(chunk.Header.PlainSize+16) {
+			cipherBuf = make([]byte, chunk.Header.PlainSize+16)
+		} else {
+			cipherBuf = cipherBuf[:chunk.Header.PlainSize+16]
+		}
+		
 		// Encrypt the chunk
-		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+		if err := e.encryptor.EncryptChunk(key, chunk, cipherBuf); err != nil {
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
+		
+		// Recycle plaintext buffer safely after encryption
+		e.plainPool.Put(plainData)
 
 		// Hash the ciphertext to get the ChunkID (content-addressing)
 		chunkHash := e.digest.Sum(chunk.Data)
@@ -85,6 +133,9 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 		if err := e.sink.PutChunk(ctx, chunk); err != nil {
 			return nil, fmt.Errorf("failed to store chunk: %w", err)
 		}
+		
+		// Recycle ciphertext buffer safely after storage
+		e.cipherPool.Put(chunk.Data)
 
 		chunkIDs = append(chunkIDs, chunkID)
 		totalSize += uint64(chunk.Header.PlainSize)
@@ -150,7 +201,14 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		}
 
 		// Decrypt
-		if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
+		plainBuf := e.plainPool.Get()
+		if cap(plainBuf) < int(chunk.Header.PlainSize) {
+			plainBuf = make([]byte, chunk.Header.PlainSize)
+		} else {
+			plainBuf = plainBuf[:chunk.Header.PlainSize]
+		}
+		
+		if err := e.encryptor.DecryptChunk(key, chunk, plainBuf); err != nil {
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
@@ -167,6 +225,7 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		if _, err := w.Write(chunk.Data); err != nil {
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
 		}
+		e.plainPool.Put(chunk.Data)
 	}
 
 	return nil
