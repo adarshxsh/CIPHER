@@ -20,6 +20,7 @@ func BenchmarkXChaCha20Encryptor(b *testing.B) {
 
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
+			Version:   1,
 			PlainSize: uint32(chunkSize),
 		},
 		Data: data,

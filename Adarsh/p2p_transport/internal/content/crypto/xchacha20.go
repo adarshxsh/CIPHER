@@ -27,7 +27,12 @@ func (e *XChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 		return fmt.Errorf("failed to read random nonce: %w", err)
 	}
 
-	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
+	aad, err := SerializeAAD(&chunk.Header)
+	if err != nil {
+		return fmt.Errorf("failed to serialize AAD: %w", err)
+	}
+
+	ciphertext := aead.Seal(nil, nonce, chunk.Data, aad)
 
 	copy(chunk.Header.Nonce[:], nonce)
 	chunk.Header.CipherSize = uint32(len(ciphertext))
@@ -46,7 +51,12 @@ func (e *XChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
 		return errors.New("cipher size mismatch in header")
 	}
 
-	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, nil)
+	aad, err := SerializeAAD(&chunk.Header)
+	if err != nil {
+		return fmt.Errorf("failed to serialize AAD: %w", err)
+	}
+
+	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, aad)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt chunk: %w", err)
 	}
