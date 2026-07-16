@@ -17,6 +17,7 @@ func TestXChaCha20Encryptor(t *testing.T) {
 	originalData := []byte("hello decentralized encrypted cdn")
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
+			Version:   1,
 			PlainSize: uint32(len(originalData)),
 		},
 		Data: append([]byte(nil), originalData...), // copy
@@ -56,6 +57,7 @@ func TestXChaCha20Encryptor_Corruption(t *testing.T) {
 
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
+			Version:   1,
 			PlainSize: 5,
 		},
 		Data: []byte("hello"),
