@@ -1,0 +1,96 @@
+name: Multi-OS Matrix Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: Adarsh/p2p_transport
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.7'
+
+      - name: Download dependencies
+        run: go mod tidy
+
+      - name: Static Analysis & Security Linting
+        run: go vet ./...
+
+      - name: Build Binaries (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -o peer-linux ./cmd/peer
+          go build -o relay-linux ./cmd/relay
+          go build -o content-test-linux ./cmd/content-test
+
+      - name: Build Binaries (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -o peer-darwin ./cmd/peer
+          go build -o relay-darwin ./cmd/relay
+          go build -o content-test-darwin ./cmd/content-test
+
+      - name: Build Binaries (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CGO_ENABLED: '0'
+        shell: bash
+        run: |
+          go build -o peer-windows.exe ./cmd/peer
+          go build -o relay-windows.exe ./cmd/relay
+          go build -o content-test-windows.exe ./cmd/content-test
+
+      - name: Run Tests
+        run: go test -v -short ./...
+
+      - name: Upload Linux Artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-binaries-linux
+          path: |
+            Adarsh/p2p_transport/peer-linux
+            Adarsh/p2p_transport/relay-linux
+            Adarsh/p2p_transport/content-test-linux
+
+      - name: Upload macOS Artifacts
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-binaries-macos
+          path: |
+            Adarsh/p2p_transport/peer-darwin
+            Adarsh/p2p_transport/relay-darwin
+            Adarsh/p2p_transport/content-test-darwin
+
+      - name: Upload Windows Artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-binaries-windows
+          path: |
+            Adarsh/p2p_transport/peer-windows.exe
+            Adarsh/p2p_transport/relay-windows.exe
+            Adarsh/p2p_transport/content-test-windows.exe

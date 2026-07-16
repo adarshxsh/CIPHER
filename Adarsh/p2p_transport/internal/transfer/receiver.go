@@ -22,7 +22,7 @@ func Receive(s network.Stream) error {
 
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err := header.Decode(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
