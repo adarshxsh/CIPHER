@@ -28,7 +28,7 @@ type Header struct {
 }
 
 // WriteTo encodes and writes the header to the given writer.
-func (h *Header) WriteTo(w io.Writer) error {
+func (h *Header) Encode(w io.Writer) error {
 	// 1. Write Protocol Version
 	if err := binary.Write(w, binary.BigEndian, h.Version); err != nil {
 		return fmt.Errorf("failed to write version: %w", err)
@@ -65,7 +65,7 @@ func (h *Header) WriteTo(w io.Writer) error {
 }
 
 // ReadFrom decodes and reads the header from the given reader.
-func (h *Header) ReadFrom(r io.Reader) error {
+func (h *Header) Decode(r io.Reader) error {
 	// 1. Read Protocol Version
 	if err := binary.Read(r, binary.BigEndian, &h.Version); err != nil {
 		return fmt.Errorf("failed to read version: %w", err)
