@@ -20,10 +20,7 @@ import (
 )
 
 func setupTestEngine(t *testing.T, chunkSize uint32) (*engine.ContentEngine, string, core.KeyProvider) {
-	tmpDir, err := os.MkdirTemp("", "content-robustness-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
+	tmpDir := t.TempDir()
 
 	config := core.EngineConfig{ChunkSize: chunkSize}
 	enc := crypto.NewXChaCha20Encryptor()
@@ -53,8 +50,7 @@ func TestBoundarySizes(t *testing.T) {
 		1 * 1024 * 1024, // 1MB
 	}
 
-	eng, tmpDir, _ := setupTestEngine(t, chunkSize)
-	defer os.RemoveAll(tmpDir)
+	eng, _, _ := setupTestEngine(t, chunkSize)
 	ctx := context.Background()
 
 	for _, sz := range sizes {
@@ -84,7 +80,6 @@ func TestBoundarySizes(t *testing.T) {
 // TestMissingChunk verifies that Reassemble returns an error (and does not panic) if a chunk is missing
 func TestMissingChunk(t *testing.T) {
 	eng, tmpDir, _ := setupTestEngine(t, 32*1024)
-	defer os.RemoveAll(tmpDir)
 	ctx := context.Background()
 
 	data := make([]byte, 100*1024) // ~3 chunks
@@ -118,8 +113,7 @@ func TestMissingChunk(t *testing.T) {
 
 // TestWrongKey verifies that decryption fails securely if the wrong key is supplied
 func TestWrongKey(t *testing.T) {
-	eng, tmpDir, keys := setupTestEngine(t, 32*1024)
-	defer os.RemoveAll(tmpDir)
+	eng, _, keys := setupTestEngine(t, 32*1024)
 	ctx := context.Background()
 
 	data := make([]byte, 10*1024)
