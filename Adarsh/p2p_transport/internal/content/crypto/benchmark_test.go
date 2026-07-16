@@ -30,7 +30,7 @@ func BenchmarkXChaCha20Encryptor(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Encrypt in place
-		err := enc.EncryptChunk(key, chunk)
+		err := enc.EncryptChunk(key, chunk, nil)
 		if err != nil {
 			b.Fatalf("Encrypt failed: %v", err)
 		}

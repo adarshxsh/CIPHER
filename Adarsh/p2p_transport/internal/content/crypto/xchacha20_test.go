@@ -23,7 +23,7 @@ func TestXChaCha20Encryptor(t *testing.T) {
 	}
 
 	// Encrypt
-	if err := enc.EncryptChunk(key, chunk); err != nil {
+	if err := enc.EncryptChunk(key, chunk, nil); err != nil {
 		t.Fatalf("failed to encrypt: %v", err)
 	}
 
@@ -36,7 +36,7 @@ func TestXChaCha20Encryptor(t *testing.T) {
 	}
 
 	// Decrypt
-	if err := enc.DecryptChunk(key, chunk); err != nil {
+	if err := enc.DecryptChunk(key, chunk, nil); err != nil {
 		t.Fatalf("failed to decrypt: %v", err)
 	}
 
@@ -61,12 +61,12 @@ func TestXChaCha20Encryptor_Corruption(t *testing.T) {
 		Data: []byte("hello"),
 	}
 
-	enc.EncryptChunk(key, chunk)
+	enc.EncryptChunk(key, chunk, nil)
 
 	// Corrupt
 	chunk.Data[0] ^= 0xFF
 
-	err := enc.DecryptChunk(key, chunk)
+	err := enc.DecryptChunk(key, chunk, nil)
 	if err == nil {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
 	}

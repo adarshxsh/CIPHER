@@ -9,11 +9,13 @@ import (
 // Chunker is responsible for splitting a stream into Chunks.
 type Chunker struct {
 	config core.EngineConfig
+	pool   core.BufferPool
 }
 
-func NewChunker(config core.EngineConfig) *Chunker {
+func NewChunker(config core.EngineConfig, pool core.BufferPool) *Chunker {
 	return &Chunker{
 		config: config,
+		pool:   pool,
 	}
 }
 
@@ -31,7 +33,18 @@ func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
 		var offset int64
 
 		for {
-			buf := make([]byte, c.config.ChunkSize)
+			var buf []byte
+			if c.pool != nil {
+				buf = c.pool.Get()
+				if cap(buf) < int(c.config.ChunkSize) {
+					buf = make([]byte, c.config.ChunkSize)
+				} else {
+					buf = buf[:c.config.ChunkSize]
+				}
+			} else {
+				buf = make([]byte, c.config.ChunkSize)
+			}
+			
 			n, err := io.ReadFull(r, buf)
 
 			if n > 0 {
