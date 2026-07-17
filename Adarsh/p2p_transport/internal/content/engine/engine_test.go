@@ -26,7 +26,7 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		ChunkSize: 32 * 1024, // 32KB
 	}
 
-	enc := crypto.NewXChaCha20Encryptor()
+	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := NewLocalKeyProvider()
 

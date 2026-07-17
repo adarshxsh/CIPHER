@@ -23,7 +23,7 @@ func BenchmarkContentEngine_Ingest(b *testing.B) {
 	defer os.RemoveAll(tmpDir)
 
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
-	enc := crypto.NewXChaCha20Encryptor()
+	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 
@@ -61,7 +61,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	defer os.RemoveAll(tmpDir)
 
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
-	enc := crypto.NewXChaCha20Encryptor()
+	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 	
