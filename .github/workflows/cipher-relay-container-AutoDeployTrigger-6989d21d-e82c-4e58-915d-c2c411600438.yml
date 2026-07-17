@@ -32,18 +32,7 @@ jobs:
           subscription-id: ${{ secrets.CIPHERRELAYCONTAINER_AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push container image to registry
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          appSourcePath: ${{ github.workspace }}Adarsh/p2p_transport/DockerfileRelay
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
-          registryUrl: cipherregistry1.azurecr.io
-          registryUsername: ${{ secrets.CIPHERRELAYCONTAINER_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.CIPHERRELAYCONTAINER_REGISTRY_PASSWORD }}
-          containerAppName: cipher-relay-container
-          resourceGroup: Cipher_group
-          imageToBuild: cipherregistry1.azurecr.io/cipher-relay-container:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
+        run: |
+          az acr build --image cipher-relay-container:latest --registry cipherregistry1 --file Adarsh/p2p_transport/DockerfileRelay Adarsh/p2p_transport/
 
 
