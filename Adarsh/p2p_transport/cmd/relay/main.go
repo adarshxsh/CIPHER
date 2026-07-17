@@ -30,7 +30,7 @@ func main() {
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(
 			"/ip4/0.0.0.0/tcp/4001",
-			"/ip4/0.0.0.0/udp/4001/quic-v1",
+			"/ip4/0.0.0.0/udp/4002/quic-v1",
 		),
 		libp2p.Identity(priv),
 	}
