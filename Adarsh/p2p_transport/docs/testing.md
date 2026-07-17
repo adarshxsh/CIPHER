@@ -36,10 +36,10 @@ CGO_ENABLED=0 go test -v ./...
 
    - **Direct P2P Connection (Chunk Transport)**: To manually test the `/cipher/chunk/1.0.0` protocol:
      1. Build the peer binary: `go build -o bin/peer ./cmd/peer`
-     2. Start **Peer A (Listener/Seeder)** and ingest a file: `./bin/peer -p 55555 -ingest test.mp4`
-     3. Take note of Peer A's full multiaddress and the generated `ContentID` (e.g., `abcd12345...`).
+     2. Start **Peer A (Listener/Seeder)** and ingest a file: `./bin/peer -p 55555 -store ./store_a -ingest test.mp4`
+     3. Take note of Peer A's full multiaddress, the generated `ContentID` (e.g., `abcd12345...`), and the `Key`.
      4. Open a second terminal window. Start **Peer B (Downloader)**, passing Peer A's address and fetching the content: 
-        `CIPHER_CONFIG_DIR=/tmp/cipher-peer-b ./bin/peer -d /ip4/127.0.0.1/tcp/55555/p2p/12D3... -fetch abcd12345... -reassemble out.mp4`
+        `./bin/peer -store ./store_b -d /ip4/127.0.0.1/tcp/55555/p2p/12D3... -fetch abcd12345... -key <KEY> -reassemble out.mp4`
      5. Observe Peer A's logs: It should log the ingestion and stream requests for manifest and chunks.
      6. Observe Peer B's logs: It should log resolving the manifest, downloading the chunks sequentially, and successfully reassembling the file.
 
@@ -52,19 +52,19 @@ CGO_ENABLED=0 go test -v ./...
    - **Relay Connectivity & Content Transfer**: To verify that a peer (e.g., Mac) can connect to another peer (e.g., Windows) through a public relay (e.g., Ubuntu server) and transfer content:
      1. Start your public relay node on the Ubuntu server and copy its multiaddress (e.g., `/ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`).
      2. On **Peer A** (Listener, e.g., Windows), start the peer, provide the relay, and ingest a file:
-        `./bin/peer -p 55555 -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -ingest test.mp4`
-     3. Take note of Peer A's generated Relay Multiaddress and the returned `ContentID`.
+        `./bin/peer -p 55555 -store ./store_a -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -ingest test.mp4`
+     3. Take note of Peer A's generated Relay Multiaddress, the returned `ContentID`, and the `Key`.
      4. On **Peer B** (Dialer, e.g., Mac), start Peer B, provide the static relay, dial Peer A's relayed address, and fetch the content:
-        `./bin/peer -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -fetch <ContentID> -reassemble out.mp4`
+        `./bin/peer -store ./store_b -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -fetch <ContentID> -key <KEY> -reassemble out.mp4`
      5. **Verify Hole Punching**: After the initial relayed connection, both peers should log `[DCUtR] Hole Punch Event: StartHolePunch`. Following a successful attempt, you should see `EndHolePunch`, and the network connection will naturally upgrade to direct routing.
      6. **Verify Transfer Integrity**: Peer B will download all encrypted chunks sequentially, verifying their hashes, and finally reassemble them into `out.mp4`.
 
    - **Relay Fallback**: To verify that the system can still transfer data over the relay when direct connection fails (or is disabled):
-     1. Start **Peer A** with the `-force-relay` flag to disable hole punching:
-        `./bin/peer -p 55555 -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -force-relay -ingest test.mp4`
-     2. Start **Peer B** with the `-force-relay` flag as well:
-        `./bin/peer -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -force-relay -fetch <ContentID> -reassemble out.mp4`
-     3. Verify that the file transfers successfully. The logs should explicitly say `Path: Relay` instead of `Path: Direct`.
+     1. Start **Peer A** with a relay multiaddress and `-p 50001`:
+        `./bin/peer -p 50001 -store ./store_a -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -ingest test.mp4`
+     2. Start **Peer B** with the `-force-relay` flag to disable hole punching:
+        `./bin/peer -p 50002 -store ./store_b -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -force-relay -fetch <ContentID> -key <KEY> -reassemble out.mp4`
+     3. Verify that the file transfers successfully. The network logs should explicitly say `1) Relay [...]` when listing active connections to the target peer.
 
    - **Direct Upgrade (Hole Punching)**: To verify natural direct upgrade:
      1. Start Peer A and B with a relay, but without the `-force-relay` flag.
@@ -185,7 +185,7 @@ Milestone 10 introduced a deterministic chunk scheduler that enables concurrent 
      `CIPHER_CONFIG_DIR=/tmp/peerC ./bin/peer -p 55557 -store ./storeC -d <Peer A Address> -fetch <ContentID>`
    - **Step 4:** Start the Downloader (Peer D) and fetch from all three seeds concurrently:
      `CIPHER_CONFIG_DIR=/tmp/peerD ./bin/peer -store ./storeD -d <PeerA_Addr>,<PeerB_Addr>,<PeerC_Addr> -fetch <ContentID> -reassemble out.mp4`
-   - Verify that chunks are downloaded concurrently from all peers and reassembled correctly.
+   - *Result Validation (Cross-Platform/Network):* Successfully verified downloading across completely separate networks (e.g. 1000km+ long distance) using a dedicated Azure VM as a `circuitv2` public relay. The `libp2p` instances flawlessly negotiated AutoNAT reachability and executed a DCUtR Hole Punch, shifting the data transfer off the Azure relay and onto a direct P2P TCP/UDP connection between the peers.
 2. **Phase 2: Recovery**
    - Disconnect Peer B midway through the download.
    - Verify the scheduler correctly handles the network error, requeues the chunks, and finishes the download via Peers A and C.

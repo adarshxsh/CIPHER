@@ -8,6 +8,7 @@ import (
 
 	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func BenchmarkChunkTransport_Sequential(b *testing.B) {
@@ -32,7 +33,7 @@ func BenchmarkChunkTransport_Sequential(b *testing.B) {
 	b.ResetTimer()
 	
 	for i := 0; i < b.N; i++ {
-		client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2, nil, nil)
+		client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
 		if err != nil {
 			b.Fatalf("Failed to create client: %v", err)
 		}

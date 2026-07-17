@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log"
 	
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 type Source struct {
@@ -18,27 +18,27 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Host   host.Host
-	Engine *engine.ContentEngine
+	Transport   *transport.Transport
+	Engine      *engine.ContentEngine
 	MaxAttempts int
 }
 
-func NewScheduler(h host.Host, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
 	return &Scheduler{
-		Host: h,
-		Engine: eng,
+		Transport:   t,
+		Engine:      eng,
 		MaxAttempts: maxAttempts,
 	}
 }
 
-func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- ChunkTask) error {
+func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Host, source.PeerID, s.Engine)
+		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
@@ -77,7 +77,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res.Task
+				completions <- res
 				pendingTasks--
 			}
 		}

@@ -37,8 +37,9 @@ func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr
 		if err != nil {
 			return nil, fmt.Errorf("invalid relay peer info: %w", err)
 		}
-		opts = append(opts, 
+		opts = append(opts,
 			libp2p.EnableAutoRelayWithStaticRelays([]peer.AddrInfo{*addrInfo}),
+			libp2p.ForceReachabilityPrivate(), // Force Private to instantly enable Hole Punching!
 		)
 		if !forceRelay {
 			opts = append(opts, libp2p.EnableHolePunching(holepunch.WithTracer(&holePunchTracer{})))
