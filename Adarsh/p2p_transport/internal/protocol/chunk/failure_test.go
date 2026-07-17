@@ -8,6 +8,7 @@ import (
 
 	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func TestChunkProtocol_InterruptedTransfer(t *testing.T) {
@@ -26,7 +27,7 @@ func TestChunkProtocol_InterruptedTransfer(t *testing.T) {
 	eng1.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
 	
 	// Create client
-	client, err := chunk.NewClient(ctx, h2, h1.ID(), eng2, nil, nil)
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}

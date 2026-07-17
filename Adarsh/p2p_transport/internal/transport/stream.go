@@ -9,6 +9,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	libp2p_protocol "github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 
 	"cipher/internal/protocol"
@@ -56,8 +57,7 @@ func (t *Transport) Connect(ctx context.Context, target string) (*peer.AddrInfo,
 	return addrInfo, nil
 }
 
-// OpenStream opens a new application stream to the target peer. It uses the best available connection.
-func (t *Transport) OpenStream(ctx context.Context, target *peer.AddrInfo) (network.Stream, error) {
+func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_protocol.ID) (network.Stream, error) {
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
 
@@ -65,7 +65,7 @@ func (t *Transport) OpenStream(ctx context.Context, target *peer.AddrInfo) (netw
 	// libp2p will prefer it. If not, the application stream can still flow over the limited relay connection.
 	streamCtx = network.WithAllowLimitedConn(streamCtx, "file-transfer-relay")
 
-	s, err := t.host.NewStream(streamCtx, target.ID, protocol.FileTransferProtocolID)
+	s, err := t.host.NewStream(streamCtx, target, pid)
 	if err != nil {
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}

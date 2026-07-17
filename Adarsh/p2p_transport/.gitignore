@@ -8,3 +8,11 @@ restored.txt
 test_manifest.json
 test_files/
 *.mp4
+
+# Test Artifacts
+.gocache/
+store*
+.finalStore
+*.bin
+*.log
+run_*.sh

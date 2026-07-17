@@ -61,8 +61,9 @@ graph TD
 #### 4. Immutable Manifests
 The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users.
 
-#### 5. Local Session Management & Swarming
-Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume, recovery, and swarming. 
+#### 5. Local Session Management & Multi-Device Swarming
+Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume, recovery, and multi-device swarming. The network transfer pipeline has been successfully proven to parallelize chunk requests across public relay networks and direct hole-punched paths across different physical devices.
+
 The network transfer pipeline follows a strict hierarchy:
 
 ```text

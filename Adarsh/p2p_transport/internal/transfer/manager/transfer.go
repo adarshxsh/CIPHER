@@ -6,12 +6,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/transfer/scheduler"
+	"cipher/internal/transport"
 )
 
 type Progress struct {
@@ -25,14 +25,14 @@ type Progress struct {
 type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
-	Host           host.Host
+	Transport      *transport.Transport
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, h host.Host) *TransferManager {
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
 	return &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
-		Host:           h,
+		Transport:      t,
 	}
 }
 
@@ -112,9 +112,9 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Host, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
 	
-	completions := make(chan scheduler.ChunkTask, len(tasks))
+	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
 	
 	go func() {
@@ -122,13 +122,20 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 		close(completions)
 	}()
 
+	// Tracking metrics
+	peerContributions := make(map[string]int)
+
 	// 6. Handle Progress
-	for task := range completions {
-		if task.Index < len(sess.Completed) {
-			sess.Completed[task.Index] = true
+	for res := range completions {
+		if res.Task.Index < len(sess.Completed) {
+			sess.Completed[res.Task.Index] = true
 		}
 		completedCount++
 		
+		if res.PeerID != "" {
+			peerContributions[res.PeerID]++
+		}
+
 		if err := tm.SessionManager.Save(sess); err != nil {
 			log.Printf("[TransferManager] Warning: failed to save session: %v", err)
 		}
@@ -137,6 +144,13 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	fmt.Println()
+	if sess.TotalChunks > 0 {
+		fmt.Println("\n--- Peer Contribution Metrics ---")
+		for peerID, count := range peerContributions {
+			fmt.Printf("Peer %s: %d chunks (%.1f%%)\n", peerID, count, float64(count)/float64(sess.TotalChunks)*100)
+		}
+		fmt.Println("---------------------------------")
+	}
 
 	schedErr := <-errCh
 	if schedErr != nil {

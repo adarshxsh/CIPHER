@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -13,6 +11,7 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/transport"
 )
 
 type Client struct {
@@ -21,8 +20,8 @@ type Client struct {
 	digest core.Digest
 }
 
-func NewClient(ctx context.Context, h host.Host, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
-	stream, err := h.NewStream(ctx, peerID, protocol.ChunkTransportProtocolID)
+func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
+	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +65,19 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 
 	return data, nil
+}
+
+func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
+	for _, chunkID := range chunkIDs {
+		chunk, err := c.FetchChunk(ctx, chunkID)
+		if err != nil {
+			return err
+		}
+		if err := c.engine.PutChunk(ctx, chunk); err != nil {
+			return fmt.Errorf("failed to store chunk %x: %w", chunkID, err)
+		}
+	}
+	return nil
 }
 
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
@@ -114,4 +126,3 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	return chunk, nil
 }
-
