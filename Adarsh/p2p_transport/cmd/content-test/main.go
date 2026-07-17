@@ -29,7 +29,7 @@ func main() {
 
 	// Initialize Content Engine components
 	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
-	enc := crypto.NewXChaCha20Encryptor()
+	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 

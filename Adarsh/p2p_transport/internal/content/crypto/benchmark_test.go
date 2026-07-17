@@ -8,8 +8,8 @@ import (
 	"cipher/internal/content/crypto"
 )
 
-func BenchmarkXChaCha20Encryptor(b *testing.B) {
-	enc := crypto.NewXChaCha20Encryptor()
+func BenchmarkChaCha20Encryptor(b *testing.B) {
+	enc := crypto.NewChaCha20Encryptor()
 	
 	key := make([]byte, 32)
 	rand.Read(key)

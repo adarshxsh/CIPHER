@@ -13,7 +13,7 @@ type ChunkHeader struct {
 	Offset     int64
 	PlainSize  uint32
 	CipherSize uint32
-	Nonce      [24]byte
+	Nonce      [12]byte
 }
 
 type Chunk struct {

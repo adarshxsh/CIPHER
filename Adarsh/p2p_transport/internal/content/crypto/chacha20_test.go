@@ -8,8 +8,8 @@ import (
 	"cipher/internal/content/core"
 )
 
-func TestXChaCha20Encryptor(t *testing.T) {
-	enc := NewXChaCha20Encryptor()
+func TestChaCha20Encryptor(t *testing.T) {
+	enc := NewChaCha20Encryptor()
 
 	key := make([]byte, 32)
 	rand.Read(key)
@@ -49,8 +49,8 @@ func TestXChaCha20Encryptor(t *testing.T) {
 	}
 }
 
-func TestXChaCha20Encryptor_Corruption(t *testing.T) {
-	enc := NewXChaCha20Encryptor()
+func TestChaCha20Encryptor_Corruption(t *testing.T) {
+	enc := NewChaCha20Encryptor()
 	key := make([]byte, 32)
 	rand.Read(key)
 
