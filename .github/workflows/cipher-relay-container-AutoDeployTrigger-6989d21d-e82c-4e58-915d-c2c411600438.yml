@@ -31,15 +31,9 @@ jobs:
           tenant-id: ${{ secrets.CIPHERRELAYCONTAINER_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.CIPHERRELAYCONTAINER_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Log in to registry
-        uses: azure/docker-login@v1
-        with:
-          login-server: cipherregistry1.azurecr.io
-          username: ${{ secrets.CIPHERRELAYCONTAINER_REGISTRY_USERNAME }}
-          password: ${{ secrets.CIPHERRELAYCONTAINER_REGISTRY_PASSWORD }}
-
       - name: Build and push container image to registry
         run: |
+          az acr login --name cipherregistry1
           docker build -t cipherregistry1.azurecr.io/cipher-relay-container:latest -f Adarsh/p2p_transport/DockerfileRelay Adarsh/p2p_transport/
           docker push cipherregistry1.azurecr.io/cipher-relay-container:latest
 
