@@ -2,11 +2,15 @@ package crypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"cipher/internal/content/core"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 // XChaCha20Encryptor implements core.Encryptor using XChaCha20-Poly1305.
@@ -16,8 +20,25 @@ func NewXChaCha20Encryptor() *XChaCha20Encryptor {
 	return &XChaCha20Encryptor{}
 }
 
-func (e *XChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.NewX(key)
+func deriveChunkKey(masterKey []byte, index uint32) ([]byte, error) {
+	info := make([]byte, 4)
+	binary.LittleEndian.PutUint32(info, index)
+
+	hkdf := hkdf.New(sha256.New, masterKey, nil, info)
+	chunkKey := make([]byte, 32)
+	if _, err := io.ReadFull(hkdf, chunkKey); err != nil {
+		return nil, fmt.Errorf("hkdf derivation failed: %w", err)
+	}
+	return chunkKey, nil
+}
+
+func (e *XChaCha20Encryptor) EncryptChunk(masterKey []byte, chunk *core.Chunk) error {
+	chunkKey, err := deriveChunkKey(masterKey, chunk.Header.Index)
+	if err != nil {
+		return err
+	}
+
+	aead, err := chacha20poly1305.NewX(chunkKey)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
@@ -41,8 +62,13 @@ func (e *XChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	return nil
 }
 
-func (e *XChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.NewX(key)
+func (e *XChaCha20Encryptor) DecryptChunk(masterKey []byte, chunk *core.Chunk) error {
+	chunkKey, err := deriveChunkKey(masterKey, chunk.Header.Index)
+	if err != nil {
+		return err
+	}
+
+	aead, err := chacha20poly1305.NewX(chunkKey)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
