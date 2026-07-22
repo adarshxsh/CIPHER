@@ -10,6 +10,7 @@ import (
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+	"cipher/internal/identity"
 )
 
 type ContentEngine struct {
@@ -119,6 +120,16 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 			ChunkNonceSize: 12,
 			KeyID:          "embedded",
 		},
+	}
+
+	// Sign the manifest
+	priv, err := identity.LoadOrCreate()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load identity for signing: %w", err)
+	}
+
+	if err := m.Sign(priv); err != nil {
+		return nil, fmt.Errorf("failed to sign manifest: %w", err)
 	}
 
 	return m, nil
