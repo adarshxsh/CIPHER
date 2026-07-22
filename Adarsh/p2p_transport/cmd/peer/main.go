@@ -30,8 +30,6 @@ import (
 )
 
 func main() {
-	// Enable all libp2p debug logging to diagnose AutoNAT
-	golog.SetAllLoggers(golog.LevelDebug)
 	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
@@ -48,9 +46,16 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 
 	// Testing Flags
+	verbose := flag.Bool("verbose", false, "Enable verbose debug logging")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
+
+	if *verbose {
+		golog.SetAllLoggers(golog.LevelDebug)
+	} else {
+		golog.SetAllLoggers(golog.LevelWarn)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
