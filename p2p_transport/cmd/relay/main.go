@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -16,9 +17,16 @@ import (
 )
 
 func main() {
-	// Enable libp2p debug logging for circuit v2
-	golog.SetLogLevel("relay", "debug")
-	golog.SetLogLevel("p2p-circuit", "debug")
+	verbose := flag.Bool("verbose", false, "Enable verbose debug logging")
+	flag.Parse()
+
+	if *verbose {
+		golog.SetLogLevel("relay", "debug")
+		golog.SetLogLevel("p2p-circuit", "debug")
+	} else {
+		golog.SetLogLevel("relay", "warn")
+		golog.SetLogLevel("p2p-circuit", "warn")
+	}
 
 	// Load persistent identity for the relay
 	priv, err := identity.LoadOrCreate()

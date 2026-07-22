@@ -34,10 +34,6 @@ import (
 )
 
 func main() {
-	// Enable all libp2p debug logging to diagnose AutoNAT
-	// Reduce libp2p internal logging (DHT, etc.)
-	golog.SetAllLoggers(golog.LevelWarn)
-
 	// Set all the flags
 	target := flag.String("d", "", "Optional target peer multiaddress. If omitted, providers are discovered through the DHT. Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 4001, "Port for the peer to listen on (TCP)")
@@ -58,9 +54,18 @@ func main() {
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+
+	// Testing Flags
+	verbose := flag.Bool("verbose", false, "Enable verbose debug logging")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
+
+	if *verbose {
+		golog.SetAllLoggers(golog.LevelDebug)
+	} else {
+		golog.SetAllLoggers(golog.LevelWarn)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
