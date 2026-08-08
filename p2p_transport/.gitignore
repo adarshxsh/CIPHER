@@ -16,3 +16,4 @@ store*
 *.bin
 *.log
 run_*.sh
+temp
