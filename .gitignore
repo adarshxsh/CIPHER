@@ -17,3 +17,5 @@ store*
 *.log
 run_*.sh
 temp
+
+my_file.txt
