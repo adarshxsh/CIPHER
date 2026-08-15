@@ -1,31 +1,21 @@
-# Local environment and secrets
-.env
-.env.*
-!.env.example
-*.key
-*.pem
-
-# Editors and operating systems
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# Logs and temporary files
-*.log
-*.tmp
-tmp/
-temp/
-
-# Generated build and test output
 bin/
-build/
-dist/
-out/
-coverage/
+test_files/
+downloads/
+# Manual test files
+content_store/
+sample.txt
+restored.txt
+test_manifest.json
+test_files/
+*.mp4
 
-# Common dependency caches
-node_modules/
-target/
+# Test Artifacts
+.gocache/
+store*
+.finalStore
+*.bin
+*.log
+run_*.sh
+temp
+
+my_file.txt
