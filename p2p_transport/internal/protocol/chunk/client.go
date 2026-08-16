@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -20,6 +21,7 @@ type Client struct {
 	digest core.Digest
 }
 
+// NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
 func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
 	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
 	if err != nil {
@@ -36,6 +38,7 @@ func (c *Client) Close() error {
 	return c.stream.Close()
 }
 
+// Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
@@ -67,6 +70,7 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	return data, nil
 }
 
+// Download requests and retrieves a list of chunks from the remote peer, storing them in the local content engine.
 func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 	for _, chunkID := range chunkIDs {
 		chunk, err := c.FetchChunk(ctx, chunkID)
