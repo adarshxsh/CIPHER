@@ -36,7 +36,7 @@ func Send(s network.Stream, filePath string) error {
 	if _, err := io.Copy(hasher, file); err != nil {
 		return fmt.Errorf("failed to hash file: %w", err)
 	}
-	
+
 	var checksum [32]byte
 	copy(checksum[:], hasher.Sum(nil))
 
@@ -60,9 +60,9 @@ func Send(s network.Stream, filePath string) error {
 
 	// 3. Send Data with Progress Tracking
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
-	
+
 	startTime := time.Now()
-	
+
 	// Create a progress reader
 	pr := &progressReader{
 		r:     file,
@@ -77,7 +77,7 @@ func Send(s network.Stream, filePath string) error {
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(written) / (1024 * 1024)) / duration.Seconds()
-	
+
 	// Determine Connection Type
 	connType := "Direct"
 	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
@@ -102,7 +102,7 @@ type progressReader struct {
 func (pr *progressReader) Read(p []byte) (n int, err error) {
 	n, err = pr.r.Read(p)
 	pr.read += uint64(n)
-	
+
 	if pr.total > 0 {
 		percent := int((float64(pr.read) / float64(pr.total)) * 100)
 		if percent > pr.last && percent%10 == 0 {
@@ -110,6 +110,6 @@ func (pr *progressReader) Read(p []byte) (n int, err error) {
 			pr.last = percent
 		}
 	}
-	
+
 	return n, err
 }

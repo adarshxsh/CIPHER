@@ -57,6 +57,22 @@ func (t *Transport) Connect(ctx context.Context, target string) (*peer.AddrInfo,
 	return addrInfo, nil
 }
 
+// This is actually the same func as above Connect, but just that this directly connects using addrInfo, while Connect uses a string
+func (t *Transport) ConnectPeer(ctx context.Context, addrInfo peer.AddrInfo) error {
+	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dialCancel()
+
+	if err := t.host.Connect(dialCtx, addrInfo); err != nil {
+		return fmt.Errorf(
+			"failed to connect to peer %s: %w",
+			addrInfo.ID,
+			err,
+		)
+	}
+
+	return nil
+}
+
 func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_protocol.ID) (network.Stream, error) {
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
