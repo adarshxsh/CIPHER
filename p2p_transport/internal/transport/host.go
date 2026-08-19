@@ -1,11 +1,14 @@
 package transport
 
 import (
+	"cipher/internal/discovery"
 	"context"
+
 	"fmt"
 	"log"
 
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -16,14 +19,14 @@ import (
 )
 
 // NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, error) {
+func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
-	
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(addr),
 		libp2p.EnableRelay(),
 	}
-	
+
 	if priv != nil {
 		opts = append(opts, libp2p.Identity(priv))
 	}
@@ -31,11 +34,11 @@ func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr
 	if relayAddr != "" {
 		maddr, err := multiaddr.NewMultiaddr(relayAddr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid relay address: %w", err)
+			return nil, nil, fmt.Errorf("invalid relay address: %w", err)
 		}
 		addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid relay peer info: %w", err)
+			return nil, nil, fmt.Errorf("invalid relay peer info: %w", err)
 		}
 		opts = append(opts,
 			libp2p.EnableAutoRelayWithStaticRelays([]peer.AddrInfo{*addrInfo}),
@@ -48,12 +51,19 @@ func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
-	
+
 	setupNetworkMonitor(h)
-	
-	return h, nil
+
+	kdht, err := discovery.NewDHT(h, dht.ModeServer) // Start DHT in server mode
+
+	if err != nil {
+		h.Close()
+		return nil, nil, fmt.Errorf("failed to create DHT: %w", err)
+	}
+
+	return h, kdht, nil
 }
 
 type holePunchTracer struct{}
@@ -93,7 +103,7 @@ func logActiveConnections(n network.Network, p peer.ID) {
 		log.Printf("[Network] No active connections to %s", p)
 		return
 	}
-	
+
 	log.Printf("[Network] Active connections to %s:", p)
 	for i, conn := range conns {
 		connType := "Direct"

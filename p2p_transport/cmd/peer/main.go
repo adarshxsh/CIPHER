@@ -17,27 +17,32 @@ import (
 	"cipher/internal/content/manifest"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
+	"cipher/internal/discovery"
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/retrieval"
 	"cipher/internal/transfer/manager"
 	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 
 	"encoding/hex"
+
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
-	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
 	// Enable all libp2p debug logging to diagnose AutoNAT
 	golog.SetAllLoggers(golog.LevelDebug)
-	target := flag.String("d", "", "Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
+
+	// Set all the flags
+	target := flag.String("d", "", "Optional target peer multiaddress. If omitted, providers are discovered through the DHT. Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
 	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	forceRelay := flag.Bool("force-relay", false, "Disable hole punching and force traffic over the relay")
 	storePath := flag.String("store", "./content_store", "Path to the local content store directory")
-	
+
 	// Milestone 8 flags
 	ingestFile := flag.String("ingest", "", "Path to file to ingest locally")
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
@@ -47,6 +52,8 @@ func main() {
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 
+	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
+
 	// Testing Flags
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
@@ -55,15 +62,50 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Load or create private key for the newNode
 	priv, err := identity.LoadOrCreate()
 	if err != nil {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, err := transport.NewNode(ctx, *port, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, priv, *relayAddr, *forceRelay)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
+
+	// Bootstrap the node if a bootstrap address is provided
+	if *bootstrapAddr != "" {
+		bootstrapInfo, err := peer.AddrInfoFromString(*bootstrapAddr)
+		if err != nil {
+			log.Fatalf(
+				"Invalid bootstrap address: %v",
+				err,
+			)
+		}
+
+		seeds := []peer.AddrInfo{
+			*bootstrapInfo,
+		}
+
+		if err := discovery.Bootstrap(
+			ctx,
+			kdht,
+			h,
+			seeds,
+		); err != nil {
+			log.Fatalf(
+				"Failed to bootstrap DHT: %v",
+				err,
+			)
+		}
+
+		log.Printf(
+			"[DHT] Routing table now contains %d peers",
+			len(kdht.RoutingTable().ListPeers()),
+		)
+	}
+
+	defer kdht.Close()
 
 	// Setup Content Engine
 	if err := storage.NewFSStorage(*storePath); err != nil {
@@ -76,7 +118,7 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
-	
+
 	// Apply testing flags
 	if *corruptProb > 0 {
 		chunk.TestCorruptProb = *corruptProb
@@ -88,7 +130,7 @@ func main() {
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
 
-	chunk.NewStreamHandler(h, eng)
+	chunk.NewStreamHandler(h, eng) // mp duplicate, have called it again later
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
@@ -158,14 +200,40 @@ func main() {
 		}
 		defer f.Close()
 
+		// Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
 		m, err := eng.Ingest(ctx, f, manifest.TypeFile)
 		if err != nil {
 			log.Fatalf("Failed to ingest: %v", err)
 		}
+
 		// Save manifest bytes to engine memory so it can be served
 		mBytes, _ := m.Serialize()
 		eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
-		
+
+		// Advertise/ broadcast the content on the DHT
+
+		log.Printf(
+			"[DHT] Providing ContentID %s",
+			m.Descriptor.ID,
+		)
+
+		if err := discovery.Provide(
+			ctx,
+			kdht,
+			m.Descriptor.ID,
+		); err != nil {
+			log.Printf(
+				"[DHT] Failed to advertise content %s: %v",
+				m.Descriptor.ID,
+				err,
+			)
+		} else {
+			log.Printf(
+				"[DHT] Successfully advertised content %s",
+				m.Descriptor.ID,
+			)
+		}
+
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
@@ -179,34 +247,98 @@ func main() {
 		targetContentIDHex = *resumeID
 	}
 
-	if *target != "" && targetContentIDHex != "" {
-		log.Printf("Dialing target peer(s): %s", *target)
-		t := transport.NewTransport(h)
-		
-		var targetPeers []peer.ID
-		for _, targetStr := range strings.Split(*target, ",") {
-			targetStr = strings.TrimSpace(targetStr)
-			if targetStr == "" {
-				continue
-			}
-			addrInfo, err := t.Connect(ctx, targetStr)
-			if err != nil {
-				log.Printf("Warning: Failed to connect to target %s: %v", targetStr, err)
-				continue
-			}
-			targetPeers = append(targetPeers, addrInfo.ID)
-		}
-
-		if len(targetPeers) == 0 {
-			log.Fatalf("Fatal: Could not connect to any target peers")
-		}
-
+	if targetContentIDHex != "" {
 		cIDBytes, err := hex.DecodeString(targetContentIDHex)
 		if err != nil || len(cIDBytes) != 32 {
 			log.Fatalf("Invalid ContentID hex")
 		}
 		var contentID core.ContentID
 		copy(contentID[:], cIDBytes)
+
+		// Create a transport instance for connecting to peers
+		t := transport.NewTransport(h)
+
+		var targetPeers []peer.ID
+
+		// If a target peer is specified, connect to it. Otherwise, search for providers of the content ID on the DHT, and then connect to them.
+		if *target != "" {
+
+			log.Printf("Dialing target peer(s): %s", *target)
+
+			for _, targetStr := range strings.Split(*target, ",") {
+				targetStr = strings.TrimSpace(targetStr)
+
+				if targetStr == "" {
+					continue
+				}
+
+				addrInfo, err := t.Connect(ctx, targetStr)
+				if err != nil {
+					log.Printf("Warning: Failed to connect to target %s: %v", targetStr, err)
+					continue
+				}
+
+				targetPeers = append(targetPeers, addrInfo.ID)
+			}
+
+			if len(targetPeers) == 0 {
+				log.Fatalf("Fatal: Could not connect to any target peers")
+			}
+		} else {
+			log.Printf(
+				"[DHT] No target peer supplied. Searching for providers of %x...",
+				contentID,
+			)
+
+			providers, err := discovery.FindProviders(
+				ctx,
+				kdht,
+				contentID,
+				3,
+			)
+			if err != nil {
+				log.Fatalf(
+					"[DHT] Failed to find providers: %v",
+					err,
+				)
+			}
+
+			if len(providers) == 0 {
+				log.Fatalf(
+					"[DHT] No providers found for ContentID %x",
+					contentID,
+				)
+			}
+
+			for _, provider := range providers {
+
+				log.Printf(
+					"[DHT] Found provider: %s",
+					provider.ID,
+				)
+
+				// Connect using your existing Transport.
+				if err := t.ConnectPeer(ctx, provider); err != nil {
+					log.Printf(
+						"[DHT] Failed to connect to provider %s: %v",
+						provider.ID,
+						err,
+					)
+					continue
+				}
+
+				targetPeers = append(
+					targetPeers,
+					provider.ID,
+				)
+			}
+
+			if len(targetPeers) == 0 {
+				log.Fatalf(
+					"[DHT] Found providers, but could not connect to any of them",
+				)
+			}
+		}
 
 		if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
@@ -216,27 +348,15 @@ func main() {
 			keys.Put(ctx, contentID, kBytes)
 		}
 
-		// Resolve manifest from the first peer
-		client, err := chunk.NewClient(ctx, t, targetPeers[0], eng)
-		if err != nil {
-			log.Fatalf("Failed to create chunk client: %v", err)
-		}
-		
-		log.Printf("Resolving manifest for ContentID: %x from %s", contentID, targetPeers[0])
-		mData, err := client.Resolve(ctx, contentID)
-		client.Close() // Can close after resolve, workers will make their own
-		
+		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.
+		m, err := retrieval.ResolveManifest(ctx, contentID, kdht, t, eng, targetPeers)
 		if err != nil {
 			log.Fatalf("Failed to resolve manifest: %v", err)
 		}
 
-		m, err := manifest.Deserialize(mData)
-		if err != nil {
-			log.Fatalf("Failed to deserialize manifest: %v", err)
-		}
-
+		// Setup Transfer Manager and start download
 		log.Printf("Downloading %d chunks from %d peers...", len(m.ChunkIDs), len(targetPeers))
-		
+
 		tm := manager.NewTransferManager(sm, eng, t)
 		if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 			log.Fatalf("Download failed: %v", err)

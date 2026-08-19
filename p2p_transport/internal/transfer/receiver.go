@@ -14,6 +14,8 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+// This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
 	defer s.Close()
@@ -68,7 +70,7 @@ func Receive(s network.Stream) error {
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
-	
+
 	// 4. Verify Integrity
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
