@@ -49,6 +49,12 @@ type KeyProvider interface {
 
 type Scheduler interface{}
 
+type ManifestStore interface {
+	GetManifestBytes(ctx context.Context, id ContentID) ([]byte, error)
+	PutManifestBytes(ctx context.Context, id ContentID, data []byte) error
+	ListManifests(ctx context.Context) ([]ContentID, error)
+}
+
 type EngineConfig struct {
 	ChunkSize uint32
 }

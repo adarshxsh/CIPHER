@@ -25,7 +25,7 @@ func createTestEngine(t testing.TB) *engine.ContentEngine {
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(t.TempDir()) // isolated per engine
-	return engine.NewContentEngine(config, enc, dig, store, store, keys)
+	return engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 }
 
 func setupMockNetwork(t testing.TB) (host.Host, host.Host) {

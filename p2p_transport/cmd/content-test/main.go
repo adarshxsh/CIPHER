@@ -39,7 +39,7 @@ func main() {
 	}
 	store := storage.NewFSStore(storeDir)
 
-	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 	ctx := context.Background()
 
 	if *ingestFile != "" {

@@ -19,10 +19,8 @@ type ContentEngine struct {
 	digest    core.Digest
 	source    core.ChunkSource
 	sink      core.ChunkSink
+	manifestStore core.ManifestStore
 	keys      core.KeyProvider
-
-	// Simple in-memory manifest store for Milestone 8 transport integration
-	manifests map[core.ContentID][]byte
 }
 
 func NewContentEngine(
@@ -32,16 +30,17 @@ func NewContentEngine(
 	source core.ChunkSource,
 	sink core.ChunkSink,
 	keys core.KeyProvider,
+	manifestStore core.ManifestStore,
 ) *ContentEngine {
 	return &ContentEngine{
-		config:    config,
-		chunker:   chunker.NewChunker(config),
-		encryptor: encryptor,
-		digest:    digest,
-		source:    source,
-		sink:      sink,
-		keys:      keys,
-		manifests: make(map[core.ContentID][]byte),
+		config:        config,
+		chunker:       chunker.NewChunker(config),
+		encryptor:     encryptor,
+		digest:        digest,
+		source:        source,
+		sink:          sink,
+		manifestStore: manifestStore,
+		keys:          keys,
 	}
 }
 
@@ -190,14 +189,9 @@ func (e *ContentEngine) PutChunk(ctx context.Context, chunk *core.Chunk) error {
 }
 
 func (e *ContentEngine) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {
-	data, ok := e.manifests[id]
-	if !ok {
-		return nil, fmt.Errorf("manifest not found")
-	}
-	return data, nil
+	return e.manifestStore.GetManifestBytes(ctx, id)
 }
 
 func (e *ContentEngine) PutManifestBytes(ctx context.Context, id core.ContentID, data []byte) error {
-	e.manifests[id] = data
-	return nil
+	return e.manifestStore.PutManifestBytes(ctx, id, data)
 }

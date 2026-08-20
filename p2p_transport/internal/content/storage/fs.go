@@ -103,3 +103,61 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 
 	return chunk, nil
 }
+
+func (s *FSStorage) manifestPath(id core.ContentID) string {
+	encoded := hex.EncodeToString(id[:])
+	return filepath.Join(s.baseDir, "manifests", encoded+".json")
+}
+
+func (s *FSStorage) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {
+	path := s.manifestPath(id)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("manifest not found: %w", err)
+	}
+	return data, nil
+}
+
+func (s *FSStorage) PutManifestBytes(ctx context.Context, id core.ContentID, data []byte) error {
+	path := s.manifestPath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create manifest dir: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write manifest: %w", err)
+	}
+	return nil
+}
+
+func (s *FSStorage) ListManifests(ctx context.Context) ([]core.ContentID, error) {
+	manifestDir := filepath.Join(s.baseDir, "manifests")
+	var ids []core.ContentID
+
+	entries, err := os.ReadDir(manifestDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ids, nil
+		}
+		return nil, fmt.Errorf("failed to read manifest dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		name := entry.Name()
+		encoded := name[:len(name)-5] // Strip .json
+		
+		idBytes, err := hex.DecodeString(encoded)
+		if err != nil || len(idBytes) != 32 {
+			continue
+		}
+
+		var id core.ContentID
+		copy(id[:], idBytes)
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}

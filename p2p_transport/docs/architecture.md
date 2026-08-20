@@ -59,10 +59,13 @@ graph TD
 - **Sharded Local Storage**: The current `FSStore` implementation shards chunks using their hex-encoded hash prefixes (e.g., `store/ab/cd/abcdef123...`). This architecture mimics Git/IPFS to prevent filesystem degradation and inode limits when millions of chunks are persisted.
 
 #### 4. Immutable Manifests
-The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users.
+The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users. Manifests are persistently stored by the `FSStore` in a dedicated `manifests/` directory to ensure they survive node restarts.
 
 #### 5. Local Session Management & Multi-Device Swarming
 Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume, recovery, and multi-device swarming. The network transfer pipeline has been successfully proven to parallelize chunk requests across public relay networks and direct hole-punched paths across different physical devices.
+
+#### 6. DHT Provider Lifecycle
+When a peer ingests a file, it announces its capability to provide that file to the Kademlia DHT. To ensure provider records do not expire or get lost upon node restarts, a background republisher runs periodically (every 12 hours) and immediately on startup to re-announce all locally available manifests to the network.
 
 The network transfer pipeline follows a strict hierarchy:
 

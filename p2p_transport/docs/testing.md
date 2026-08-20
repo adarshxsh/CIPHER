@@ -76,6 +76,14 @@ CGO_ENABLED=0 go test -v ./...
      1. This is automatically tested on every block fetched by the client via the verify-then-store mechanism.
      2. If a chunk gets corrupted, the client drops the transfer with a hash mismatch error before the chunk touches the disk.
 
+   - **Provider Lifecycle & Manifest Persistence (P0)**: To verify that a node automatically re-provides content to the DHT after a restart:
+     1. Start **Peer A** and ingest a file: `./bin/peer -p 55555 -store ./store_a -ingest test.mp4`
+     2. Wait for it to announce the manifest to the DHT, then kill Peer A (`Ctrl+C`).
+     3. Restart **Peer A** with the same store: `./bin/peer -p 55555 -store ./store_a`
+     4. Start **Peer B** and attempt to discover and download the file from the DHT using only the `<ContentID>` and `<KEY>`: 
+        `./bin/peer -store ./store_b -fetch <ContentID> -key <KEY> -reassemble out.mp4`
+     5. Verify that Peer A's background republisher correctly re-announced the manifest on startup, allowing Peer B to discover and download the file.
+
 ## Reliable Content Transfer (Milestone 9)
 
 Milestone 9 introduces client-side transfer session tracking, retry policies, and resume capability while maintaining a strictly stateless `/cipher/chunk/1.0.0` protocol.
