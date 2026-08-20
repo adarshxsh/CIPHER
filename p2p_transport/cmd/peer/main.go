@@ -117,7 +117,7 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
-	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
 	if *corruptProb > 0 {
@@ -164,6 +164,9 @@ func main() {
 
 	// Setup protocol handler
 	chunk.NewStreamHandler(h, eng)
+
+	// Start DHT Republisher for persistent provider lifecycle
+	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour)
 
 	log.Printf("Peer initialized with ID: %s", h.ID().String())
 	log.Println("Listening on the following local addresses:")

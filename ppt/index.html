@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIPHER — Decentralized Content Distribution over P2P Networks</title>
+    <meta name="description" content="Technical presentation on CIPHER, a decentralized, secure, and resilient content distribution protocol developed at IIT Jodhpur DevlUp Labs.">
+    <link rel="stylesheet" href="style.css">
+    <!-- Mermaid CDN for beautiful, lightweight diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'neutral',
+            themeVariables: {
+                primaryColor: '#eff6ff',
+                primaryTextColor: '#1e3a8a',
+                primaryBorderColor: '#3b82f6',
+                lineColor: '#2563eb',
+                secondaryColor: '#f8fafc',
+                tertiaryColor: '#ffffff'
+            },
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
+        });
+    </script>
+</head>
+<body>
+    <div class="presentation-container">
+        <!-- Main Slides Area -->
+        <main class="deck-view">
+            <div class="slide-frame-wrapper">
+                <div class="slide-frame" id="presentation-frame">
+                    
+                    <!-- Slide 1: Title -->
+                    <section class="slide active" id="slide-1">
+                        <div class="slide-body">
+                            <div class="slide-title-layout">
+                                <h1>CIPHER</h1>
+                                <h3>Decentralized Content Distribution over P2P Networks</h3>
+                                <div class="tagline">
+                                    "CDNs are owned by a handful of companies. CIPHER is the alternative — a decentralized content delivery protocol where math replaces the middleman."
+                                </div>
+                                <div class="presenter-meta">
+                                    <p>Presented by: <strong>Adarsh Kumar</strong></p>
+                                    <p>Academic Project • DevlUp Labs • IIT Jodhpur</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">1 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Welcome to the presentation for CIPHER, a decentralized content distribution protocol built on top of P2P networks.<br><br>
+                            Traditional Content Delivery Networks (CDNs) are highly centralized, owned by a small group of large providers, which makes them points of failure and control.<br>
+                            CIPHER is designed to turn arbitrary files into cryptographically verifiable, erasure-coded shards distributed across untrusted nodes, replacing the middleman with mathematics.<br><br>
+                            Let's move into the core problem statement we are addressing.
+                        </div>
+                    </section>
+
+                    <!-- Slide 2: Problem Statement -->
+                    <section class="slide" id="slide-2">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Problem Statement</h2>
+                                <p>The Challenge of Reliable Distributed File Transfer</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Centralized Bottlenecks</strong>: Outgoing server pipes saturate quickly as client request counts grow.</li>
+                                        <li><strong>Single Point of Failure</strong>: Outages at central data nodes result in complete service interruptions.</li>
+                                        <li><strong>NAT & Firewalls</strong>: Over 60% of peer nodes reside behind restrictive router walls, blocking direct connections.</li>
+                                        <li><strong>Peer Churn & Poisoning</strong>: Distributed nodes join and leave unpredictably, and untrusted peers may modify data.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        Server[(Central Server)] -->|Saturated link| ClientA[Client A]
+                                        Server -->|Saturated link| ClientB[Client B]
+                                        Server -.->|Failure Point| Failure[Complete Outage]
+                                        style Server fill:#f87171,stroke:#b91c1c,stroke-width:2px;
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">2 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Before explaining CIPHER, we must clarify what problem we are solving.<br><br>
+                            Centralized systems struggle with bandwidth saturation and single-node vulnerabilities.<br>
+                            On the other hand, moving to P2P networks brings severe issues: NAT boundaries block 60%+ of connections, nodes drop offline (churn), and peers can return poisoned data.<br><br>
+                            CIPHER is structured specifically to address these issues.
+                        </div>
+                    </section>
+
+                    <!-- Slide 3: Design Goals -->
+                    <section class="slide" id="slide-3">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Design Goals</h2>
+                                <p>Four Pillars of a Robust P2P CDN</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-4" style="height: 100%;">
+                                <div class="clean-card">
+                                    <h3>1. Decentralization</h3>
+                                    <h4>No Central Control</h4>
+                                    <p>Shards are placed on distinct independent providers across the network, avoiding reliance on any single node.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>2. Reliability</h3>
+                                    <h4>Self-Healing Deck</h4>
+                                    <p>Peer dropouts and network latency spikes must not terminate or stall the overall download process.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>3. Integrity</h3>
+                                    <h4>Proof over Trust</h4>
+                                    <p>Strict ciphertext content-addressing ensures data is verified on receipt, blocking malicious poisoning.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>4. Efficiency</h3>
+                                    <h4>Swarmed Retrieval</h4>
+                                    <p>Parallel channels query multiple seed hosts concurrently to saturate the client's network path.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">3 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            These four goals are the core focus of the system architecture.<br><br>
+                            First, decentralization: we distribute file shards across multiple peers.<br>
+                            Second, reliability: a downloading node should not care if any single peer drops offline.<br>
+                            Third, integrity: using cryptographic hash checks so that peers can't poison our files.<br>
+                            Fourth, efficiency: swarmed downloading where we download different parts of a file concurrently from separate peers.<br>
+                            Fifth, resilience: utilizing background NAT hole punching so standard home networks can connect directly without server relays.
+                        </div>
+                    </section>
+
+                    <!-- Slide 4: System Overview -->
+                    <section class="slide" id="slide-4">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>System Overview</h2>
+                                <p>From One File to Distributed Content</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>File Chunking</strong>: Monolithic file is split into 256KB segments.</li>
+                                        <li><strong>Erasure Redundancy</strong>: Reed-Solomon creates additional parity shards.</li>
+                                        <li><strong>Swarm Placements</strong>: Shards are stored across distinct nodes.</li>
+                                        <li><strong>Parallel Retrieval</strong>: Client downloads shards concurrently from multiple online nodes.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        File[Monolithic File] -->|Chunk & Encode| Shards[Data + Parity Shards]
+                                        Shards -->|Distribute| Providers[(Provider Nodes)]
+                                        Providers -->|Parallel Swarm| Client[Client Reassembly]
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">4 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            This slide shows the overall data flow transformation model.<br><br>
+                            Instead of keeping a file on a central server, the publisher splits it into Data Chunks.<br>
+                            Next, we run these chunks through Reed-Solomon erasure coding, which yields Data and Parity Shards.<br>
+                            These shards are distributed across P2P storage providers.<br>
+                            A client downloads these shards in parallel from multiple providers at once.<br>
+                            Finally, the client verifies each shard's hash, decodes them back to the original chunks, and reconstructs the file. Note that reconstruction succeeds even if some providers fail, as long as we retrieve the minimum required shards.
+                        </div>
+                    </section>
+
+                    <!-- Slide 5: Core Features -->
+                    <section class="slide" id="slide-5">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Core Features</h2>
+                                <p>Ingestion • Discovery • Swarming • Failover</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-4" style="height: 100%;">
+                                <div class="clean-card">
+                                    <h3>1. Prepare</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Splits files, encrypts via XChaCha20, hashes via SHA-256, and generates Reed-Solomon shards.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>2. Discover</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Queries Control Plane locations to build the client-side <code class="code-inline">ChunkProviderMap</code> execution plan.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>3. Transfer</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Concurrently queries multiple providers over upgraded DCUtR direct paths in a lock-free queue.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>4. Recover</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Handles node failovers by switching providers, resuming session logs, and decoding erasure blocks.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">5 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Here we introduce the four core capabilities of the protocol lifecycle.<br><br>
+                            Stage 1 is Content Preparation: generating encrypted shards and a manifest describing the file.<br>
+                            Stage 2 is Discovery: querying the decentralized Control Plane to find peer addresses and building an execution plan mapping shards to source nodes.<br>
+                            Stage 3 is Transfer: our concurrent scheduler worker pool spinning up multiplexed connections over libp2p and requesting content.<br>
+                            Stage 4 is Recovery: correcting errors by switching providers on timeouts, resuming interrupted downloads from session records, and reconstructing data using erasure coding.
+                        </div>
+                    </section>
+
+                    <!-- Slide 6: Architecture -->
+                    <section class="slide" id="slide-6">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Architecture</h2>
+                                <p>Control Plane and Data Plane Division</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <div style="margin-bottom: 1.2rem;">
+                                        <span class="status-badge planned">Planned / Design</span>
+                                        <h3 style="display:inline-block; font-size:1.15rem; font-weight:600; margin-left:0.5rem;">Control Plane</h3>
+                                        <p style="font-size:0.95rem; margin-top:0.3rem;">Manages metadata: Registries (Provider, Manifest, and Placement maps) resolved via Kademlia DHT.</p>
+                                    </div>
+                                    <div>
+                                        <span class="status-badge current">Current Implementation</span>
+                                        <h3 style="display:inline-block; font-size:1.15rem; font-weight:600; margin-left:0.5rem;">Data Plane</h3>
+                                        <p style="font-size:0.95rem; margin-top:0.3rem;">Manages raw transfer: libp2p hosts, Circuit v2 Relay fallback, DCUtR hole punching, and the stateless Chunk Protocol.</p>
+                                    </div>
+                                </div>
+                                <div class="slide-diagram-box">
+                                    <img src="assets/Architecture.png" alt="CIPHER System Architecture Sketch">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">6 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            This slide divides the CIPHER architecture into two major conceptual planes: the Control Plane and the Data Plane.<br><br>
+                            The Control Plane answers 'where is the data?'. It coordinates provider, manifest, and placement mapping registries via a Kademlia DHT. This layer is currently in the design and planning expansion phase.<br><br>
+                            The Data Plane answers 'get the data'. It manages transport, relay fallback, DCUtR hole punching, protocol stream handlers, and content verification. This plane is fully implemented and tested.<br><br>
+                            Let's look at how data is ingested and prepared in Slide 7.
+                        </div>
+                    </section>
+
+                    <!-- Slide 7: Content Preparation -->
+                    <section class="slide" id="slide-7">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Content Preparation</h2>
+                                <p>Chunking • Reed-Solomon Encoding • Manifest • Merkle Root</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Monolithic splitting</strong>: File is chunked into uniform blocks (default 256KB).</li>
+                                        <li><strong>Independent Encryption</strong>: Blocks encrypted via XChaCha20-Poly1305, enabling random access.</li>
+                                        <li><strong>Erasure expansion</strong>: Reed-Solomon coding produces Data + Parity Shards stored on providers.</li>
+                                        <li><strong>Structure binding</strong>: Merkle Tree root is computed to verify shard integrity.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        File[File] --> Chunker[Chunker]
+                                        Chunker --> Enc[XChaCha20 Encrypt]
+                                        Enc --> RS[Reed-Solomon Shard Split]
+                                        RS --> Manifest[JSON Manifest & Merkle Root]
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">7 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Here we zoom in on the Publisher module. This slide shows the exact pipeline for turning a file into distributed content.<br><br>
+                            First, the Chunker divides the file into 256KB blocks.<br>
+                            Second, we encrypt each chunk independently using XChaCha20-Poly1305 and hash it with SHA-256. Independent chunk encryption enables parallel random-access fetching and out-of-order decryption.<br>
+                            Third, Reed-Solomon encoding outputs data and parity shards. Providers store shards rather than monolithic chunks.<br>
+                            Fourth, we compute a Merkle Tree over these shards to produce the Merkle Root, and package this data into an immutable manifest capability file.
+                        </div>
+                    </section>
+
+                    <!-- Slide 8: Kademlia DHT -->
+                    <section class="slide" id="slide-8">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Kademlia DHT</h2>
+                                <p>Decentralized Metadata and Discovery Substrate</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Discovery Substrate</strong>: Kademlia is not a file database; it is a peer address routing substrate.</li>
+                                        <li><strong>Reference records</strong>: Maps identifiers to provider lists and manifest details; does not store actual file data.</li>
+                                        <li><strong>Location resolution</strong>: Translates <code class="code-inline">ShardID</code> to a list of candidate host Multiaddresses.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        Client[Client Node] -->|Query FindShardProviders| DHT[Kademlia DHT]
+                                        DHT -->|Resolves Addresses| ProviderList[Provider Multiaddrs]
+                                        ProviderList -->|Open Data Stream| Direct[Peer Connection]
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">8 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            It is crucial to clarify that Kademlia is NOT used as a general-purpose database in CIPHER.<br><br>
+                            Instead, Kademlia DHT acts as a decentralized metadata/discovery substrate.<br>
+                            It stores small records: ProviderRecords (peer addresses), ManifestRecords (erasure specifications), and ShardProviderRecords (mapping shard hashes to peer IDs).<br>
+                            The DHT stores references and metadata, while actual large file payloads remain strictly hosted on the data plane providers.<br><br>
+                            Let's talk about shard placement next.
+                        </div>
+                    </section>
+
+                    <!-- Slide 9: Shard Placement -->
+                    <section class="slide" id="slide-9">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Shard Placement</h2>
+                                <p>PlacementMap vs. ChunkProviderMap</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2" style="align-items:stretch;">
+                                <div class="clean-card">
+                                    <h3>PlacementMap</h3>
+                                    <h4>Publisher Blueprint</h4>
+                                    <ul style="margin-top:0.5rem;">
+                                        <li>Generated during file publication.</li>
+                                        <li>Defines the static distribution plan.</li>
+                                        <li>Maps shard hashes to target provider nodes.</li>
+                                        <li>Stored on the Control Plane.</li>
+                                    </ul>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>ChunkProviderMap</h3>
+                                    <h4>Client Execution Plan</h4>
+                                    <ul style="margin-top:0.5rem;">
+                                        <li>Generated dynamically by the downloader.</li>
+                                        <li>Adapts to active, online provider nodes.</li>
+                                        <li>Maps required segments to online peers.</li>
+                                        <li>Ensures run-time transfer routing.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">9 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            We need to distinguish between two mapping structures here.<br><br>
+                            The PlacementMap is a global registry record created by the publisher. It maps shards to designated storage providers.<br>
+                            The ChunkProviderMap is an execution plan created locally by the downloading client. It maps each required shard to the specific, online peers discovered at download time.<br>
+                            This dynamic mapping protects the client from outdated placement tables if nodes disconnect.
+                        </div>
+                    </section>
+
+                    <!-- Slide 10: P2P Network -->
+                    <section class="slide" id="slide-10">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>P2P Network</h2>
+                                <p>libp2p • Relay • DCUtR • Direct Connectivity</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>libp2p Host</strong>: Manages persistent Ed25519 identity keys and TCP/QUIC stream multiplexing.</li>
+                                        <li><strong>Circuit v2 Relay</strong>: Coordinates transient connection relays to route around NAT firewalls.</li>
+                                        <li><strong>DCUtR Upgrades</strong>: Coordinate background UDP simultaneous dial triggers to bypass NAT.</li>
+                                        <li><strong>Direct Transport</strong>: Streams fallback to direct connection paths automatically.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        Client[Client] -->|1. Connect| Relay[(Circuit v2 Relay)]
+                                        Relay -->|2. Route| Provider[Provider]
+                                        Client -.->|3. DCUtR Upgrade| Provider
+                                        Client ===>|4. Direct High-Speed Path| Provider
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">10 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            The P2P transport layer handles host identity and connectivity.<br><br>
+                            We use persistent Ed25519 keypairs stored in system configuration paths so that node identities (PeerIDs) remain constant across restarts.<br>
+                            For connectivity, we fallback to public Circuit v2 relays to punch initial tunnels through NATs.<br>
+                            Simultaneously, we run the DCUtR protocol. DCUtR attempts to establish direct socket connections in the background, upgrading the connection to a high-speed direct transport path without interrupting the transfer.
+                        </div>
+                    </section>
+
+                    <!-- Slide 11: Chunk Protocol -->
+                    <section class="slide" id="slide-11">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Chunk Protocol</h2>
+                                <p>Stateless Request / Response Stream Operations</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Protocol ID</strong>: Registered as <code class="code-inline">/cipher/chunk/1.0.0</code> over multiplexed streams.</li>
+                                        <li><strong>Framed Envelopes</strong>: Uses size-prefixed message frames (capped at 2MB) for memory protection.</li>
+                                        <li><strong>Stateless Exchange</strong>: Handlers perform strict request/response data pushes, decoupling network state from application logic.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    sequenceDiagram
+                                        Client->>Provider: MsgRequestChunk (ChunkID)
+                                        Provider->>Client: MsgChunk (Ciphertext + Nonce)
+                                        Client->>Provider: MsgAck
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">11 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            The /cipher/chunk/1.0.0 protocol defines the language peers use to request data.<br><br>
+                            All messages are encapsulated in a unified symmetric envelope containing a version, message type, and byte payload.<br>
+                            We send messages as size-prefixed frames capped at a maximum size of 2MB to prevent buffer overflow attacks.<br>
+                            The message types include manifest request/response, chunk request/response, and positive or negative error acknowledgements. It is fully stateless, keeping complex transfer logic inside the client application modules.
+                        </div>
+                    </section>
+
+                    <!-- Slide 12: Parallel Download -->
+                    <section class="slide" id="slide-12">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Parallel Download</h2>
+                                <p>TransferManager & Scheduler Coordination</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2" style="align-items:stretch;">
+                                <div class="clean-card">
+                                    <h3>TransferManager</h3>
+                                    <h4>Session Orchestration</h4>
+                                    <ul style="margin-top:0.5rem;">
+                                        <li>Owns the lifecycle of file downloads.</li>
+                                        <li>Persists session progress locally using a Boolean bitset.</li>
+                                        <li>Ensures client never re-downloads completed data blocks on crash.</li>
+                                    </ul>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>Scheduler</h3>
+                                    <h4>Work Allocation</h4>
+                                    <ul style="margin-top:0.5rem;">
+                                        <li>Maintains a lock-free queue of pending shard retrieval tasks.</li>
+                                        <li>Spins up concurrent worker threads to query distinct target peers.</li>
+                                        <li>Recycles tasks back to the queue on peer disconnect or timeout.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">12 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            The transfer orchestrator comprises the TransferManager and the Scheduler.<br><br>
+                            The TransferManager initializes session states and tracks progress using a simple boolean bitset. This bitset determines exactly which shards are done and which are missing.<br>
+                            The Scheduler schedules missing shards into a lock-free queue.<br>
+                            Concurrent background worker routines pop tasks from the queue and send `/cipher/chunk/1.0.0` requests to online target peers concurrently. If a peer timeouts, the worker reports the failure to the scheduler, which recycles the task to be processed by a different peer.
+                        </div>
+                    </section>
+
+                    <!-- Slide 13: Security & Integrity -->
+                    <section class="slide" id="slide-13">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Security & Integrity</h2>
+                                <p>Proof over Trust Security Model</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-3" style="height: 100%;">
+                                <div class="clean-card">
+                                    <h3>Confidentiality</h3>
+                                    <h4>XChaCha20-Poly1305</h4>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Independent block encryption enables random-access, multi-peer swarming decryption. Manifest details are publicly visible, but decryption keys remain private to consumers.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>Integrity</h3>
+                                    <h4>Content-Addressing</h4>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Shard addresses are derived from ciphertext hashes. SHA-256 checks run immediately on shard arrival; corrupt data is rejected before writing to local disk.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>Structure</h3>
+                                    <h4>Merkle Verification</h4>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Merkle tree structures verify that downloaded segments belong to the original file. Rogue nodes are blocked from injecting poison filler blocks.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">13 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            In a public P2P network, you cannot trust peers. CIPHER operates on a strict 'proof-over-trust' model.<br><br>
+                            We encrypt chunks using XChaCha20-Poly1305. The decryption keys are kept separate from the public manifest so that nodes store and relay data they cannot read.<br>
+                            For integrity, shards are content-addressed by their ciphertext hashes. The client validates the SHA-256 hash immediately upon block receipt. If a hash mismatch occurs, we drop the data immediately, protecting storage from pollution attacks.<br>
+                            Merkle tree root checks verify that the shard belongs to the original file.
+                        </div>
+                    </section>
+
+                    <!-- Slide 14: Download Flow -->
+                    <section class="slide" id="slide-14">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Download Flow</h2>
+                                <p>Manifest Resolution &rarr; Provider Discovery &rarr; Parallel Download</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Bootstrap</strong>: Fetch JSON manifest metadata using <code class="code-inline">ManifestID</code>.</li>
+                                        <li><strong>Planning</strong>: Query placement records to compile the local <code class="code-inline">ChunkProviderMap</code>.</li>
+                                        <li><strong>Transfer</strong>: Concurrent worker routines request shards in parallel streams.</li>
+                                        <li><strong>Reassembly</strong>: Validate shard hashes and decode Reed-Solomon blocks to build the original file.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        A[ManifestID Query] --> B[Resolve Placement]
+                                        B --> C[Compile Provider Map]
+                                        C --> D[Parallel Worker Swarm]
+                                        D --> E[Reconstruct File]
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">14 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            This slide presents the end-to-end download sequence from the client's perspective.<br><br>
+                            We start with bootstrapping: getting a ManifestID and querying the DHT to fetch the manifest details.<br>
+                            Next is planning: mapping target shards to active online peers to build our local ChunkProviderMap.<br>
+                            Third is swarming: starting parallel fetch routines to pull shards concurrently.<br>
+                            Finally, we run hash checks on each shard, decode Reed-Solomon blocks, and write the reassembled file to local storage. If any chunk is corrupted or incomplete, we reject it and request it again.
+                        </div>
+                    </section>
+
+                    <!-- Slide 15: CIPHER in Action -->
+                    <section class="slide" id="slide-15">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>CIPHER in Action</h2>
+                                <p>End-to-End File Distribution Demo</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>File Ingestion</strong>: Chunks file, encrypts via XChaCha20, and publishes the manifest.</li>
+                                        <li><strong>DHT Registration</strong>: Registers shard locations (PlacementMap) on Kademlia.</li>
+                                        <li><strong>Direct Upgrade</strong>: Triggers DCUtR hole punching to bypass NAT barriers.</li>
+                                        <li><strong>Swarmed Retrieval</strong>: Concurrent workers download and verify shards.</li>
+                                    </ul>
+                                </div>
+                                <div class="mock-terminal-wrapper">
+                                    <div class="mock-terminal">
+                                        <div class="term-header">SYSTEM INTEGRATION LOGS:</div>
+                                        <div class="term-content-box" id="term-logs">
+                                            <!-- Will be dynamically filled by script.js -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">15 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Slide 15 is our centerpiece slide showing the actual E2E system integration in action.<br><br>
+                            Here we show the live data flow pathway: the publisher ingests the file, registers shard allocations, Kademlia coordinates location discovery, and the client pulls shards concurrently from separate providers.<br>
+                            On the right, we show actual terminal outputs from a successful integration test. You can see the publisher chunking data, Kademlia routing paths, DCUtR coordinates successfully hole-punching UDP tunnels to providers, parallel scheduler streams active, and final SHA-256 verification passing.
+                        </div>
+                    </section>
+
+                    <!-- Slide 16: Failure Recovery -->
+                    <section class="slide" id="slide-16">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Failure Recovery</h2>
+                                <p>Ensuring Fault-Resilient Shard Retrieval</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2">
+                                <div>
+                                    <ul class="bullet-list">
+                                        <li><strong>Dynamic Failover</strong>: Connection drops trigger provider switching; the scheduler recycles the task to alternative nodes.</li>
+                                        <li><strong>Interruption Resuming</strong>: INTERRUPTED downloads load progress bitsets and fetch only missing shards.</li>
+                                        <li><strong>Reed-Solomon Limit</strong>: Decodes data if ANY K out of K+M shards are present. Fails if lost shards exceed parity M.</li>
+                                    </ul>
+                                </div>
+                                <div style="display:flex; justify-content:center; align-items:center;">
+                                    <div class="mermaid">
+                                    graph TD
+                                        Drop[Provider Disconnect] --> Switch[Switch Provider]
+                                        Switch --> Recycle[Recycle Task to Queue]
+                                        Recycle --> Query[Worker fetches from new peer]
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">16 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Here we discuss recovery. P2P transfers must survive network failure.<br><br>
+                            First, we handle network failures with provider switching: workers monitor transfer loops; if a peer goes offline, we recycle the shard task back to the queue and dial a different provider.<br>
+                            We also support local session resume, loading a bitset of progress so a client never re-downloads completed blocks after a crash.<br>
+                            At the content layer, Reed-Solomon allows reconstruction using any K out of K+M shards. If more than M shards are missing, the file is lost. This defines the clear boundary of our recovery guarantees.
+                        </div>
+                    </section>
+
+                    <!-- Slide 17: Future Implementations -->
+                    <section class="slide" id="slide-17">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Future Implementations</h2>
+                                <p>Scalability • Optimization • Incentives</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-3" style="height: 100%;">
+                                <div class="clean-card">
+                                    <h3>1. Advanced Scheduling</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Implements rarest-first shard scheduling, latency-aware provider selection, and peer reputation scoring to prioritize high-speed nodes.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>2. Incentive Engine</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Introduces token settlement layers via smart contracts, zero-knowledge proofs of storage, and micro-payment routing channels.</p>
+                                </div>
+                                <div class="clean-card">
+                                    <h3>3. Protocol Hardening</h3>
+                                    <p style="margin-top:0.4rem; font-size:0.9rem; line-height:1.5;">Enforces connection limits per node, bounds internal buffer readers to prevent leaks, and audits protocol behavior under network attacks.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">17 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            This slide outlines our future work roadmap.<br><br>
+                            First, advanced scheduling: implementing rarest-first algorithms and provider rating metrics to fetch shards more efficiently.<br>
+                            Second, incentives: building a payment layer using smart contracts and micro-channels alongside cryptographic proof-of-storage validations so hosting nodes are fairly compensated.<br>
+                            Third, protocol hardening: adding connection limiters, stream timeouts, and rate limits to defend the P2P transport against memory leaks and DDoS flood attacks.
+                        </div>
+                    </section>
+
+                    <!-- Slide 18: Team -->
+                    <section class="slide" id="slide-18">
+                        <img src="assets/feather.png" alt="Logo" class="logo-feather">
+                        <img src="assets/devlup.png" alt="Devlup logo" class="logo-devlup">
+                        <header class="slide-header">
+                            <div class="title-group">
+                                <h2>Team</h2>
+                                <p>Building CIPHER</p>
+                            </div>
+                        </header>
+                        <div class="slide-body">
+                            <div class="grid-2" style="margin-top: 1rem;">
+                                <div>
+                                    <h3 style="color:var(--color-primary); margin-bottom:0.8rem; font-size:1.4rem;">Contributors</h3>
+                                    <div>
+                                        <h4 style="font-size:1.15rem; color:var(--text-dark); font-family:var(--font-heading); margin-bottom:0.1rem;">Adarsh Kumar</h4>
+                                        <p style="font-size:0.92rem; color:var(--text-muted);">Core Developer</p>
+                                        <p style="font-size:0.95rem; color:var(--text-main); margin-top:0.3rem;">Designed backend execution engines, persistent PeerIDs, and transport protocols.</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 style="color:var(--color-secondary); margin-bottom:0.8rem; font-size:1.4rem;">Mentors</h3>
+                                    <div style="margin-bottom:1rem;">
+                                        <h4 style="font-size:1.15rem; color:var(--text-dark); font-family:var(--font-heading); margin-bottom:0.1rem;">DevlUp Labs</h4>
+                                        <p style="font-size:0.92rem; color:var(--text-muted);">IIT Jodhpur Student Developer Community</p>
+                                    </div>
+                                    <div style="border-top: 1px solid var(--border-color); padding-top: 1rem; margin-top: 1.5rem;">
+                                        <p style="font-size:0.95rem; color:var(--text-muted); font-style:italic;">IIT Jodhpur CSE Department Project Submission</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="slide-footer">18 / 18</div>
+                        <div class="slide-notes" style="display:none;">
+                            Thank you for attending this presentation on the CIPHER decentralized content distribution protocol.<br><br>
+                            The project is developed by Adarsh Kumar, focusing on the core backend execution engine, persistent peer identity, and transport protocols.<br>
+                            The work is guided and supported by the DevlUp Labs team at the Indian Institute of Technology Jodhpur.<br><br>
+                            We are happy to take any questions from the panel.
+                        </div>
+                    </section>
+                    
+                </div>
+            </div>
+
+            <!-- Toolbar Overlay Controls -->
+            <div class="toolbar-controls">
+                <button class="btn-ctrl" id="btn-prev">← Prev</button>
+                <button class="btn-ctrl" id="btn-next">Next →</button>
+                <button class="btn-ctrl" id="btn-notes">Toggle Speaker Notes (S)</button>
+            </div>
+        </main>
+
+        <!-- Right Speaker Notes view pane -->
+        <aside class="notes-panel" id="notes-view">
+            <div class="notes-header">
+                <span>SPEAKER NOTES</span>
+                <span style="font-size:0.75rem; color:#94a3b8; font-weight:normal;">Slide <span id="notes-num">1</span></span>
+            </div>
+            <div class="notes-content" id="notes-container">
+                <!-- Notes loaded here dynamically -->
+            </div>
+        </aside>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

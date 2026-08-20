@@ -35,7 +35,7 @@ func setupTestEngine(t *testing.T, chunkSize uint32) (*engine.ContentEngine, str
 	}
 	store := storage.NewFSStore(tmpDir)
 
-	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 	return eng, tmpDir, keys
 }
 

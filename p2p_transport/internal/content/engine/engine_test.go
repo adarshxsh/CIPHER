@@ -35,7 +35,7 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 	}
 	store := storage.NewFSStore(tmpDir)
 
-	eng := NewContentEngine(config, enc, dig, store, store, keys)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Create random data larger than one chunk
 	originalData := make([]byte, 100*1024+500) // ~100.5 KB

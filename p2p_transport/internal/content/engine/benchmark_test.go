@@ -32,7 +32,7 @@ func BenchmarkContentEngine_Ingest(b *testing.B) {
 	}
 	store := storage.NewFSStore(tmpDir)
 
-	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Create 10MB of random data
 	dataSize := 10 * 1024 * 1024
@@ -66,7 +66,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	keys := engine.NewLocalKeyProvider()
 	
 	store := storage.NewFSStore(tmpDir)
-	eng := engine.NewContentEngine(config, enc, dig, store, store, keys)
+	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	dataSize := 10 * 1024 * 1024
 	data := make([]byte, dataSize)
