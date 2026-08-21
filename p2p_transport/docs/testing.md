@@ -29,7 +29,10 @@ CGO_ENABLED=0 go test -v ./...
 3. **Manual Testing**:
    - **Persistent Identity**: To manually test that node identities persist across restarts:
      1. Build the peer binary: `go build -o bin/peer ./cmd/peer`
-     2. Run the peer node: `./bin/peer`
+     ```bash
+     CGO_ENABLED=0 go run ./cmd/relay/main.go
+     ```
+     *(Note the printed Peer ID and multiaddresses, which now include TCP, QUIC, and WebSocket).*
      3. Note the outputted `Peer ID` and shut down the peer (Ctrl+C).
      4. Run the peer node again: `./bin/peer`
      5. Verify that the outputted `Peer ID` matches exactly with the previous run.
@@ -39,7 +42,16 @@ CGO_ENABLED=0 go test -v ./...
      2. Start **Peer A (Listener/Seeder)** and ingest a file: `./bin/peer -p 55555 -store ./store_a -ingest test.mp4`
      3. Take note of Peer A's full multiaddress, the generated `ContentID` (e.g., `abcd12345...`), and the `Key`.
      4. Open a second terminal window. Start **Peer B (Downloader)**, passing Peer A's address and fetching the content: 
-        `./bin/peer -store ./store_b -d /ip4/127.0.0.1/tcp/55555/p2p/12D3... -fetch abcd12345... -key <KEY> -reassemble out.mp4`
+     ```bash
+     CGO_ENABLED=0 go run ./cmd/peer/main.go \
+       -p 6001 \
+       -ws-port 6002 \
+       -store ./store_b \
+       -relay <RELAY_MULTIADDR> \
+       -fetch <CID> \
+       -key <DECRYPTION_KEY> \
+       -reassemble downloaded_file.mp4
+     ```
      5. Observe Peer A's logs: It should log the ingestion and stream requests for manifest and chunks.
      6. Observe Peer B's logs: It should log resolving the manifest, downloading the chunks sequentially, and successfully reassembling the file.
 
@@ -60,8 +72,11 @@ CGO_ENABLED=0 go test -v ./...
      6. **Verify Transfer Integrity**: Peer B will download all encrypted chunks sequentially, verifying their hashes, and finally reassemble them into `out.mp4`.
 
    - **Relay Fallback**: To verify that the system can still transfer data over the relay when direct connection fails (or is disabled):
-     1. Start **Peer A** with a relay multiaddress and `-p 50001`:
-        `./bin/peer -p 50001 -store ./store_a -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -ingest test.mp4`
+     1. Start **Peer A** with a relay multiaddress and `-p`:
+     ```bash
+     CGO_ENABLED=0 go run ./cmd/peer/main.go -p 5001 -ws-port 5002 -store ./store_a -relay <RELAY_MULTIADDR> -ingest <FILE_PATH>
+     ```
+     *(Note the CID and Decryption Key printed after ingestion)*.
      2. Start **Peer B** with the `-force-relay` flag to disable hole punching:
         `./bin/peer -p 50002 -store ./store_b -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -force-relay -fetch <ContentID> -key <KEY> -reassemble out.mp4`
      3. Verify that the file transfers successfully. The network logs should explicitly say `1) Relay [...]` when listing active connections to the target peer.

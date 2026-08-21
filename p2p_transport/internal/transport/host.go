@@ -19,11 +19,17 @@ import (
 )
 
 // NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
+	listenAddrs := []string{addr}
+	if wsPort > 0 {
+		wsAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d/ws", wsPort)
+		listenAddrs = append(listenAddrs, wsAddr)
+	}
+
 	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(addr),
+		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
 	}
 

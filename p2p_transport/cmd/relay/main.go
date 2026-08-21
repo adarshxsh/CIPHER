@@ -26,11 +26,12 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	// Listen on TCP 4001 and UDP 4001 (QUIC)
+	// Listen on TCP 4001, UDP 4002 (QUIC), and TCP 4004 (WebSocket)
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(
 			"/ip4/0.0.0.0/tcp/4001",
 			"/ip4/0.0.0.0/udp/4002/quic-v1",
+			"/ip4/0.0.0.0/tcp/4004/ws",
 		),
 		libp2p.Identity(priv),
 		libp2p.EnableNATService(),

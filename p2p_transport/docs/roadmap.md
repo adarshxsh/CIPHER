@@ -20,3 +20,6 @@
 - [ ] Milestone 11: Discovery (mDNS & DHT routing)
 - [ ] Milestone 12: Deduplication, Proof-of-Storage & CDN Cache Placement
 - [ ] Milestone 13: End-to-End Testing & Polish
+
+
+CGO_ENABLED=0 go run ./cmd/peer/main.go -p 55559 -ws-port 55560 -store ./store_b -relay /ip4/20.197.30.171/tcp/4001/p2p/12D3KooWG1iekoPPbk9HiiWzc4hxhN7L3ddNNYoJsRfaGGYs8ADo -bootstrap /ip4/20.197.30.171/tcp/4003/p2p/12D3KooWAeTavvFLTaP3ZkC6g6pWf7JfDXSFefWcrfGmVEDPJWTH -fetch f77c374da61241cb44543c004b8cd9c8fff9066043592eed9c79288af820f370 -key 823b7f9a3f0f46ad5c2e01115f8fb7e4116bbd6be6011fdd0db018d20ff63ebb -reassemble FATE.mp4
