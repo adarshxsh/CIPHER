@@ -34,11 +34,13 @@ import (
 
 func main() {
 	// Enable all libp2p debug logging to diagnose AutoNAT
-	golog.SetAllLoggers(golog.LevelDebug)
+	// Reduce libp2p internal logging (DHT, etc.)
+	golog.SetAllLoggers(golog.LevelWarn)
 
 	// Set all the flags
 	target := flag.String("d", "", "Optional target peer multiaddress. If omitted, providers are discovered through the DHT. Target peer multiaddress to dial (e.g. /ip4/127.0.0.1/tcp/55555/p2p/Qm...)")
-	port := flag.Int("p", 0, "Port to listen on (default 0 for random)")
+	port := flag.Int("p", 4001, "Port for the peer to listen on (TCP)")
+	wsPort := flag.Int("ws-port", 4002, "Port for the peer to listen on (WebSocket, 0 to disable)")
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	forceRelay := flag.Bool("force-relay", false, "Disable hole punching and force traffic over the relay")
 	storePath := flag.String("store", "./content_store", "Path to the local content store directory")
@@ -68,7 +70,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
@@ -241,6 +243,22 @@ func main() {
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
 		log.Printf("    Key: %x", key)
+
+		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
+		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
+		if *wsPort == 0 {
+			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
+		}
+		
+		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
+			"  -p 5001 \\\n" +
+			"  -ws-port 5002 \\\n" +
+			"  -store ./store_b \\\n" +
+			"  -d \"%s\" \\\n" +
+			"  -fetch \"%x\" \\\n" +
+			"  -key \"%x\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+		log.Printf("-----------------------------------------------------------\n")
 	}
 
 	var targetContentIDHex string

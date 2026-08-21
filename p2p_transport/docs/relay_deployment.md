@@ -14,8 +14,9 @@ Upload the `bin/relay-linux-amd64` binary to your Ubuntu server.
 
 ## 2. Server Configuration
 Ensure your server's firewall has the following ports open for inbound traffic:
-- **TCP 4001**
-- **UDP 4001** (for QUIC)
+- **TCP 4001** (Standard Relay)
+- **UDP 4002** (QUIC)
+- **TCP 4004** (WebSocket)
 
 ## 3. Running the Relay
 

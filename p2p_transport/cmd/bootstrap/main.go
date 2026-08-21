@@ -17,7 +17,12 @@ func main() {
 	port := flag.Int(
 		"p",
 		4003,
-		"Port for the bootstrap node",
+		"Port for the bootstrap node (TCP)",
+	)
+	wsPort := flag.Int(
+		"ws-port",
+		0,
+		"Port for the bootstrap node (WebSocket, 0 to disable)",
 	)
 
 	// parse the cmd line args passed
@@ -32,7 +37,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, priv, "", false)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false)
 	if err != nil {
 		log.Fatalf(
 			"Failed to create bootstrap node: %v",
