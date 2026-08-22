@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 )
 
 func main() {
@@ -25,14 +27,21 @@ func main() {
 		"Port for the bootstrap node (WebSocket, 0 to disable)",
 	)
 
+	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+
 	// parse the cmd line args passed
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Note ki if we create 2 bootstrap nodes using the same function, they would have the same priv key, and thus the same peerID, so while testing create 2 bootstrap nodes using different priv keys
-	priv, err := identity.LoadOrCreate()
+	var priv libp2pcrypto.PrivKey
+	var err error
+	if *identityPath != "" {
+		priv, err = identity.LoadOrCreateFromPath(*identityPath)
+	} else {
+		priv, err = identity.LoadOrCreate()
+	}
 	if err != nil {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
