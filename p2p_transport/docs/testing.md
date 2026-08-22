@@ -1,219 +1,207 @@
-# Testing Strategy
+# CIPHER Testing Strategy & Quick Start Guide
 
-The CIPHER project employs a comprehensive testing strategy to ensure reliability and correctness of the P2P networking components.
+This document provides a modern, fast, and structured guide to testing the CIPHER decentralized content delivery network. It covers unit testing, automated end-to-end role validation, multi-provider lifecycle, relay/DCUtR testing, and manual verification workflows.
 
-## Running Tests Locally
+---
 
-To run all unit tests for the project without CGO dependencies:
+## ⚡ Quick Start: Fast Automated Testing
 
-```bash
-CGO_ENABLED=0 go test ./...
-```
-
-To run tests with verbose output:
+All tests can be run locally with CGO disabled:
 
 ```bash
-CGO_ENABLED=0 go test -v ./...
+# 1. Run all unit and robustness tests (~3s)
+CGO_ENABLED=0 go test -count=1 ./test/robustness/... ./internal/...
+
+# 2. Run automated End-to-End Role Separation Test (Publisher, Provider, Client, Bootstrap)
+bash test_roles.sh
+
+# 3. Run Single-Provider Independence & Persistence Restart Test
+bash test_provider_independent.sh
+
+# 4. Run Legacy Peer A <-> Peer B transfer test
+bash test_transfer.sh
 ```
 
-## Testing Layers
+---
 
-1. **Unit Testing**:
-   - Focuses on testing individual modules in isolation.
-   - Example: Testing the `transport.NewNode` initialization ensures that a libp2p host can be correctly allocated and bound to a port.
+## 🏗️ The 5 CIPHER Roles Under Test
 
-2. **Integration Testing** (Planned):
-   - Focuses on testing interactions between the `peer` and `relay` nodes.
-   - Verifies end-to-end connectivity, stream multiplexing, and protocol correctness over local temporary networks.
+| Role | Binary Path | Responsibilities |
+| :--- | :--- | :--- |
+| **Publisher** | `cmd/publisher` | Ingests source file, chunks & encrypts via XChaCha20, creates immutable manifest, advertises `ContentID` to DHT, and seeds. |
+| **Provider** | `cmd/provider` | Standalone daemon hosting Content-Addressed Storage (CAS), continuously republishes manifests to DHT (`StartRepublisher`), and serves `/cipher/chunk/1.0.0`. |
+| **Client** | `cmd/client` | Discovers providers via DHT (or direct dial `-d`), resolves manifest, downloads chunks concurrently via worker pool, verifies hashes, decrypts and reassembles payload. |
+| **Bootstrap** | `cmd/bootstrap` | Kademlia DHT bootstrap routing node for decentralized provider discovery. |
+| **Relay** | `cmd/relay` | Circuit v2 Relay node for NAT traversal and DCUtR hole punching coordination. |
 
-3. **Manual Testing**:
-   - **Persistent Identity**: To manually test that node identities persist across restarts:
-     1. Build the peer binary: `go build -o bin/peer ./cmd/peer`
-     ```bash
-     CGO_ENABLED=0 go run ./cmd/relay/main.go
-     ```
-     *(Note the printed Peer ID and multiaddresses, which now include TCP, QUIC, and WebSocket).*
-     3. Note the outputted `Peer ID` and shut down the peer (Ctrl+C).
-     4. Run the peer node again: `./bin/peer`
-     5. Verify that the outputted `Peer ID` matches exactly with the previous run.
+---
 
-   - **Direct P2P Connection (Chunk Transport)**: To manually test the `/cipher/chunk/1.0.0` protocol:
-     1. Build the peer binary: `go build -o bin/peer ./cmd/peer`
-     2. Start **Peer A (Listener/Seeder)** and ingest a file: `./bin/peer -p 55555 -store ./store_a -ingest test.mp4`
-     3. Take note of Peer A's full multiaddress, the generated `ContentID` (e.g., `abcd12345...`), and the `Key`.
-     4. Open a second terminal window. Start **Peer B (Downloader)**, passing Peer A's address and fetching the content: 
-     ```bash
-     CGO_ENABLED=0 go run ./cmd/peer/main.go \
-       -p 6001 \
-       -ws-port 6002 \
-       -store ./store_b \
-       -relay <RELAY_MULTIADDR> \
-       -fetch <CID> \
-       -key <DECRYPTION_KEY> \
-       -reassemble downloaded_file.mp4
-     ```
-     5. Observe Peer A's logs: It should log the ingestion and stream requests for manifest and chunks.
-     6. Observe Peer B's logs: It should log resolving the manifest, downloading the chunks sequentially, and successfully reassembling the file.
+## 🧪 Core Test Scenarios
 
-   - **Relay Node Deployment**: To manually test the relay functionality (without full NAT traversal logic yet, just connection):
-     1. Build the relay binary: `go build -o bin/relay ./cmd/relay`
-     2. Start the relay: `./bin/relay`
-     3. Ensure it outputs `Relay Service Started!` and prints its multiaddresses (e.g., `/ip4/127.0.0.1/tcp/4001/p2p/...`).
-     4. To verify routing traffic, proceed to the **Relay Connectivity** step below.
+### Scenario 1: Independent Provider Lifecycle (Publisher Offline)
+**Objective**: Prove that once content is published to a Provider, the **Publisher is completely removed from the retrieval path**.
 
-   - **Relay Connectivity & Content Transfer**: To verify that a peer (e.g., Mac) can connect to another peer (e.g., Windows) through a public relay (e.g., Ubuntu server) and transfer content:
-     1. Start your public relay node on the Ubuntu server and copy its multiaddress (e.g., `/ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>`).
-     2. On **Peer A** (Listener, e.g., Windows), start the peer, provide the relay, and ingest a file:
-        `./bin/peer -p 55555 -store ./store_a -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -ingest test.mp4`
-     3. Take note of Peer A's generated Relay Multiaddress, the returned `ContentID`, and the `Key`.
-     4. On **Peer B** (Dialer, e.g., Mac), start Peer B, provide the static relay, dial Peer A's relayed address, and fetch the content:
-        `./bin/peer -store ./store_b -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -fetch <ContentID> -key <KEY> -reassemble out.mp4`
-     5. **Verify Hole Punching**: After the initial relayed connection, both peers should log `[DCUtR] Hole Punch Event: StartHolePunch`. Following a successful attempt, you should see `EndHolePunch`, and the network connection will naturally upgrade to direct routing.
-     6. **Verify Transfer Integrity**: Peer B will download all encrypted chunks sequentially, verifying their hashes, and finally reassemble them into `out.mp4`.
+```text
+[Step 1] Bootstrap Node starts (DHT mesh coordinator)
+[Step 2] Publisher ingests 2 MB test file into Provider CAS store
+[Step 3] Publisher process is completely KILLED (verified 100% offline)
+[Step 4] Provider starts independently with existing CAS store & registers with DHT
+[Step 5] Client queries DHT solely with ContentID + Key + Bootstrap address
+         - Discovers Provider on DHT (no direct peer address passed)
+         - Resolves Manifest from Provider over /cipher/chunk/1.0.0
+         - Downloads all chunks in parallel & decrypts payload
+         - Validates SHA-256 checksum equality (100% match)
+```
 
-   - **Relay Fallback**: To verify that the system can still transfer data over the relay when direct connection fails (or is disabled):
-     1. Start **Peer A** with a relay multiaddress and `-p`:
-     ```bash
-     CGO_ENABLED=0 go run ./cmd/peer/main.go -p 5001 -ws-port 5002 -store ./store_a -relay <RELAY_MULTIADDR> -ingest <FILE_PATH>
-     ```
-     *(Note the CID and Decryption Key printed after ingestion)*.
-     2. Start **Peer B** with the `-force-relay` flag to disable hole punching:
-        `./bin/peer -p 50002 -store ./store_b -relay /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID> -d /ip4/<PUBLIC-IP>/tcp/4001/p2p/<RELAY-ID>/p2p-circuit/p2p/<PEER-A-ID> -force-relay -fetch <ContentID> -key <KEY> -reassemble out.mp4`
-     3. Verify that the file transfers successfully. The network logs should explicitly say `1) Relay [...]` when listing active connections to the target peer.
-
-   - **Direct Upgrade (Hole Punching)**: To verify natural direct upgrade:
-     1. Start Peer A and B with a relay, but without the `-force-relay` flag.
-     2. Start a large transfer (e.g. 50-100MB).
-     3. During the transfer, you should observe `[DCUtR] Hole Punch Event: StartHolePunch` and `EndHolePunch`. 
-     4. Note that for a single stream, the underlying connection used is decided when the stream is created. Any *new* stream after successful hole punching will use the direct connection (you will see `Path: Direct` in the transfer logs). For large transfers initiated before hole punch completes, they may finish over Relay depending on the exact libp2p stream multiplexer routing. Wait for `EndHolePunch` to finish and initiate another transfer to verify it says `Path: Direct` and is much faster.
-
-    - **Integrity Verification**: 
-     1. This is automatically tested on every block fetched by the client via the verify-then-store mechanism.
-     2. If a chunk gets corrupted, the client drops the transfer with a hash mismatch error before the chunk touches the disk.
-
-   - **Provider Lifecycle & Manifest Persistence (P0)**: To verify that a node automatically re-provides content to the DHT after a restart:
-     1. Start **Peer A** and ingest a file: `./bin/peer -p 55555 -store ./store_a -ingest test.mp4`
-     2. Wait for it to announce the manifest to the DHT, then kill Peer A (`Ctrl+C`).
-     3. Restart **Peer A** with the same store: `./bin/peer -p 55555 -store ./store_a`
-     4. Start **Peer B** and attempt to discover and download the file from the DHT using only the `<ContentID>` and `<KEY>`: 
-        `./bin/peer -store ./store_b -fetch <ContentID> -key <KEY> -reassemble out.mp4`
-     5. Verify that Peer A's background republisher correctly re-announced the manifest on startup, allowing Peer B to discover and download the file.
-
-## Reliable Content Transfer (Milestone 9)
-
-Milestone 9 introduces client-side transfer session tracking, retry policies, and resume capability while maintaining a strictly stateless `/cipher/chunk/1.0.0` protocol.
-
-- [☑️] **Local Session Persistence**: `TransferSession` correctly persists progress in `sessions/` directory.
-- [☑️] **Skip Logic (Idempotency)**: The downloader verifies local chunk presence via `HasChunk()` and successfully skips downloading already retrieved chunks.
-- [☑️] **Resume Interrupted Downloads**: Killing a peer (`Ctrl+C`) halfway through a transfer and running `-resume` correctly starts from the remaining chunks without duplicates.
-- [☑️] **Retry Policy**: Transient network failures safely trigger an exponential backoff instead of terminating the download.
-- [☑️] **Session Management CLI**: `-transfer-status` and `-cancel` accurately list and clear local session state.
-
-## Content Transport Integration Test Matrix (Milestone 8)
-
-The transport layer leverages `/cipher/chunk/1.0.0` to explicitly separate network transmission from filesystem storage. It is considered validated only after all the following tests pass:
-
-- [☑️] **Message Serialization**: Symmetric Message envelope (Version, Type, Payload) handles valid and malformed structures correctly.
-- [☑️] **Verify-Then-Store**: Chunks are verified against their SHA-256 ContentID before being written to the engine store.
-- [☑️] **Interruption Handling**: Peer disconnects midway through manifest or chunk transfers are caught and resources are freed safely.
-- [☑️] **Decoupled Cryptography**: Reassembling downloaded chunks correctly fails without the explicit out-of-band encryption Key.
-- [☑️] **Transport Benchmark**: Baseline transfer rate established (~490 MB/s over loopback).
-
-## Content Engine Test Matrix (Milestone 7)
-
-The Content Engine Foundation completely decouples the filesystem from the transport layer. It is tested strictly via local automation before any P2P network integration.
-
-To run the Content Engine test suite:
+**Automated Command**:
 ```bash
-go test -v ./internal/content/...
+bash test_provider_independent.sh
 ```
 
-The engine is considered validated only after all the following automated tests pass:
+---
 
-- [☑️] **Chunking**: Streams are correctly split into precisely sized chunks based on dynamic configuration.
-- [☑️] **Encryption (XChaCha20-Poly1305)**: Every chunk is independently encrypted in-place using a 192-bit nonce, modifying the `CipherSize` correctly.
-- [☑️] **Integrity & Hashing**: `Digest` (SHA-256) correctly hashes ciphertexts to yield `ChunkID`s, and securely verifies them before decryption.
-- [☑️] **Decoupled Storage**: The `ChunkSource` and `ChunkSink` interfaces successfully store and retrieve chunks from the filesystem using content-addressed filenames.
-- [☑️] **End-to-End Reassembly**: A large data stream is successfully ingested, chunked, encrypted, hashed, stored, retrieved, decrypted, and accurately reassembled back into its original sequence using the immutable `Manifest`.
-- [☑️] **Corruption Handling**: Altering a stored chunk reliably triggers a `hash mismatch` or decryption failure upon reassembly.
+### Scenario 2: Provider Persistence & Restart
+**Objective**: Prove that a Provider can be stopped, restarted, and immediately re-announce its local CAS store without data corruption or manifest loss.
 
-### Robustness Tests (Advanced Validation)
+```text
+[Step 1] Stop the active Provider (kill $PROV_PID)
+[Step 2] Restart Provider pointing to existing store directory (-store ./provider_store)
+[Step 3] Provider startup automatically triggers discovery.StartRepublisher (re-announcing all CIDs)
+[Step 4] A new Client queries DHT, discovers restarted Provider, fetches chunks, and reassembles
+```
 
-While the above matrix represents the minimum acceptance criteria for the Content Engine, the following robustness tests validate its readiness for a decentralized network environment:
+*This is automatically validated as Step 6 in `test_provider_independent.sh`.*
 
-- [☑️] **Boundary Testing**: File sizes precisely hitting chunk boundaries (e.g., 0B, 1B, 31KB, 32KB, 32KB+1B, 1MB, 100MB).
-- [ ] **Randomized Inputs**: End-to-end ingest and reassembly of randomly generated binary files (not just text) with verification via SHA-256.
-- [ ] **Out-of-Order Reconstruction**: Reassembling a stream from chunks requested and returned in a completely random sequence.
-- [ ] **Duplicate Chunk Handling**: Simulating swarming by providing duplicate chunks and verifying no corruption or duplicate writes occur.
-- [☑️] **Missing Chunk Handling**: Explicitly deleting a chunk and asserting the engine cleanly returns `ErrMissingChunk` rather than panicking or producing partial output.
-- [☑️] **Cryptographic Rejection**: Providing the wrong decryption key and ensuring the engine fails securely.
-- [ ] **Manifest Validation**: Rejecting invalid manifests (duplicate IDs, invalid offsets, malformed JSON, etc) before any processing begins.
-- [ ] **Determinism**: Asserting that ingesting the exact same file twice with the same key produces the expected object behavior (independent ciphertexts due to nonces).
-- [ ] **Performance & Streaming**: Ingesting a 500MB file and asserting that memory remains strictly bounded (no full-file buffering).
-- [ ] **API Contracts**: Running identical test suites against any future `ChunkSource` (e.g. Memory, IPFS, S3) to ensure seamless swapping.
-- [☑️] **The 1000-Iteration Gauntlet**: Running 1000 loops of: Generate random file -> Random chunk size -> Random key -> Ingest -> Shuffle chunks -> Restore -> Compare SHA-256.
+---
 
-### Manual Testing (Content Engine CLI)
+### Scenario 3: Multi-Provider Swarming (Concurrent Chunk Fetching)
+**Objective**: Prove that the Client's `TransferManager` and `Scheduler` parallelize chunk downloads across multiple independent providers.
 
-To manually test the pipeline, you can use the `content-test` CLI utility. As development progresses, this tool supports extensive commands for debugging and manual validation.
+```text
+                     DHT (Control Plane)
+                              │
+                    FindProviders(ContentID)
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+               Provider A          Provider B
+                (Seed 1)            (Seed 2)
+                    │                   │
+                    │   /cipher/chunk   │
+                    └───►   Client  ◄───┘
+```
 
-1. **Build the Test CLI**:
+#### Manual Walkthrough:
+1. **Start Bootstrap**:
    ```bash
-   go build -o bin/content-test ./cmd/content-test
+   go run cmd/bootstrap/main.go -p 4003 -identity ./store_boot/boot.key
+   ```
+2. **Publish Content**:
+   ```bash
+   go run cmd/publisher/main.go -file video.mp4 -store ./store_shared -seed=false
+   ```
+3. **Start Provider A (Port 4001)**:
+   ```bash
+   go run cmd/provider/main.go -p 4001 -ws-port 4002 -store ./store_shared -identity ./store_a/a.key -bootstrap "<BOOTSTRAP_MULTIADDR>"
+   ```
+4. **Start Provider B (Port 4010)**:
+   ```bash
+   go run cmd/provider/main.go -p 4010 -ws-port 4011 -store ./store_shared -identity ./store_b/b.key -bootstrap "<BOOTSTRAP_MULTIADDR>"
+   ```
+5. **Run Client with DHT Discovery**:
+   ```bash
+   go run cmd/client/main.go -bootstrap "<BOOTSTRAP_MULTIADDR>" -fetch "<CONTENT_ID>" -key "<KEY>" -out downloaded.mp4
+   ```
+6. **Observe Swarm Metrics**:
+   The client logs will display chunk contributions divided between Provider A and Provider B:
+   ```text
+   --- Peer Contribution Metrics ---
+   Peer 12D3KooW... (Provider A): 16 chunks (50.0%)
+   Peer 12D3KooX... (Provider B): 16 chunks (50.0%)
+   ---------------------------------
    ```
 
-2. **Ingest a File**:
-   Create a sample file and run the ingest command:
+---
+
+### Scenario 4: Provider Failure & Dynamic Re-scheduling
+**Objective**: Prove that killing one Provider midway through a download triggers the Scheduler retry policy, transparently redirecting remaining chunk tasks to surviving providers.
+
+1. Initiate a large file transfer (e.g., 50MB) with Provider A and Provider B active.
+2. Kill Provider A midway (`Ctrl+C` or `kill -9`).
+3. **Expected Behavior**:
+   - Active worker requests to Provider A time out / error.
+   - `Scheduler` catches the failure, marks Provider A unavailable, and pushes pending `ChunkTask`s back into the queue.
+   - Surviving worker connected to Provider B fetches the remaining chunks.
+   - Client reassembles the file without error.
+
+---
+
+### Scenario 5: Public Relay & DCUtR Hole Punching (NAT Traversal)
+**Objective**: Connect across NATs/firewalls via a public `circuitv2` relay and verify automatic, seamless upgrade to direct TCP/UDP sockets via DCUtR.
+
+1. **Start Public Relay (on cloud VM / Azure / Ubuntu)**:
    ```bash
-   mkdir -p test_files
-   echo "This is a test file for the content engine." > test_files/sample.txt
-   ./bin/content-test -ingest test_files/sample.txt
+   go run cmd/relay/main.go
    ```
-   *Expected Output*: The CLI will log the total chunks created and save `test_files/manifest.json`. Check the `./test_files/content_store/` directory to see the stored encrypted chunks sharded by their SHA-256 hashes.
-
-3. **Reassemble the File**:
-   Using only the generated manifest and the chunks in the local store, reassemble the original file:
+   *Copy the relay multiaddress:* `/ip4/<PUBLIC_IP>/tcp/4001/p2p/<RELAY_PEER_ID>`
+2. **Start Provider behind NAT**:
    ```bash
-   ./bin/content-test -out test_files/restored.txt
+   go run cmd/provider/main.go -p 4001 -store ./provider_store -relay "/ip4/<PUBLIC_IP>/tcp/4001/p2p/<RELAY_ID>" -bootstrap "<BOOTSTRAP_ADDR>"
    ```
-   *Expected Output*: The `restored.txt` file will be created and its contents should perfectly match `sample.txt`.
-
-4. **Future CLI Commands (Planned)**:
-   For debugging future distributed networks, the CLI will support advanced validation:
+3. **Start Client on separate machine / network**:
    ```bash
-   ./bin/content-test verify test_manifest.json
-   ./bin/content-test inspect test_manifest.json
-   ./bin/content-test list
-   ./bin/content-test corrupt <chunkID>
-   ./bin/content-test delete <chunkID>
+   go run cmd/client/main.go -relay "/ip4/<PUBLIC_IP>/tcp/4001/p2p/<RELAY_ID>" -bootstrap "<BOOTSTRAP_ADDR>" -fetch "<CID>" -key "<KEY>" -out output.mp4
    ```
+4. **Verify DCUtR Upgrade**:
+   - Initial connection is established over the limited relay circuit.
+   - DCUtR executes simultaneous hole punch in the background (`[DCUtR] Hole Punch Event: StartHolePunch` $\rightarrow$ `EndHolePunch`).
+   - Transfer shifts to high-throughput direct socket (`Path: Direct`).
 
-## Multi-peer Swarming (Milestone 10)
+---
 
-Milestone 10 introduced a deterministic chunk scheduler that enables concurrent downloading from multiple peers using a worker pool.
+## 📊 Unit & Robustness Test Suites
 
-- [☑️] **Concurrent Downloading**: The scheduler distributes `ChunkTask` assignments to available workers via a thread-safe `ChunkQueue`, executing parallel downloads.
-- [☑️] **Architectural Isolation**: `TransferManager` cleanly owns session state, lifecycle, and progress, while `Scheduler` solely handles work distribution. 
-- [☑️] **Resilient Retry Policy**: Failed chunk fetches correctly push tasks back to the queue (up to a max attempt limit) rather than failing the entire download or infinitely looping.
-- [☑️] **Multiple Target Input**: The CLI accepts a comma-separated list of multiaddresses (e.g., `-d <addr1>,<addr2>`) to dial multiple seeds simultaneously.
+### Content Engine Suite
+```bash
+CGO_ENABLED=0 go test -v ./internal/content/...
+```
+- **Chunking**: Fixed/dynamic slicing (32KB/256KB).
+- **Crypto**: XChaCha20-Poly1305 in-place chunk encryption with unique 192-bit nonces.
+- **Integrity**: SHA-256 ciphertext content-addressing (`[32]byte`).
+- **Manifest**: Serialization/deserialization of immutable capability files.
+- **CAS Store**: Sharded directory hashing (`store/ab/cd/...`).
 
-### Manual Swarm Testing (Phases)
-1. **Phase 1: Concurrency**
-   - *Important Note:* The Content Engine encrypts chunks independently using random 24-byte nonces. You cannot ingest the same file on three peers to simulate swarming, as they will generate different ContentIDs. Instead, ingest it once and have the others download it to become identical seeds.
-   - **Step 1:** Start Peer A and ingest the file: 
-     `CIPHER_CONFIG_DIR=/tmp/peerA ./bin/peer -p 55555 -store ./storeA -ingest test.mp4`
-   - **Step 2:** Start Peer B and fetch from Peer A to become a seed:
-     `CIPHER_CONFIG_DIR=/tmp/peerB ./bin/peer -p 55556 -store ./storeB -d <Peer A Address> -fetch <ContentID>`
-   - **Step 3:** Start Peer C and fetch from Peer A (or B) to become a seed:
-     `CIPHER_CONFIG_DIR=/tmp/peerC ./bin/peer -p 55557 -store ./storeC -d <Peer A Address> -fetch <ContentID>`
-   - **Step 4:** Start the Downloader (Peer D) and fetch from all three seeds concurrently:
-     `CIPHER_CONFIG_DIR=/tmp/peerD ./bin/peer -store ./storeD -d <PeerA_Addr>,<PeerB_Addr>,<PeerC_Addr> -fetch <ContentID> -reassemble out.mp4`
-   - *Result Validation (Cross-Platform/Network):* Successfully verified downloading across completely separate networks (e.g. 1000km+ long distance) using a dedicated Azure VM as a `circuitv2` public relay. The `libp2p` instances flawlessly negotiated AutoNAT reachability and executed a DCUtR Hole Punch, shifting the data transfer off the Azure relay and onto a direct P2P TCP/UDP connection between the peers.
-2. **Phase 2: Recovery**
-   - Disconnect Peer B midway through the download.
-   - Verify the scheduler correctly handles the network error, requeues the chunks, and finishes the download via Peers A and C.
-3. **Phase 3: Partial Availability (Future)**
-   - Test scheduling when peers only possess specific chunk ranges.
+### Chunk Wire Protocol Suite
+```bash
+CGO_ENABLED=0 go test -v ./internal/protocol/chunk/...
+```
+- **Message Encoding**: Binary symmetric envelope validation (Version, Type, Payload).
+- **Stream Handlers**: Request-response handling for `REQUEST_MANIFEST`, `MANIFEST`, `REQUEST_CHUNK`, `CHUNK`, `ACK`, `ERROR`.
+- **Integrity Rejection**: Corrupt payloads immediately rejected before hitting disk.
 
-## Continuous Integration
-Tests are intended to be executed automatically upon pull requests via standard CI pipelines to maintain code quality across iterations.
+### 1000-Iteration Robustness Gauntlet
+```bash
+CGO_ENABLED=0 go test -v ./test/robustness/...
+```
+Generates random binary payloads, randomized chunk sizes, randomized encryption keys, ingests, shuffles chunks, reconstructs, and validates SHA-256 byte-for-byte identity across 1000 iterations.
+
+---
+
+## 🛠️ CLI Quick Reference
+
+```bash
+# Publisher: Ingest file and print CID + Key
+go run cmd/publisher/main.go -file <file> -store <store_dir> -seed=false
+
+# Provider: Start long-running storage node
+go run cmd/provider/main.go -p 4001 -ws-port 4002 -store <store_dir> -bootstrap <boot_multiaddr>
+
+# Client: Fetch content via DHT and reassemble
+go run cmd/client/main.go -bootstrap <boot_multiaddr> -fetch <CID> -key <KEY_HEX> -out <output_path>
+
+# Client: Query active download sessions
+go run cmd/client/main.go -store <store_dir> -status
+
+# Client: Cancel a download session
+go run cmd/client/main.go -store <store_dir> -cancel <CID>
+```

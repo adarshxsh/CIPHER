@@ -1,147 +1,279 @@
-# CIPHER P2P Architecture
+# CIPHER P2P Protocol Architecture
 
-## Overview
-The CIPHER project is built on top of [libp2p](https://libp2p.io/), utilizing a modular approach to separate concerns across the transport, identity, cryptography, and protocol layers.
+Welcome to the **CIPHER** protocol architecture guide. This document serves as the comprehensive technical reference for new and existing team members to understand the design, subsystems, and data flows of the CIPHER decentralized content delivery network.
 
-## Modules
+---
 
-### `cmd/` (Entrypoints)
-- **peer**: The standard client node participating in the network.
-- **relay**: A specialized node designed to relay traffic between peers that may be behind NATs or firewalls.
+## 1. Executive Summary & Vision
 
-### `internal/` (Core Logic)
-- **transport**: Manages the initialization of libp2p hosts, connection establishment, and multiplexing.
-- **identity**: Handles peer ID generation, key management, and cryptographic identities. It includes a persistent identity system that ensures a node's `PeerID` remains constant across restarts by storing an Ed25519 private key in the user's OS-level configuration directory (`~/.config/cipher/`, `Library/Application Support/CIPHER/`, or `AppData/Roaming/CIPHER/`).
-- **crypto**: Provides standard cryptographic primitives for the broader application.
-- **protocol**: Defines the custom network protocol IDs and handling used by CIPHER, currently including `/cipher/chunk/1.0.0` for direct, content-addressed P2P communication.
-- **content**: The Content Engine Foundation. A completely decoupled pipeline that manages data ingestion above the transport layer. It contains:
-  - **chunker**: Splits files into variable-sized or fixed-sized chunks based on engine config.
-  - **crypto**: Encrypts and decrypts chunks independently using XChaCha20-Poly1305.
-  - **verifier**: Hashes and verifies chunk/file integrity using SHA-256.
-  - **manifest**: Manages immutable content capabilities (Chunk IDs, Hashes, Descriptors) decoupled from decryption rights.
-  - **storage**: Defines `ChunkSource` and `ChunkSink` interfaces. Currently implemented using local, content-addressed files.
-  - **engine**: The coordinator that wires the pipeline together (ingest and reassembly).
-- **transfer**: High-level orchestrator of network downloads with strict separation of concerns:
-  - **manager**: Owns transfer lifecycle, session state (resume/retry), and progress tracking without blocking.
-  - **scheduler**: Owns work distribution. It maintains a lock-free queue and spins up a worker pool to fetch chunks concurrently from multiple source peers.
+Centralized CDNs (Cloudflare, Fastly, CloudFront) are controlled by a handful of corporate entities. **CIPHER** is the alternative: a fully decentralized, content-addressed, and encrypted content delivery network where cryptography and peer-to-peer swarming replace centralized intermediaries.
 
-### Content Engine Data Flow
+### Core Architectural Principles
+1. **Decoupled Capabilities**: Content description (immutable Manifest) is decoupled from decryption rights (Content Key).
+2. **Encrypted Content-Addressing**: Data is chunked and encrypted independently (XChaCha20-Poly1305); chunks are identified strictly by the SHA-256 digest of their **ciphertext**.
+3. **Strict Control Plane vs. Data Plane Separation**: The Kademlia DHT is used exclusively for routing and provider discovery (`CID -> Provider PeerIDs`), while heavy data transfers occur over an optimized peer-to-peer wire protocol (`/cipher/chunk/1.0.0`).
+4. **Client-Side Swarming & Session State**: Multi-peer downloading, scheduling, retries, and resume tracking are maintained entirely on the client, keeping serving providers completely stateless.
+5. **Universal Connectivity**: Multi-transport support (TCP, WebSocket, QUIC) with automatic NAT traversal via libp2p `circuitv2` relays and transparent background socket upgrades via **DCUtR (Direct Connection Upgrade through Relay)**.
 
-The Content Engine completely decouples the application's data ingestion from the transport layer. It operates as an independent pipeline designed for a future decentralized encrypted CDN.
+---
+
+## 2. High-Level Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CONTROL PLANE                                  │
+│                                                                             │
+│      Bootstrap ──────────► Kademlia DHT ◄────────── Content Announcement    │
+│          │                 (Provider Records)                │              │
+│          └──────────────► Relay (Circuit v2) ◄───────────────┘              │
+│                         (NAT Traversal & DCUtR)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      │ Provider Discovery (CID -> PeerIDs)
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                DATA PLANE                                   │
+│                                                                             │
+│     Publisher                Provider A           Provider B                │
+│   (Ingest/Seed)              (CAS Store)          (CAS Store)               │
+│         │                         │                    │                    │
+│         └──────────────┐          │                    │                    │
+│                        ▼          ▼                    ▼                    │
+│                     Client (/cipher/chunk/1.0.0 Streams)                    │
+│                        │                                                    │
+│                        ├─ Parallel Fetch (Scheduler Worker Pool)            │
+│                        ├─ Verify Ciphertext Hash (SHA-256)                  │
+│                        ├─ Decrypt Out-of-Order (XChaCha20)                  │
+│                        └─ Reassemble Plaintext via Manifest                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Protocol Roles & Binary Entrypoints (`cmd/`)
+
+Rather than relying on monolithic nodes, CIPHER implements clean, decoupled protocol roles sharing the same core internal libraries:
+
+```text
+cmd/
+├── publisher/       # Ingests raw content, generates manifests & encryption keys, announces to DHT
+├── provider/        # Long-running daemon hosting CAS store, advertises hosted manifests, serves chunks
+├── client/          # Consumer CLI for discovering providers, parallel swarming retrieval, decryption & reassembly
+├── bootstrap/       # Kademlia DHT routing and network rendezvous node
+├── relay/           # Circuit v2 Relay node for NAT traversal and DCUtR coordination
+└── peer/            # Backward-compatible monolithic node (for legacy scripts)
+```
+
+### Role Breakdown
 
 ```mermaid
 graph TD
-    App[Application] -->|Raw File/Stream| Chunker
-    
-    subgraph Content Engine
-        Chunker[Chunker<br/>Splits into 256KB chunks] --> Crypto
-        Crypto[Crypto<br/>Encrypts via XChaCha20-Poly1305] --> Verifier
-        Verifier[Verifier<br/>Hashes ciphertext via SHA-256] --> Storage
-        Storage[(ContentStore<br/>Local FS-backed CAS)]
-        
-        ManifestBuilder[Manifest Builder]
-        Verifier -.->|Generates Chunk IDs| ManifestBuilder
+    subgraph Publisher
+        Pub[cmd/publisher] -->|1. Ingest Raw File| CE_Pub[Content Engine]
+        CE_Pub -->|2. Generate| Man[Manifest]
+        CE_Pub -->|3. Generate| Key[Decryption Key]
+        Pub -->|4. Announce CID| DHT_Pub[Kademlia DHT]
     end
-    
-    ManifestBuilder -->|Outputs| Manifest[Immutable Manifest]
+
+    subgraph Provider
+        Prov[cmd/provider] -->|Host| CAS[(FSStore CAS)]
+        Prov -->|Republish Manifests| DHT_Prov[Kademlia DHT]
+        Prov -->|Serve Streams| Proto_Prov["/cipher/chunk/1.0.0"]
+    end
+
+    subgraph Client
+        Cli[cmd/client] -->|1. FindProviders| DHT_Cli[Kademlia DHT]
+        Cli -->|2. Resolve Manifest| Proto_Cli["/cipher/chunk/1.0.0"]
+        Cli -->|3. Concurrent Download| TM[TransferManager + Scheduler]
+        Cli -->|4. Reassemble & Decrypt| Out[Plaintext File]
+    end
 ```
 
-#### 1. Core Data Structures
-- **Chunk & Headers**: Data is explicitly split into `ChunkHeader` and `Data` payload. This ensures headers (containing metadata like `Version`, `PlainSize`, and `CipherSize`) can be evaluated independently of the encrypted payload during network transmission.
-- **Strong Typing**: The engine uses strict `[32]byte` types for `ChunkID` and `ContentID` to avoid string-encoding bugs, maximize comparison speed, and reduce heap allocations.
+---
 
-#### 2. Cryptography & Verification
-- **Chunk Encryption (XChaCha20-Poly1305)**: Every chunk is encrypted independently. The engine generates secure 192-bit (24-byte) nonces automatically. Because chunks are encrypted independently, the engine natively supports out-of-order decryption and random access required by swarming protocols.
-- **Content-Addressing**: Chunks are identified strictly by the SHA-256 hash of their **ciphertext**. 
+## 4. Subsystems & Core Packages (`internal/`)
 
-#### 3. Content-Addressed Storage (CAS)
-- **Decoupled Sinks**: The storage layer is abstracted behind `ChunkSource` and `ChunkSink` interfaces, ensuring the engine never touches the filesystem directly.
-- **Sharded Local Storage**: The current `FSStore` implementation shards chunks using their hex-encoded hash prefixes (e.g., `store/ab/cd/abcdef123...`). This architecture mimics Git/IPFS to prevent filesystem degradation and inode limits when millions of chunks are persisted.
+### 4.1 Content Engine Foundation (`internal/content`)
+The Content Engine is a modular, standalone pipeline that decouples data processing from network transport:
 
-#### 4. Immutable Manifests
-The `manifest` module generates a cryptographic capability file after ingestion. It intentionally decouples the **content description** (the ordered `ChunkIDs` and tree root) from the **decryption rights** (the content key). This permits the system to distribute the manifest publicly for swarming while restricting the decryption key to authorized users. Manifests are persistently stored by the `FSStore` in a dedicated `manifests/` directory to ensure they survive node restarts.
+* **Chunker (`internal/content/chunker`)**: Slices data streams into fixed or variable chunks (default: 32KB for fast transfers / 256KB for bulk storage).
+* **Crypto (`internal/content/crypto`)**: Authenticated encryption using **XChaCha20-Poly1305** with random 192-bit (24-byte) nonces. Each chunk is encrypted independently, enabling random access, out-of-order decryption, and parallel processing.
+* **Verifier (`internal/content/verifier`)**: Computes SHA-256 digests over **ciphertext** to yield strong 32-byte identifiers (`ChunkID` and `ContentID`).
+* **Manifest (`internal/content/manifest`)**: Generates immutable cryptographic capability structures. Decouples the **content layout** (ordered ChunkIDs, chunk sizes, root hash) from the **decryption key**.
+* **Storage (`internal/content/storage`)**: Implements `ChunkSource`, `ChunkSink`, and `ManifestStore`. The default `FSStore` shards chunks into hex-prefixed subdirectories (e.g., `store/ab/cd/abcdef123...`) to avoid filesystem inode degradation.
 
-#### 5. Local Session Management & Multi-Device Swarming
-Instead of requiring servers to maintain download states, CIPHER utilizes a strictly **client-side session architecture** for resume, recovery, and multi-device swarming. The network transfer pipeline has been successfully proven to parallelize chunk requests across public relay networks and direct hole-punched paths across different physical devices.
+```mermaid
+graph LR
+    Raw[Raw File] --> Chunker[Chunker<br/>32KB/256KB]
+    Chunker --> Crypto[Crypto<br/>XChaCha20-Poly1305]
+    Crypto --> Verifier[Verifier<br/>SHA-256 Digest]
+    Verifier --> CAS[(FSStore CAS<br/>store/ab/cd/...)]
+    Verifier -.-> Manifest[Immutable Manifest]
+```
 
-#### 6. DHT Provider Lifecycle
-When a peer ingests a file, it announces its capability to provide that file to the Kademlia DHT. To ensure provider records do not expire or get lost upon node restarts, a background republisher runs periodically (every 12 hours) and immediately on startup to re-announce all locally available manifests to the network.
+---
 
-The network transfer pipeline follows a strict hierarchy:
+### 4.2 Data Transfer Protocol (`internal/protocol/chunk`)
+Protocol ID: `/cipher/chunk/1.0.0`
+
+The data plane protocol is strictly stateless, binary, and optimized for high throughput.
+
+#### Wire Message Envelope
+```text
+┌────────────────┬───────────────┬────────────────┬──────────────────────────┐
+│  Version (1B)  │   Type (1B)   │  Length (4B)   │      Payload (NB)        │
+└────────────────┴───────────────┴────────────────┴──────────────────────────┘
+```
+
+#### Supported Message Types:
+1. `MsgRequestManifest` (0x01): Requests the manifest for a given 32-byte `ContentID`.
+2. `MsgManifest` (0x02): Returns serialized manifest bytes.
+3. `MsgRequestChunk` (0x03): Requests an encrypted chunk by 32-byte `ChunkID`.
+4. `MsgChunk` (0x04): Transmits header metadata + encrypted chunk ciphertext.
+5. `MsgAck` (0x05): Acknowledges chunk receipt.
+6. `MsgError` (0x06): Communicates error codes (`ErrNotFound`, `ErrCorrupted`, `ErrBadRequest`).
+
+---
+
+### 4.3 Swarming & Transfer Orchestration (`internal/transfer`)
 
 ```text
-Application (CLI, Gateway)
+Application (CLI, Client)
         │
         ▼
-TransferManager (Session, Progress, Retry Policy)
+TransferManager (Session state, bitset tracking, retry policies)
         │
         ▼
-Scheduler (Queue, Source Maps)
+Scheduler (Thread-safe chunk queue, worker assignment)
         │
+   ┌────┴────┐
+   ▼         ▼
+Worker 1   Worker 2 ... (Concurrent /cipher/chunk streams to Provider A, B)
+   │         │
+   └────┬────┘
         ▼
-Workers (Concurrent Fetching)
-        │
-        ▼
-Chunk Protocol (Stateless Network Comms)
-        │
-        ▼
-Content Engine (Verification & Storage)
+Content Engine (Verify SHA-256 -> CAS Storage -> Decrypt -> Reassemble)
 ```
 
-The `TransferManager` tracks progress using a boolean bitset and persists it locally (e.g., `sessions/<ContentID>.json`). Upon restart or failure, missing chunks are automatically queued into the `Scheduler`, which assigns them to available `Worker`s connecting to seed peers. The underlying `/cipher/chunk/1.0.0` protocol remains fully stateless and completely decoupled from orchestration logic.
+* **`TransferManager` (`internal/transfer/manager`)**: Manages transfer lifecycles and non-blocking progress tracking. Persists session state (`sessions/<ContentID>.json`) using a boolean bitset to guarantee atomic resume and idempotent skips.
+* **`Scheduler` (`internal/transfer/scheduler`)**: Distributes `ChunkTask` work across an active `Worker` pool connecting to discovered seed providers. If a provider drops or corrupts a chunk, tasks are requeued and reassigned to healthy peers.
 
-## Network Topology
-The network utilizes a hybrid peer-to-peer topology where standard peers connect to one another directly if possible, or fallback to utilizing `relay` nodes for NAT traversal and connectivity routing.
+---
 
-### Transport Abstraction
-To ensure that the application logic remains decoupled from the underlying transport state, CIPHER implements a `Transport` abstraction layer (`internal/transport/stream.go`). The application simply calls `Transport.Connect()` and `Transport.OpenStream()`. The Transport layer delegates the connection selection to libp2p, which autonomously manages background transport upgrades (e.g., Hole Punching) and provides the application with the best available path.
+### 4.4 Control Plane & Discovery (`internal/discovery`)
+CIPHER utilizes libp2p's Kademlia DHT (`go-libp2p-kad-dht`) in Server Mode.
 
-### Relay Connectivity & DCUtR Hole Punching (Circuit v2)
-CIPHER leverages go-libp2p's `circuitv2` protocol for initial relaying and NAT traversal coordination. By default, `circuitv2` establishes **limited** (transient) connections.
+* **Bootstrap (`Bootstrap`)**: Connects nodes to the DHT routing mesh via known bootstrap nodes.
+* **Provide (`Provide`)**: Announces to the DHT that the local node provides a specific `ContentID`.
+* **FindProviders (`FindProviders`)**: Queries the DHT routing table for provider records advertising a given `ContentID`.
+* **Republisher (`StartRepublisher`)**: Background daemon on Provider nodes that lists all local manifests from `FSStore` and re-announces them to the DHT periodically (default: every 12 hours) and immediately upon node startup.
 
-While the application can fall back to communicating over these limited relay connections using `network.WithAllowLimitedConn`, CIPHER employs **DCUtR (Direct Connection Upgrade through Relay)**. DCUtR opportunistically runs in the background upon the establishment of a relay circuit. It coordinates a UDP/TCP hole punch, and upon success, automatically establishes a direct connection. Subsequent application streams naturally prefer this direct, high-throughput path over the temporary relay circuit.
+---
 
-#### Hole Punching State Machine
-The sequence below illustrates how an application immediately connects via a relay, whilst DCUtR transparently upgrades the transport layer in the background.
+### 4.5 Transport & NAT Traversal (`internal/transport`)
+
+* **Multi-Transport Support**:
+  * Standard TCP (`/ip4/.../tcp/4001`)
+  * WebSocket (`/ip4/.../tcp/4002/ws`) for firewall evasion and browser compatibility
+  * UDP / QUIC (`/ip4/.../udp/4002/quic-v1`)
+* **Transport Abstraction (`Transport`)**: Provides a clean interface (`Connect`, `ConnectPeer`, `OpenStream`) delegating connection routing to libp2p.
+* **Circuit v2 Relays & DCUtR Hole Punching**:
+  1. Nodes behind NATs automatically connect to static `circuitv2` public relays and reserve transient slots.
+  2. When a remote peer connects via the relay address (`/p2p-circuit/...`), libp2p's **DCUtR** service triggers simultaneous UDP/TCP hole punching in the background.
+  3. Upon successful hole punch, libp2p transparently upgrades all new application streams to a high-speed direct socket.
 
 ```mermaid
 sequenceDiagram
-    participant App as Application
-    participant Transport
-    participant Libp2p
+    participant Client as Client Node
     participant Relay as Circuit v2 Relay
-    participant Remote as Target Peer (NAT)
+    participant Provider as Provider Node (Behind NAT)
 
-    App->>Transport: Connect(Peer)
-    Transport->>Libp2p: Connect(Relay Multiaddr)
-    Libp2p->>Relay: Reserve & Connect
-    Relay->>Remote: Route Connection
-    Libp2p-->>Transport: Connected (Limited)
-    Transport-->>App: OK
+    Note over Client, Provider: Control Plane & Relay Reservation
+    Provider->>Relay: Connect & Reserve Slot
+    Client->>Relay: Connect to Provider via Relay
+    Relay-->>Client: Stream established (Relayed)
 
-    App->>Transport: OpenStream(Peer)
-    Transport->>Libp2p: NewStream(WithAllowLimitedConn)
-    Libp2p-->>App: Stream (via Relay)
-    
-    note over Libp2p, Remote: DCUtR Background Process
-    Libp2p->>Remote: StartHolePunchEvt
-    Libp2p->>Remote: HolePunchAttemptEvt (Simultaneous Dial)
-    Remote-->>Libp2p: Direct Connection Established!
-    Libp2p->>Libp2p: EndHolePunchEvt (Success)
-    
-    note right of App: App unaware of transport shift
-    App->>Transport: OpenStream(Peer)
-    Transport->>Libp2p: NewStream()
-    Libp2p-->>App: Stream (via Direct Transport)
+    Note over Client, Provider: Background DCUtR Hole Punch
+    Client->>Provider: StartHolePunch Event (Simultaneous Dial)
+    Provider-->>Client: Direct Socket Established!
+
+    Note over Client, Provider: High-Throughput Data Plane
+    Client->>Provider: OpenStream(/cipher/chunk/1.0.0) [Direct Transport]
+    Client->>Provider: Parallel REQUEST_CHUNK streams
+    Provider-->>Client: CHUNK payloads
 ```
 
+---
+
+### 4.6 Identity Management (`internal/identity`)
+* Generates and marshals persistent Ed25519 cryptographic keypairs.
+* Stores keys in platform-specific user config directories (`~/.config/cipher/`, `Library/Application Support/CIPHER/`, `AppData/Roaming/CIPHER/`) or custom paths via `-identity <path>`.
+* Guarantees immutable `PeerID`s across process restarts.
+
+---
+
+## 5. End-to-End Workflow: Ingest to Retrieval
+
 ```mermaid
-graph TD
-    subgraph Direct Connection
-        PeerA["Peer A (Listener)"] <-->|"/cipher/chunk/1.0.0"| PeerB["Peer B (Dialer)"]
+sequenceDiagram
+    autonumber
+    actor Alice as Publisher
+    participant DHT as Kademlia DHT
+    participant Bob as Provider
+    actor Charlie as Client
+
+    Note over Alice: 1. Content Ingestion
+    Alice->>Alice: Ingest file -> 32KB chunks -> XChaCha20 encrypt -> SHA-256 hashes -> Manifest
+    Alice->>Bob: Transfer/Seed CAS store & Manifests
+    Bob->>DHT: discovery.Provide(ContentID)
+
+    Note over Charlie: 2. Decentralized Discovery
+    Charlie->>DHT: FindProviders(ContentID)
+    DHT-->>Charlie: Return Provider AddrInfo [Bob]
+
+    Note over Charlie, Bob: 3. Swarming Retrieval & Reassembly
+    Charlie->>Bob: Connect (Direct / DCUtR / Relay)
+    Charlie->>Bob: REQUEST_MANIFEST(ContentID)
+    Bob-->>Charlie: MANIFEST (ChunkIDs list)
+    loop Parallel Chunk Swarm
+        Charlie->>Bob: REQUEST_CHUNK(ChunkID)
+        Bob-->>Charlie: CHUNK (Ciphertext + Tag)
+        Charlie->>Charlie: Verify SHA-256(Ciphertext) == ChunkID
     end
-    subgraph Relayed Connection
-        PeerC["Peer C (NAT)"] -->|Circuit v2 Reservation| Relay["Relay Node"]
-        Relay -->|Relayed Stream| PeerD["Peer D (NAT)"]
-    end
+    Charlie->>Charlie: Out-of-order XChaCha20 Decrypt(Key) -> Reassemble Plaintext
+```
+
+---
+
+## 6. Directory Layout Reference
+
+```text
+CIPHER/
+├── p2p_transport/
+│   ├── cmd/
+│   │   ├── publisher/           # Content ingestion and seeding entrypoint
+│   │   ├── provider/            # Persistent CAS hosting and chunk serving daemon
+│   │   ├── client/              # Content retrieval and reassembly CLI
+│   │   ├── bootstrap/           # DHT bootstrap rendezvous node
+│   │   ├── relay/               # Circuit v2 Relay node
+│   │   ├── content-test/        # Offline content engine testing utility
+│   │   └── peer/                # Legacy all-in-one peer entrypoint
+│   ├── internal/
+│   │   ├── content/             # Chunker, Crypto (XChaCha20), Digest, Manifest, FSStore
+│   │   ├── discovery/           # DHT initialization, Provide, FindProviders, Republisher
+│   │   ├── identity/            # Ed25519 persistent and custom key management
+│   │   ├── protocol/chunk/      # /cipher/chunk/1.0.0 wire messages, handler, client
+│   │   ├── retrieval/           # Manifest resolver helper
+│   │   ├── transfer/            # TransferManager, FileSessionManager, Scheduler, Worker pool
+│   │   └── transport/           # libp2p Host creation, Multi-transport, AutoNAT, DCUtR
+│   ├── docs/
+│   │   ├── architecture.md      # This document
+│   │   ├── testing.md           # Testing guide and scenarios
+│   │   ├── relay_deployment.md  # Cloud relay deployment guide
+│   │   └── roadmap.md           # Project roadmap and milestones
+│   └── test/
+│       └── robustness/          # 1000-iteration engine robustness tests
+├── test_roles.sh                # Automated role integration test script
+├── test_provider_independent.sh # Provider independence & restart persistence test script
+└── test_transfer.sh             # Legacy peer transfer script
 ```

@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 
 	golog "github.com/ipfs/go-log/v2"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 )
@@ -56,7 +57,7 @@ func main() {
 
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
-	// Testing Flags
+	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
@@ -65,7 +66,13 @@ func main() {
 	defer cancel()
 
 	// Load or create private key for the newNode
-	priv, err := identity.LoadOrCreate()
+	var priv libp2pcrypto.PrivKey
+	var err error
+	if *identityPath != "" {
+		priv, err = identity.LoadOrCreateFromPath(*identityPath)
+	} else {
+		priv, err = identity.LoadOrCreate()
+	}
 	if err != nil {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
