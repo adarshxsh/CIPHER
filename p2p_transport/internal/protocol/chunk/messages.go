@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"cipher/internal/content/core"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 const (
@@ -78,22 +79,26 @@ func ReadMessage(r io.Reader) (*Message, error) {
 		return nil, errors.New("message exceeds maximum frame size")
 	}
 
-	data := make([]byte, size)
+	data := pool.Get(int(size))
 	if _, err := io.ReadFull(r, data); err != nil {
+		pool.Put(data)
 		return nil, err
 	}
 
 	buf := bytes.NewReader(data)
 	msg := &Message{}
 	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
+		pool.Put(data)
 		return nil, err
 	}
 	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
+		pool.Put(data)
 		return nil, err
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
+	msg.Payload = pool.Get(buf.Len())
+	copy(msg.Payload, data[len(data)-buf.Len():])
+	pool.Put(data)
 
 	return msg, nil
 }
@@ -132,7 +137,9 @@ func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
 	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+	manifestData := make([]byte, len(payload)-32)
+	copy(manifestData, payload[32:])
+	return id, manifestData, nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
@@ -173,8 +180,9 @@ func ParseChunk(payload []byte) (*core.Chunk, error) {
 	if err := binary.Read(buf, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, err
 	}
-	chunk.Data = make([]byte, buf.Len())
-	buf.Read(chunk.Data)
+	chunkData := pool.Get(buf.Len())
+	copy(chunkData, payload[len(payload)-buf.Len():])
+	chunk.Data = chunkData
 	return chunk, nil
 }
 
