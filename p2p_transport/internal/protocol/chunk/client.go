@@ -47,21 +47,29 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	frame, err := DecodeFrame(c.stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.Type == MsgError {
-		code, msg, _ := ParseError(resp.Payload)
+	if err := ValidateMessagePayload(frame.MessageType, frame.Payload); err != nil {
+		return nil, fmt.Errorf("invalid response payload structure: %w", err)
+	}
+
+	if frame.MessageType == MsgError {
+		code, msg, _ := ParseError(frame.Payload)
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
-	if resp.Type != MsgManifest {
-		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
+	if frame.MessageType != MsgManifest {
+		return nil, fmt.Errorf("expected MANIFEST, got %d", frame.MessageType)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	if err := ValidateManifestForRequest(id, frame.Payload); err != nil {
+		return nil, fmt.Errorf("manifest validation failed: %w", err)
+	}
+
+	respID, data, err := ParseManifest(frame.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -94,24 +102,32 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	frame, err := DecodeFrame(c.stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.Type == MsgError {
-		code, msg, _ := ParseError(resp.Payload)
+	if err := ValidateMessagePayload(frame.MessageType, frame.Payload); err != nil {
+		return nil, fmt.Errorf("invalid response payload structure: %w", err)
+	}
+
+	if frame.MessageType == MsgError {
+		code, msg, _ := ParseError(frame.Payload)
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
-	if resp.Type != MsgChunk {
-		return nil, fmt.Errorf("expected CHUNK, got %d", resp.Type)
+	if frame.MessageType != MsgChunk {
+		return nil, fmt.Errorf("expected CHUNK, got %d", frame.MessageType)
 	}
 
-	chunk, err := ParseChunk(resp.Payload)
+	if err := ValidateChunkForRequest(chunkID, frame.Payload); err != nil {
+		return nil, fmt.Errorf("chunk validation failed: %w", err)
+	}
+
+	chunk, err := ParseChunk(frame.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse chunk: %w", err)
 	}

@@ -2,9 +2,12 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
+	"net"
+	"strings"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -29,26 +32,49 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	return handler
 }
 
+func isStreamClosedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "stream reset") || strings.Contains(msg, "use of closed network connection") || strings.Contains(msg, "EOF")
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		frame, err := DecodeFrame(s)
 		if err != nil {
-			if err == io.EOF || err.Error() == "stream reset" {
+			if isStreamClosedErr(err) {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
-			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			log.Printf("[Chunk Protocol] Error decoding frame: %v", err)
+			if errors.Is(err, ErrInvalidProtocolVersion) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			} else if errors.Is(err, ErrUnknownMessageType) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			} else if errors.Is(err, ErrPayloadTooLarge) || errors.Is(err, ErrInvalidPayloadSize) {
+				WriteMessage(s, BuildError(ErrBadRequest, "invalid payload size"))
+			}
 			return
 		}
 
-		if msg.Version != CurrentMessageVersion {
-			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+		if err := ValidateMessagePayload(frame.MessageType, frame.Payload); err != nil {
+			log.Printf("[Chunk Protocol] Structural validation failed: %v", err)
+			WriteMessage(s, BuildError(ErrBadRequest, "invalid payload structure"))
 			return
+		}
+
+		msg := &Message{
+			Version: frame.Version,
+			Type:    frame.MessageType,
+			Payload: frame.Payload,
 		}
 
 		switch msg.Type {
@@ -59,6 +85,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			return
 		}
 	}
 }
@@ -116,18 +143,34 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
-	ackMsg, err := ReadMessage(s)
+	ackFrame, err := DecodeFrame(s)
 	if err != nil {
-		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
+		if !isStreamClosedErr(err) {
+			log.Printf("[Chunk Protocol] Error reading ACK frame: %v", err)
+			if errors.Is(err, ErrInvalidProtocolVersion) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			} else if errors.Is(err, ErrPayloadTooLarge) || errors.Is(err, ErrInvalidPayloadSize) {
+				WriteMessage(s, BuildError(ErrBadRequest, "invalid payload size"))
+			}
+		}
 		return
 	}
-	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
+
+	if err := ValidateMessagePayload(ackFrame.MessageType, ackFrame.Payload); err != nil {
+		log.Printf("[Chunk Protocol] Structural validation failed for ACK stream: %v", err)
+		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload structure"))
+		return
+	}
+
+	if ackFrame.MessageType == MsgError {
+		code, msgStr, _ := ParseError(ackFrame.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
-	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+
+	if ackFrame.MessageType != MsgAck {
+		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackFrame.MessageType)
+		WriteMessage(s, BuildError(ErrBadRequest, "expected ACK"))
 		return
 	}
 }
