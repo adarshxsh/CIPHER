@@ -12,6 +12,7 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/sanitizer"
 	"cipher/internal/transport"
 )
 
@@ -54,7 +55,7 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
-		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
+		return nil, fmt.Errorf("remote error (code %d): %s", code, sanitizer.Sanitize(msg))
 	}
 
 	if resp.Type != MsgManifest {
@@ -104,7 +105,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
-		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
+		return nil, fmt.Errorf("remote error (code %d): %s", code, sanitizer.Sanitize(msg))
 	}
 
 	if resp.Type != MsgChunk {
