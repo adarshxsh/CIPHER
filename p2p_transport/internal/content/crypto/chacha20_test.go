@@ -27,6 +27,10 @@ func TestChaCha20Encryptor(t *testing.T) {
 		t.Fatalf("failed to encrypt: %v", err)
 	}
 
+	if len(chunk.Header.Nonce) != 24 {
+		t.Errorf("expected 24-byte nonce, got %d bytes", len(chunk.Header.Nonce))
+	}
+
 	if chunk.Header.CipherSize != uint32(len(chunk.Data)) {
 		t.Errorf("expected CipherSize to match Data length")
 	}
@@ -46,6 +50,38 @@ func TestChaCha20Encryptor(t *testing.T) {
 
 	if !bytes.Equal(chunk.Data, originalData) {
 		t.Errorf("decrypted data %q doesn't match original %q", chunk.Data, originalData)
+	}
+}
+
+func TestChaCha20Encryptor_RandomNonce(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     1,
+			PlainSize: 5,
+		},
+		Data: []byte("hello"),
+	}
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     1, // Same chunk index
+			PlainSize: 5,
+		},
+		Data: []byte("hello"),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk1: %v", err)
+	}
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk2: %v", err)
+	}
+
+	if bytes.Equal(chunk1.Header.Nonce[:], chunk2.Header.Nonce[:]) {
+		t.Errorf("expected nonces to be random and distinct across encryptions")
 	}
 }
 
