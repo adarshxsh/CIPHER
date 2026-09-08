@@ -49,6 +49,7 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		log.Printf("[Chunk Protocol] Warning: validation error reading Resolve response: %v", err)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -96,6 +97,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		log.Printf("[Chunk Protocol] Warning: validation error reading FetchChunk response: %v", err)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
