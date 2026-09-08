@@ -78,6 +78,9 @@ const (
 	// Manifest responses can be larger than request payloads but remain bound
 	// by the frame cap.
 	MaxManifestSize = MaxMessagePayloadSize
+
+	// MaxAttestationAgeSeconds limits the maximum age or clock skew for provider attestations (5 minutes).
+	MaxAttestationAgeSeconds int64 = 300
 )
 
 const (

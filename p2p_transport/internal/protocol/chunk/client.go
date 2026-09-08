@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -59,15 +60,45 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	manifestResp, err := ParseManifest(resp.Payload)
 	if err != nil {
-		return nil, err
-	}
-	if respID != id {
-		return nil, fmt.Errorf("content ID mismatch in response")
+		return nil, fmt.Errorf("failed to parse manifest response: %w", err)
 	}
 
-	return data, nil
+	if manifestResp.ContentID != id {
+		return nil, fmt.Errorf("content ID mismatch in response: expected %x, got %x", id, manifestResp.ContentID)
+	}
+
+	remotePeerID := c.stream.Conn().RemotePeer()
+	if manifestResp.ProviderID != remotePeerID {
+		return nil, fmt.Errorf("provider peer ID mismatch: expected %s, got %s", remotePeerID, manifestResp.ProviderID)
+	}
+
+	now := time.Now().Unix()
+	diff := now - manifestResp.Timestamp
+	if diff > MaxAttestationAgeSeconds || diff < -MaxAttestationAgeSeconds {
+		return nil, fmt.Errorf("manifest ownership attestation timestamp expired or in future: timestamp=%d, current=%d", manifestResp.Timestamp, now)
+	}
+
+	pubKey := c.stream.Conn().RemotePublicKey()
+	if pubKey == nil {
+		var err error
+		pubKey, err = remotePeerID.ExtractPublicKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract public key for remote peer %s: %w", remotePeerID, err)
+		}
+	}
+	if pubKey == nil {
+		return nil, fmt.Errorf("failed to obtain public key for remote peer %s", remotePeerID)
+	}
+
+	attestationData := FormatAttestationData(manifestResp.ContentID, manifestResp.ProviderID, manifestResp.Timestamp)
+	valid, err := pubKey.Verify(attestationData, manifestResp.Signature)
+	if err != nil || !valid {
+		return nil, fmt.Errorf("provider ownership attestation signature verification failed for peer %s", remotePeerID)
+	}
+
+	return manifestResp.Data, nil
 }
 
 // Download requests and retrieves a list of chunks from the remote peer, storing them in the local content engine.
