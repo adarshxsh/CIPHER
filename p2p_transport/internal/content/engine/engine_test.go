@@ -56,6 +56,15 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("manifest size %d != expected %d", m.Descriptor.Size, len(originalData))
 	}
 
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("failed to serialize manifest: %v", err)
+	}
+	expectedID := dig.Sum(mBytes)
+	if core.Hash(m.Descriptor.ID) != expectedID {
+		t.Fatalf("content ID %x does not match SHA-256 digest of manifest JSON %x", m.Descriptor.ID, expectedID)
+	}
+
 	expectedChunks := (len(originalData) + int(config.ChunkSize) - 1) / int(config.ChunkSize)
 	if len(m.ChunkIDs) != expectedChunks {
 		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
