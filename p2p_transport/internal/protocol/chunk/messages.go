@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +207,24 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+// SanitizeString removes control characters, non-printable characters, and newlines from untrusted strings.
+func SanitizeString(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		if r == unicode.ReplacementChar {
+			continue
+		}
+		if unicode.IsPrint(r) && !unicode.IsControl(r) && r != '\n' && r != '\r' {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	return ErrorCode(payload[0]), SanitizeString(string(payload[1:])), nil
 }
