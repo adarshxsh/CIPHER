@@ -12,6 +12,11 @@ import (
 	"cipher/internal/content/core"
 )
 
+const (
+	// MaxChunkPayloadSize caps allowed chunk payload sizes in local storage (2 MiB).
+	MaxChunkPayloadSize = 2 * 1024 * 1024
+)
+
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
 	baseDir string
@@ -94,22 +99,51 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+	fileSize := info.Size()
+
 	chunk := &core.Chunk{}
+	headerSize := int64(binary.Size(&chunk.Header))
+	if fileSize < headerSize {
+		return nil, fmt.Errorf("chunk file size %d is too small for header (%d bytes required)", fileSize, headerSize)
+	}
+
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read chunk data: %w", err)
+	// Calculate expected payload size from header (CipherSize takes precedence if non-zero, otherwise PlainSize)
+	expectedPayloadSize := uint64(chunk.Header.CipherSize)
+	if expectedPayloadSize == 0 {
+		expectedPayloadSize = uint64(chunk.Header.PlainSize)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
+	if expectedPayloadSize > MaxChunkPayloadSize {
+		return nil, fmt.Errorf("chunk payload size %d exceeds maximum allowed limit (%d bytes)", expectedPayloadSize, MaxChunkPayloadSize)
+	}
+
+	expectedTotalSize := headerSize + int64(expectedPayloadSize)
+	if fileSize < expectedTotalSize {
+		return nil, fmt.Errorf("chunk file size %d is less than expected total size %d (header %d + payload %d)", fileSize, expectedTotalSize, headerSize, expectedPayloadSize)
+	}
+	if fileSize > expectedTotalSize {
+		return nil, fmt.Errorf("chunk file size %d has extra trailing bytes past expected total size %d", fileSize, expectedTotalSize)
+	}
+
+	data := make([]byte, expectedPayloadSize)
+	limitReader := io.LimitReader(f, int64(expectedPayloadSize))
+	if _, err := io.ReadFull(limitReader, data); err != nil {
+		return nil, fmt.Errorf("failed to read exact chunk payload: %w", err)
+	}
+
+	var extra [1]byte
+	if n, _ := f.Read(extra[:]); n > 0 {
+		return nil, fmt.Errorf("extra trailing bytes found in chunk file")
+	}
+
 	chunk.Data = data
 
 	return chunk, nil
