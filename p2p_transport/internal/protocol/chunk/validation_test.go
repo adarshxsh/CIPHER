@@ -129,3 +129,33 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_EnforcesBounds(t *testing.T) {
+	// Too small (< 32 bytes)
+	tooSmall := make([]byte, 31)
+	err := chunk.ValidateManifestPayload(tooSmall)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for payload < 32 bytes, got %v", err)
+	}
+
+	// Valid size (32 bytes)
+	valid := make([]byte, 32)
+	if err := chunk.ValidateManifestPayload(valid); err != nil {
+		t.Fatalf("expected valid 32-byte manifest payload to pass, got %v", err)
+	}
+
+	// Oversized (> MaxManifestSize)
+	tooLarge := make([]byte, chunk.MaxManifestSize+1)
+	err = chunk.ValidateManifestPayload(tooLarge)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for payload > MaxManifestSize, got %v", err)
+	}
+}
+
+func TestParseManifest_EnforcesBounds(t *testing.T) {
+	tooLarge := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err := chunk.ParseManifest(tooLarge)
+	if err == nil {
+		t.Fatalf("expected ParseManifest to fail for payload > MaxManifestSize")
+	}
+}

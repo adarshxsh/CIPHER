@@ -40,7 +40,15 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
-			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			log.Printf("[SECURITY/Chunk Protocol] Error reading message from %s: %v", s.Conn().RemotePeer(), err)
+			s.Reset()
+			return
+		}
+
+		if err := ValidateMessage(msg); err != nil {
+			log.Printf("[SECURITY/Chunk Protocol] Invalid message payload from %s: %v", s.Conn().RemotePeer(), err)
+			WriteMessage(s, BuildError(ErrBadRequest, "invalid message payload"))
+			s.Reset()
 			return
 		}
 
@@ -48,6 +56,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			s.Reset()
 			return
 		}
 
@@ -59,6 +68,8 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			s.Reset()
+			return
 		}
 	}
 }

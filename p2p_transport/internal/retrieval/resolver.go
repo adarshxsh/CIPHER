@@ -40,11 +40,10 @@ func ResolveManifest(
 		}
 
 		manifestData, err := client.Resolve(ctx, id)
-		client.Close()
-
 		if err != nil {
+			client.Close()
 			log.Printf(
-				"[DHT] Failed to resolve manifest from provider %s: %v",
+				"[SECURITY/DHT] Failed to resolve manifest from provider %s: %v",
 				provider,
 				err,
 			)
@@ -53,9 +52,11 @@ func ResolveManifest(
 		}
 
 		m, err := manifest.Deserialize(manifestData)
+		client.Close()
+
 		if err != nil {
 			log.Printf(
-				"[DHT] Provider %s returned invalid manifest: %v",
+				"[SECURITY/DHT] Provider %s returned invalid manifest: %v",
 				provider,
 				err,
 			)
