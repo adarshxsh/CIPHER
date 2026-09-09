@@ -72,8 +72,8 @@ const (
 	// KeyReveal normally contains a key and small identifying fields.
 	MaxKeyRevealSize = 256
 
-	// MaxProtocolErrorSize limits encoded protocol error responses.
-	MaxProtocolErrorSize = MaxErrorMessageSize + 128
+	// MaxProtocolErrorSize limits encoded protocol error responses (1 byte error code + 512 bytes error message).
+	MaxProtocolErrorSize = 1 + MaxErrorMessageSize
 
 	// Manifest responses can be larger than request payloads but remain bound
 	// by the frame cap.
