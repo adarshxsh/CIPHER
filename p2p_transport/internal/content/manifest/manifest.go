@@ -2,8 +2,19 @@ package manifest
 
 import (
 	"encoding/json"
+	"errors"
 	
 	"cipher/internal/content/core"
+)
+
+const (
+	// MaxManifestJSONSize is the maximum allowed byte length for raw manifest JSON payload.
+	// MaxManifestSize (2MB - 3) minus ContentIDSize (32) = 2097117 bytes.
+	MaxManifestJSONSize = 2097117
+)
+
+var (
+	ErrManifestTooLarge = errors.New("manifest data exceeds maximum size limit")
 )
 
 type ContentType string
@@ -47,6 +58,9 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if len(data) > MaxManifestJSONSize {
+		return nil, ErrManifestTooLarge
+	}
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err

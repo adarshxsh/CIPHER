@@ -105,3 +105,31 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseManifest_EnforcesBounds(t *testing.T) {
+	// 1. Too short
+	_, _, err := chunk.ParseManifest(make([]byte, chunk.ContentIDSize-1))
+	if err == nil {
+		t.Error("Expected error for too short manifest payload")
+	}
+
+	// 2. Max size valid
+	validPayload := make([]byte, chunk.MaxManifestSize)
+	validPayload[0] = 0x12
+	id, data, err := chunk.ParseManifest(validPayload)
+	if err != nil {
+		t.Fatalf("Expected valid ParseManifest, got: %v", err)
+	}
+	if id[0] != 0x12 {
+		t.Errorf("ContentID mismatch")
+	}
+	if len(data) != chunk.MaxManifestSize-chunk.ContentIDSize {
+		t.Errorf("Expected data len %d, got %d", chunk.MaxManifestSize-chunk.ContentIDSize, len(data))
+	}
+
+	// 3. Oversized payload
+	_, _, err = chunk.ParseManifest(make([]byte, chunk.MaxManifestSize+1))
+	if err == nil {
+		t.Error("Expected error for oversized manifest payload")
+	}
+}
