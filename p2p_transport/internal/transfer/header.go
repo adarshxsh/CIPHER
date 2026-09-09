@@ -7,7 +7,8 @@ import (
 )
 
 const (
-	ProtocolVersion1 byte = 1
+	ProtocolVersion1    byte = 1
+	ProtocolVersion2    byte = 2
 	MsgTypeFileTransfer byte = 1
 )
 
@@ -18,7 +19,7 @@ const (
 // [2 bytes] Filename Length (N)
 // [N bytes] Filename
 // [8 bytes] File Size
-// [32 bytes] SHA-256 Checksum
+// [32 bytes] SHA-256 Checksum (ProtocolVersion1 only; omitted in ProtocolVersion2 in favor of trailing footer)
 type Header struct {
 	Version  byte
 	Type     byte
@@ -56,9 +57,11 @@ func (h *Header) WriteTo(w io.Writer) error {
 		return fmt.Errorf("failed to write file size: %w", err)
 	}
 
-	// 6. Write Checksum
-	if _, err := w.Write(h.Checksum[:]); err != nil {
-		return fmt.Errorf("failed to write checksum: %w", err)
+	// 6. Write Checksum (ProtocolVersion1 only)
+	if h.Version == ProtocolVersion1 {
+		if _, err := w.Write(h.Checksum[:]); err != nil {
+			return fmt.Errorf("failed to write checksum: %w", err)
+		}
 	}
 
 	return nil
@@ -94,9 +97,11 @@ func (h *Header) ReadFrom(r io.Reader) error {
 		return fmt.Errorf("failed to read file size: %w", err)
 	}
 
-	// 6. Read Checksum
-	if _, err := io.ReadFull(r, h.Checksum[:]); err != nil {
-		return fmt.Errorf("failed to read checksum: %w", err)
+	// 6. Read Checksum (ProtocolVersion1 only)
+	if h.Version == ProtocolVersion1 {
+		if _, err := io.ReadFull(r, h.Checksum[:]); err != nil {
+			return fmt.Errorf("failed to read checksum: %w", err)
+		}
 	}
 
 	return nil
