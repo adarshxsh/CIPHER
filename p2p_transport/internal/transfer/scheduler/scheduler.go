@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	
+	"math/rand"
+	"sync"
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -21,6 +24,9 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	BaseBackoff time.Duration
+	MaxBackoff  time.Duration
+	QueueCap    int
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -28,13 +34,65 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		BaseBackoff: 100 * time.Millisecond,
+		MaxBackoff:  10 * time.Second,
 	}
 }
 
+func computeBackoff(base, maxBackoff time.Duration, attempt int) time.Duration {
+	if attempt <= 0 {
+		attempt = 1
+	}
+	exp := float64(uint64(1) << uint(attempt-1))
+	delayFloat := float64(base) * exp
+	if delayFloat > float64(maxBackoff) {
+		delayFloat = float64(maxBackoff)
+	}
+	delay := time.Duration(delayFloat)
+
+	// Add jitter (up to 50% of delay)
+	jitter := time.Duration(rand.Float64() * float64(delay) * 0.5)
+	totalDelay := delay + jitter
+	if totalDelay > maxBackoff {
+		totalDelay = maxBackoff
+	}
+	return totalDelay
+}
+
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
+	var queue *ChunkQueue
+	if s.QueueCap > 0 {
+		queue = NewChunkQueue(tasks, s.QueueCap)
+	} else {
+		queue = NewChunkQueue(tasks)
+	}
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
-	
+
+	// Decouple completion dispatch via buffered channel
+	dispatchCap := len(tasks)
+	if dispatchCap < 1 {
+		dispatchCap = 1
+	}
+	dispatchCh := make(chan WorkerResult, dispatchCap)
+	dispatchDone := make(chan struct{})
+
+	go func() {
+		defer close(dispatchDone)
+		for res := range dispatchCh {
+			select {
+			case completions <- res:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(dispatchCh)
+		<-dispatchDone
+	}()
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
@@ -50,13 +108,25 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
-	
+
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
-	
+
 	pendingTasks := len(tasks)
-	
+
+	baseBackoff := s.BaseBackoff
+	if baseBackoff <= 0 {
+		baseBackoff = 100 * time.Millisecond
+	}
+	maxBackoff := s.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 10 * time.Second
+	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
@@ -67,25 +137,35 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					activeWorkers--
 					continue
 				}
-				
-				// Requeue logic
+
+				// Requeue logic with exponential backoff and jitter
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+					backoff := computeBackoff(baseBackoff, maxBackoff, res.Task.Attempts)
+					wg.Add(1)
+					go func(t ChunkTask, delay time.Duration) {
+						defer wg.Done()
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(delay):
+							queue.Push(t)
+						}
+					}(res.Task, backoff)
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
 			} else {
 				// Success
-				completions <- res
+				dispatchCh <- res
 				pendingTasks--
 			}
 		}
 	}
-	
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
-	
+
 	return nil
 }
