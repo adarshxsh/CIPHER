@@ -14,17 +14,36 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+type deadlineReader struct {
+	r       io.Reader
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dr *deadlineReader) Read(p []byte) (n int, err error) {
+	if err := dr.s.SetReadDeadline(time.Now().Add(dr.timeout)); err != nil {
+		return 0, err
+	}
+	return dr.r.Read(p)
+}
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
 	defer s.Close()
 
-	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	peerID := s.Conn().RemotePeer()
+	log.Printf("Incoming stream from %s. Preparing to receive...", peerID)
 
-	// 1. Read Header
+	// 1. Read Header with Deadline
+	if err := s.SetReadDeadline(time.Now().Add(DefaultReadDeadline)); err != nil {
+		return fmt.Errorf("failed to set header read deadline: %w", err)
+	}
+
 	var header Header
 	if err := header.ReadFrom(s); err != nil {
+		if isTimeout(err) {
+			log.Printf("[Transfer] Read deadline expired while reading header from peer %s: %v", peerID, err)
+		}
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -49,24 +68,35 @@ func Receive(s network.Stream) error {
 
 	startTime := time.Now()
 
-	// 3. Receive Data with Progress Tracking and Hashing
+	// 3. Receive Data with Progress Tracking, Sliding Read Deadlines and Hashing
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
+	dr := &deadlineReader{
+		r:       io.LimitReader(s, int64(header.FileSize)),
+		s:       s,
+		timeout: DefaultReadDeadline,
+	}
+
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     dr,
 		total: header.FileSize,
 		last:  0,
 	}
 
 	received, err := io.Copy(multiWriter, pr)
-	if err != nil {
+	if err != nil && uint64(received) != header.FileSize {
+		if isTimeout(err) {
+			log.Printf("[Transfer] Read deadline expired while receiving file data from peer %s: %v", peerID, err)
+		}
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}
 
 	if uint64(received) != header.FileSize {
 		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
 	}
+
+	_ = s.SetDeadline(time.Time{})
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
@@ -83,8 +113,10 @@ func Receive(s network.Stream) error {
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if remoteAddr := s.Conn().RemoteMultiaddr(); remoteAddr != nil {
+		if _, err := remoteAddr.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")

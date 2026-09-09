@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"cipher/internal/content/core"
 )
@@ -46,6 +47,9 @@ type Message struct {
 }
 
 func WriteMessage(w io.Writer, msg *Message) error {
+	if setter, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = setter.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
+	}
 	buf := new(bytes.Buffer)
 	
 	// Envelope: Version (2), Type (1)
