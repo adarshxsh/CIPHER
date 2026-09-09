@@ -7,20 +7,24 @@ import (
 	"io"
 	"sort"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
+
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+	"cipher/internal/identity"
 )
 
 type ContentEngine struct {
-	config    core.EngineConfig
-	chunker   *chunker.Chunker
-	encryptor core.Encryptor
-	digest    core.Digest
-	source    core.ChunkSource
-	sink      core.ChunkSink
+	config        core.EngineConfig
+	chunker       *chunker.Chunker
+	encryptor     core.Encryptor
+	digest        core.Digest
+	source        core.ChunkSource
+	sink          core.ChunkSink
 	manifestStore core.ManifestStore
-	keys      core.KeyProvider
+	keys          core.KeyProvider
+	publisherKey  crypto.PrivKey
 }
 
 func NewContentEngine(
@@ -32,6 +36,10 @@ func NewContentEngine(
 	keys core.KeyProvider,
 	manifestStore core.ManifestStore,
 ) *ContentEngine {
+	priv, err := identity.GenerateEphemeral()
+	if err != nil {
+		panic(fmt.Sprintf("failed to generate ephemeral publisher key: %v", err))
+	}
 	return &ContentEngine{
 		config:        config,
 		chunker:       chunker.NewChunker(config),
@@ -41,7 +49,18 @@ func NewContentEngine(
 		sink:          sink,
 		manifestStore: manifestStore,
 		keys:          keys,
+		publisherKey:  priv,
 	}
+}
+
+func (e *ContentEngine) SetPublisherKey(key crypto.PrivKey) {
+	if key != nil {
+		e.publisherKey = key
+	}
+}
+
+func (e *ContentEngine) PublisherKey() crypto.PrivKey {
+	return e.publisherKey
 }
 
 // Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
@@ -118,6 +137,12 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 			ChunkNonceSize: 12,
 			KeyID:          "embedded",
 		},
+	}
+
+	if e.publisherKey != nil {
+		if err := m.Sign(e.publisherKey); err != nil {
+			return nil, fmt.Errorf("failed to sign manifest: %w", err)
+		}
 	}
 
 	return m, nil
