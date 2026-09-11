@@ -49,6 +49,9 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 	header := make([]byte, frameHeaderSize)
 
 	if _, err := io.ReadFull(r, header); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, io.EOF
+		}
 		return nil, fmt.Errorf("%w: failed to read frame header: %v", ErrTruncatedFrame, err)
 	}
 
