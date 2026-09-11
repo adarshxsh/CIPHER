@@ -12,15 +12,18 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/reputation"
 	"cipher/internal/transport"
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream     network.Stream
+	peerID     peer.ID
+	engine     *engine.ContentEngine
+	digest     core.Digest
+	reputation *reputation.PeerReputationManager
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
@@ -31,9 +34,18 @@ func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng 
 	}
 	return &Client{
 		stream: stream,
+		peerID: peerID,
 		engine: eng,
 		digest: verifier.NewSHA256Digest(),
 	}, nil
+}
+
+func (c *Client) SetReputationManager(rep *reputation.PeerReputationManager) {
+	c.reputation = rep
+}
+
+func (c *Client) ReputationManager() *reputation.PeerReputationManager {
+	return c.reputation
 }
 
 func (c *Client) Close() error {
@@ -121,6 +133,9 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
 		WriteMessage(c.stream, errMsg)
+		if c.reputation != nil {
+			c.reputation.RecordFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
