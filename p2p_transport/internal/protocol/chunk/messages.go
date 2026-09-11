@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
+	"unicode/utf8"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +208,47 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\].*?(?:\x07|\x1b\\)|\x1b[()#;?]?[0-9A-Za-z]|\x1b.`)
+
+// SanitizeErrorMessage removes ANSI escapes, line breaks, and control characters,
+// and enforces a maximum length limit of 256 bytes.
+func SanitizeErrorMessage(msg string) string {
+	// Remove ANSI escape sequences
+	cleaned := ansiRegexp.ReplaceAllString(msg, "")
+
+	// Convert line breaks into spaces
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", " ")
+	cleaned = strings.ReplaceAll(cleaned, "\n", " ")
+	cleaned = strings.ReplaceAll(cleaned, "\r", " ")
+
+	// Remove control characters (0x00-0x1F, 0x7F)
+	var buf strings.Builder
+	buf.Grow(len(cleaned))
+	for i := 0; i < len(cleaned); i++ {
+		b := cleaned[i]
+		if b < 0x20 || b == 0x7F {
+			continue
+		}
+		buf.WriteByte(b)
+	}
+	result := buf.String()
+
+	// Enforce maximum length limit of 256 bytes
+	if len(result) > 256 {
+		result = result[:256]
+		for !utf8.ValidString(result) && len(result) > 0 {
+			result = result[:len(result)-1]
+		}
+	}
+
+	return result
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	msgStr := SanitizeErrorMessage(string(payload[1:]))
+	return code, msgStr, nil
 }
