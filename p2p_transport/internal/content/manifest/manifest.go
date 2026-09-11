@@ -2,8 +2,22 @@ package manifest
 
 import (
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+
 	"cipher/internal/content/core"
+)
+
+var (
+	ErrInvalidChunkCount = errors.New("invalid manifest chunk count")
+)
+
+const (
+	// StandardChunkSize is the default plaintext chunk size (32 KiB).
+	StandardChunkSize uint64 = 32 * 1024
+
+	// MaxSupportedChunkCount prevents excessive chunk allocations (1 << 32).
+	MaxSupportedChunkCount uint64 = 1 << 32
 )
 
 type ContentType string
@@ -51,5 +65,23 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+
+	chunkCount := uint64(len(m.ChunkIDs))
+	if chunkCount > MaxSupportedChunkCount {
+		return nil, fmt.Errorf("%w: chunk count %d exceeds maximum supported limit %d", ErrInvalidChunkCount, chunkCount, MaxSupportedChunkCount)
+	}
+
+	var expectedChunks uint64
+	if m.Descriptor.Size > 0 {
+		expectedChunks = m.Descriptor.Size / StandardChunkSize
+		if m.Descriptor.Size%StandardChunkSize != 0 {
+			expectedChunks++
+		}
+	}
+
+	if chunkCount > expectedChunks {
+		return nil, fmt.Errorf("%w: chunk count %d exceeds calculated chunk count %d for content size %d", ErrInvalidChunkCount, chunkCount, expectedChunks, m.Descriptor.Size)
+	}
+
 	return &m, nil
 }

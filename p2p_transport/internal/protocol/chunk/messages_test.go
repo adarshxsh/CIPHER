@@ -105,3 +105,30 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseManifest_Bounds(t *testing.T) {
+	// 1. Under minimum boundary (< 32 bytes)
+	underPayload := make([]byte, chunk.ContentIDSize-1)
+	_, _, err := chunk.ParseManifest(underPayload)
+	if err == nil {
+		t.Fatalf("expected error for manifest payload < ContentIDSize, got nil")
+	}
+
+	// 2. Over maximum boundary (> MaxManifestSize)
+	overPayload := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err = chunk.ParseManifest(overPayload)
+	if err == nil {
+		t.Fatalf("expected error for manifest payload > MaxManifestSize, got nil")
+	}
+
+	// 3. Valid boundary
+	validPayload := make([]byte, chunk.ContentIDSize+100)
+	id, data, err := chunk.ParseManifest(validPayload)
+	if err != nil {
+		t.Fatalf("expected success for valid manifest payload size, got %v", err)
+	}
+	if len(data) != 100 {
+		t.Errorf("expected 100 bytes data slice, got %d", len(data))
+	}
+	_ = id
+}
