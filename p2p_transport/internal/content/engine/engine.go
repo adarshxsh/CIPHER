@@ -70,24 +70,36 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 	// Read all chunks, encrypt, hash, and store
 	for chunk := range chunkCh {
-		// Encrypt the chunk
-		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
-			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
+		err := func() error {
+			defer e.chunker.ReleaseChunk(chunk)
+
+			// Encrypt the chunk
+			if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+				return fmt.Errorf("failed to encrypt chunk: %w", err)
+			}
+
+			// Hash the ciphertext to get the ChunkID (content-addressing)
+			chunkHash := e.digest.Sum(chunk.Data)
+			var chunkID core.ChunkID
+			copy(chunkID[:], chunkHash[:])
+			chunk.Header.ID = chunkID
+
+			// Store the chunk
+			if err := e.sink.PutChunk(ctx, chunk); err != nil {
+				return fmt.Errorf("failed to store chunk: %w", err)
+			}
+
+			chunkIDs = append(chunkIDs, chunkID)
+			totalSize += uint64(chunk.Header.PlainSize)
+			return nil
+		}()
+
+		if err != nil {
+			for unreadChunk := range chunkCh {
+				e.chunker.ReleaseChunk(unreadChunk)
+			}
+			return nil, err
 		}
-
-		// Hash the ciphertext to get the ChunkID (content-addressing)
-		chunkHash := e.digest.Sum(chunk.Data)
-		var chunkID core.ChunkID
-		copy(chunkID[:], chunkHash[:])
-		chunk.Header.ID = chunkID
-
-		// Store the chunk
-		if err := e.sink.PutChunk(ctx, chunk); err != nil {
-			return nil, fmt.Errorf("failed to store chunk: %w", err)
-		}
-
-		chunkIDs = append(chunkIDs, chunkID)
-		totalSize += uint64(chunk.Header.PlainSize)
 	}
 
 	if err := <-errCh; err != nil {
@@ -186,6 +198,14 @@ func (e *ContentEngine) GetChunk(ctx context.Context, id core.ChunkID) (*core.Ch
 
 func (e *ContentEngine) PutChunk(ctx context.Context, chunk *core.Chunk) error {
 	return e.sink.PutChunk(ctx, chunk)
+}
+
+func (e *ContentEngine) ReleaseChunk(chunk *core.Chunk) {
+	e.chunker.ReleaseChunk(chunk)
+}
+
+func (e *ContentEngine) PutBuffer(buf []byte) {
+	e.chunker.PutBuffer(buf)
 }
 
 func (e *ContentEngine) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {

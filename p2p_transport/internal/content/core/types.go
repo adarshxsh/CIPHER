@@ -55,6 +55,9 @@ type ManifestStore interface {
 	ListManifests(ctx context.Context) ([]ContentID, error)
 }
 
+const DefaultChannelBufferSize = 16
+
 type EngineConfig struct {
-	ChunkSize uint32
+	ChunkSize         uint32
+	ChannelBufferSize int
 }
