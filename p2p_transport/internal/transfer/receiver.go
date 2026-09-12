@@ -18,23 +18,30 @@ import (
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
-	defer s.Close()
+	if s == nil {
+		return ErrNilStream
+	}
 
-	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	if s.Conn() != nil {
+		log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	}
 
-	// 1. Read Header
+	// 1. Read Header Metadata
 	var header Header
 	if err := header.ReadFrom(s); err != nil {
+		s.Reset()
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
+		s.Reset()
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		s.Reset()
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
@@ -43,9 +50,16 @@ func Receive(s network.Stream) error {
 
 	outFile, err := os.Create(outPath)
 	if err != nil {
+		s.Reset()
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+
+	cleanup := func(err error) error {
+		outFile.Close()
+		os.Remove(outPath)
+		s.Reset()
+		return err
+	}
 
 	startTime := time.Now()
 
@@ -61,35 +75,45 @@ func Receive(s network.Stream) error {
 
 	received, err := io.Copy(multiWriter, pr)
 	if err != nil {
-		return fmt.Errorf("failed to receive file data: %w", err)
+		return cleanup(fmt.Errorf("failed to receive file data: %w", err))
 	}
 
 	if uint64(received) != header.FileSize {
-		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		return cleanup(fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received))
+	}
+
+	outFile.Close()
+
+	// 4. Read Checksum Trailer
+	if err := header.ReadChecksum(s); err != nil {
+		return cleanup(fmt.Errorf("failed to read checksum trailer: %w", err))
 	}
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
 
-	// 4. Verify Integrity
+	// 5. Verify Integrity
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
 		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		return cleanup(fmt.Errorf("%w: expected %x, got %x", ErrChecksumMismatch, header.Checksum, computedChecksum))
 	}
+
+	s.Close()
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil && s.Conn().RemoteMultiaddr() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 

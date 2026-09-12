@@ -2,22 +2,35 @@ package transfer
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
 
 const (
-	ProtocolVersion1 byte = 1
+	ProtocolVersion1    byte = 1
 	MsgTypeFileTransfer byte = 1
+	MaxFilenameSize          = 255
+)
+
+var (
+	ErrFilenameLengthInvalid = errors.New("filename length invalid")
+	ErrNilStream             = errors.New("stream is nil")
+	ErrEmptyFilePath         = errors.New("file path is empty")
+	ErrChecksumMismatch      = errors.New("checksum mismatch")
 )
 
 // Header represents the binary metadata sent before the file contents.
 // Wire Format (Big Endian):
+// Header Metadata:
 // [1 byte] Protocol Version
 // [1 byte] Message Type
 // [2 bytes] Filename Length (N)
 // [N bytes] Filename
 // [8 bytes] File Size
+// Payload Data:
+// [FileSize bytes] File Content Data
+// Checksum Trailer:
 // [32 bytes] SHA-256 Checksum
 type Header struct {
 	Version  byte
@@ -27,8 +40,12 @@ type Header struct {
 	Checksum [32]byte
 }
 
-// WriteTo encodes and writes the header to the given writer.
+// WriteTo encodes and writes the header metadata to the given writer.
 func (h *Header) WriteTo(w io.Writer) error {
+	if w == nil {
+		return ErrNilStream
+	}
+
 	// 1. Write Protocol Version
 	if err := binary.Write(w, binary.BigEndian, h.Version); err != nil {
 		return fmt.Errorf("failed to write version: %w", err)
@@ -41,6 +58,9 @@ func (h *Header) WriteTo(w io.Writer) error {
 
 	// 3. Write Filename Length
 	filenameBytes := []byte(h.Filename)
+	if len(filenameBytes) > MaxFilenameSize {
+		return ErrFilenameLengthInvalid
+	}
 	filenameLen := uint16(len(filenameBytes))
 	if err := binary.Write(w, binary.BigEndian, filenameLen); err != nil {
 		return fmt.Errorf("failed to write filename length: %w", err)
@@ -56,16 +76,26 @@ func (h *Header) WriteTo(w io.Writer) error {
 		return fmt.Errorf("failed to write file size: %w", err)
 	}
 
-	// 6. Write Checksum
-	if _, err := w.Write(h.Checksum[:]); err != nil {
-		return fmt.Errorf("failed to write checksum: %w", err)
-	}
-
 	return nil
 }
 
-// ReadFrom decodes and reads the header from the given reader.
+// WriteChecksum writes the 32-byte SHA-256 checksum trailer to the writer.
+func (h *Header) WriteChecksum(w io.Writer) error {
+	if w == nil {
+		return ErrNilStream
+	}
+	if _, err := w.Write(h.Checksum[:]); err != nil {
+		return fmt.Errorf("failed to write checksum: %w", err)
+	}
+	return nil
+}
+
+// ReadFrom decodes and reads the header metadata from the given reader.
 func (h *Header) ReadFrom(r io.Reader) error {
+	if r == nil {
+		return ErrNilStream
+	}
+
 	// 1. Read Protocol Version
 	if err := binary.Read(r, binary.BigEndian, &h.Version); err != nil {
 		return fmt.Errorf("failed to read version: %w", err)
@@ -81,6 +111,9 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	if err := binary.Read(r, binary.BigEndian, &filenameLen); err != nil {
 		return fmt.Errorf("failed to read filename length: %w", err)
 	}
+	if filenameLen > MaxFilenameSize {
+		return ErrFilenameLengthInvalid
+	}
 
 	// 4. Read Filename
 	filenameBytes := make([]byte, filenameLen)
@@ -94,10 +127,16 @@ func (h *Header) ReadFrom(r io.Reader) error {
 		return fmt.Errorf("failed to read file size: %w", err)
 	}
 
-	// 6. Read Checksum
+	return nil
+}
+
+// ReadChecksum reads the 32-byte SHA-256 checksum trailer from the reader.
+func (h *Header) ReadChecksum(r io.Reader) error {
+	if r == nil {
+		return ErrNilStream
+	}
 	if _, err := io.ReadFull(r, h.Checksum[:]); err != nil {
 		return fmt.Errorf("failed to read checksum: %w", err)
 	}
-
 	return nil
 }
