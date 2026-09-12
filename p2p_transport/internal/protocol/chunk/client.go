@@ -27,6 +27,9 @@ func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng 
 	if err != nil {
 		return nil, err
 	}
+	if scope := stream.Scope(); scope != nil {
+		_ = scope.SetService("cipher-chunk")
+	}
 	return &Client{
 		stream: stream,
 		engine: eng,
