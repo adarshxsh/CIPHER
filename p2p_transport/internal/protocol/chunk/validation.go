@@ -107,6 +107,20 @@ func ValidateManifestPayload(payload []byte) error {
 			ContentIDSize,
 		)
 	}
+	if len(payload) > MaxManifestSize {
+		return fmt.Errorf(
+			"manifest: %w: received=%d maximum=%d",
+			ErrInvalidPayloadLength,
+			len(payload),
+			MaxManifestSize,
+		)
+	}
+	if len(payload) == ContentIDSize {
+		return fmt.Errorf(
+			"manifest: %w: missing manifest json payload",
+			ErrInvalidManifestPayload,
+		)
+	}
 	return nil
 }
 
