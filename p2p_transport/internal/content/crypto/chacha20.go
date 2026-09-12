@@ -1,34 +1,29 @@
 package crypto
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 
 	"cipher/internal/content/core"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // ChaCha20Encryptor implements core.Encryptor using standard ChaCha20-Poly1305.
-// It uses a deterministic 12-byte nonce derived from the chunk index:
-// nonce = first_12_bytes(SHA-256("cipher-nonce" || uint64(index)))
+// It generates a cryptographically random 96-bit (12-byte) nonce for each chunk.
 type ChaCha20Encryptor struct{}
 
 func NewChaCha20Encryptor() *ChaCha20Encryptor {
 	return &ChaCha20Encryptor{}
 }
 
-func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
-	h := sha256.New()
-	h.Write([]byte("cipher-nonce"))
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(index))
-	h.Write(b)
-	sum := h.Sum(nil)
-	nonce := make([]byte, 12)
-	copy(nonce, sum[:12])
-	return nonce
+func (e *ChaCha20Encryptor) generateNonce() ([]byte, error) {
+	nonce := make([]byte, chacha20poly1305.NonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate random nonce: %w", err)
+	}
+	return nonce, nil
 }
 
 func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
@@ -37,7 +32,10 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	nonce := e.generateNonce(chunk.Header.Index)
+	nonce, err := e.generateNonce()
+	if err != nil {
+		return err
+	}
 	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
