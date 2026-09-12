@@ -85,10 +85,11 @@ func main() {
 			log.Fatalf("Failed to read manifest: %v", err)
 		}
 
-		var m manifest.Manifest
-		if err := json.Unmarshal(manifestData, &m); err != nil {
+		mPtr, err := manifest.Deserialize(manifestData)
+		if err != nil {
 			log.Fatalf("Failed to parse manifest: %v", err)
 		}
+		m := *mPtr
 
 		// Load the test content key back into the key provider
 		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))

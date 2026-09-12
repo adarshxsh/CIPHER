@@ -131,6 +131,9 @@ func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	if len(payload) < 32 {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
+	if len(payload) > MaxManifestSize {
+		return id, nil, fmt.Errorf("manifest payload exceeds maximum size: %d", len(payload))
+	}
 	copy(id[:], payload[:32])
 	return id, payload[32:], nil
 }
