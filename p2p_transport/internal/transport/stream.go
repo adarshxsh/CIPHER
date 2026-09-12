@@ -18,10 +18,18 @@ import (
 
 // SetupStreamHandler configures the host to handle incoming streams for the file transfer protocol.
 func SetupStreamHandler(h host.Host) {
-	h.SetStreamHandler(protocol.FileTransferProtocolID, func(s network.Stream) {
+	SetStreamHandler(h, protocol.FileTransferProtocolID, func(s network.Stream) {
 		if err := transfer.Receive(s); err != nil {
 			log.Printf("Error receiving file: %v", err)
 		}
+	})
+}
+
+// SetStreamHandler registers a stream handler on the host that automatically decorates incoming streams with TimeoutStream.
+func SetStreamHandler(h host.Host, pid libp2p_protocol.ID, handler func(network.Stream), opts ...TimeoutOption) {
+	h.SetStreamHandler(pid, func(s network.Stream) {
+		ts := NewTimeoutStream(s, opts...)
+		handler(ts)
 	})
 }
 
@@ -33,6 +41,11 @@ type Transport struct {
 // NewTransport creates a new Transport abstraction.
 func NewTransport(h host.Host) *Transport {
 	return &Transport{host: h}
+}
+
+// SetStreamHandler registers a stream handler on the transport's host that automatically decorates incoming streams with TimeoutStream.
+func (t *Transport) SetStreamHandler(pid libp2p_protocol.ID, handler func(network.Stream), opts ...TimeoutOption) {
+	SetStreamHandler(t.host, pid, handler, opts...)
 }
 
 // Connect dials the target peer and establishes the initial connection (likely a relayed connection).
@@ -86,5 +99,5 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
 
-	return s, nil
+	return NewTimeoutStream(s), nil
 }
