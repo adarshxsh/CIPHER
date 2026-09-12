@@ -46,6 +46,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	showKey := flag.Bool("show-key", false, "Display raw decryption key in standard output")
+	keyOut := flag.String("key-out", "", "Path to export raw decryption key file (mode 0600)")
 
 	flag.Parse()
 
@@ -198,10 +200,24 @@ func main() {
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
 
+	if *keyOut != "" {
+		hexKey := fmt.Sprintf("%x\n", key)
+		if err := os.WriteFile(*keyOut, []byte(hexKey), 0600); err != nil {
+			log.Fatalf("Failed to write key to file %s: %v", *keyOut, err)
+		}
+		if err := os.Chmod(*keyOut, 0600); err != nil {
+			log.Printf("Warning: Failed to set permissions on key file %s: %v", *keyOut, err)
+		}
+	}
+
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	if *showKey {
+		fmt.Printf("Decryption Key: %x\n", key)
+	} else {
+		fmt.Println("Decryption Key: [REDACTED]")
+	}
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
