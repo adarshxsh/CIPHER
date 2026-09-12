@@ -63,6 +63,15 @@ func ResolveManifest(
 			continue
 		}
 
+		if derivedID, err := m.DeriveContentID(); err != nil || derivedID != id || m.Descriptor.ID != id {
+			log.Printf(
+				"[DHT] Provider %s returned manifest with content ID mismatch (spoofing detected)",
+				provider,
+			)
+			lastErr = fmt.Errorf("manifest content ID mismatch")
+			continue
+		}
+
 		log.Printf(
 			"[DHT] Successfully resolved manifest from provider %s",
 			provider,
