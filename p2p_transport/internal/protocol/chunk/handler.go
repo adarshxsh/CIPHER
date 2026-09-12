@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
-	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,17 +13,43 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+const DefaultHandlerTimeout = 30 * time.Second
+
+type HandlerConfig struct {
+	Timeout     time.Duration
+	CorruptProb float64
+}
+
+type HandlerOption func(*HandlerConfig)
+
+// WithHandlerTimeout sets the context timeout for stream handling operations.
+func WithHandlerTimeout(timeout time.Duration) HandlerOption {
+	return func(cfg *HandlerConfig) {
+		if timeout > 0 {
+			cfg.Timeout = timeout
+		}
+	}
+}
 
 type StreamHandler struct {
 	host   host.Host
 	engine *engine.ContentEngine
+	cfg    HandlerConfig
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...HandlerOption) *StreamHandler {
+	cfg := HandlerConfig{
+		Timeout: DefaultHandlerTimeout,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+		cfg:    cfg,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -70,8 +96,10 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 		return
 	}
 
-	// Fetch manifest from engine
-	ctx := context.Background()
+	// Fetch manifest from engine with bounded context timeout
+	ctx, cancel := context.WithTimeout(context.Background(), h.cfg.Timeout)
+	defer cancel()
+
 	manifestData, err := h.engine.GetManifestBytes(ctx, contentID)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrContentNotFound, "manifest not found"))
@@ -91,18 +119,16 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), h.cfg.Timeout)
+	defer cancel()
+
 	chunkData, err := h.engine.GetChunk(ctx, chunkID)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
-		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
-	}
+	chunkData.Data = maybeCorruptChunk(h, chunkID, chunkData.Data)
 
 	resp, err := BuildChunk(chunkData)
 	if err != nil {
