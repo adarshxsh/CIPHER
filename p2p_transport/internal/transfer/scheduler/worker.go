@@ -19,6 +19,12 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		task, ok := queue.Next()
 		if !ok {
 			return // Queue empty
@@ -33,7 +39,11 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
@@ -42,10 +52,18 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
