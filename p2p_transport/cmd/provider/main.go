@@ -131,7 +131,7 @@ func main() {
 
 	// 7. Start Control-Plane DHT Republisher for all local manifests
 	interval := time.Duration(*republishHours) * time.Hour
-	discovery.StartRepublisher(ctx, kdht, store, interval)
+	discovery.StartRepublisher(ctx, kdht, priv, store, interval)
 
 	manifests, _ := store.ListManifests(ctx)
 
