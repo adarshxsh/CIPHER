@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -123,7 +122,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w directly.
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
 	// Retrieve key
 	key, err := e.keys.Get(ctx, m.Descriptor.ID)
@@ -131,13 +130,13 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
-
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
+	seeker, isSeeker := w.(io.Seeker)
 
 	for _, chunkID := range m.ChunkIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		chunk, err := e.source.GetChunk(ctx, chunkID)
 		if err != nil {
 			return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
@@ -146,27 +145,40 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		// Verify chunk hash matches ID
 		hash := e.digest.Sum(chunk.Data)
 		if hash != core.Hash(chunkID) {
+			chunk.Data = nil
 			return fmt.Errorf("corrupted chunk %x: hash mismatch", chunkID)
 		}
 
 		// Decrypt
 		if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
+			chunk.Data = nil
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
-	}
+		// Seek to chunk offset if writer supports seeking
+		if isSeeker {
+			if _, err := seeker.Seek(chunk.Header.Offset, io.SeekStart); err != nil {
+				chunk.Data = nil
+				return fmt.Errorf("failed to seek chunk %x to offset %d: %w", chunkID, chunk.Header.Offset, err)
+			}
+		}
 
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
-
-	// Write out
-	for _, chunk := range chunks {
+		// Write directly to writer
 		if _, err := w.Write(chunk.Data); err != nil {
+			chunk.Data = nil
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
 		}
+
+		// Flush if writer supports Flushing
+		if flusher, ok := w.(interface{ Flush() error }); ok {
+			if err := flusher.Flush(); err != nil {
+				chunk.Data = nil
+				return fmt.Errorf("failed to flush buffer: %w", err)
+			}
+		}
+
+		// Release chunk payload memory immediately
+		chunk.Data = nil
 	}
 
 	return nil
