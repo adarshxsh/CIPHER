@@ -19,14 +19,13 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
-		task, ok := queue.Next()
+		task, ok := queue.NextWithContext(ctx)
 		if !ok {
-			return // Queue empty
+			return // Queue closed or context cancelled
 		}
-		
 		// If this source already returned candidate miss for this task, requeue and yield
 		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
+			_ = queue.PushWithContext(ctx, task)
 			select {
 			case <-ctx.Done():
 				return
@@ -34,22 +33,45 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			}
 			continue
 		}
-		
+
+		if source.Available != nil {
+			if _, has := source.Available[task.ChunkID]; !has {
+				// We don't think this source has the chunk.
+				// For now, we still try since discovery isn't fully robust.
+			}
+		}
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
 		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+			select {
+			case <-time.After(TestThrottle):
+			case <-ctx.Done():
+				return
+			}
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
