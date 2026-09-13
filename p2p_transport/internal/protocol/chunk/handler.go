@@ -5,9 +5,13 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"golang.org/x/time/rate"
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
@@ -15,38 +19,99 @@ import (
 
 var TestCorruptProb float64
 
+type peerLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host         host.Host
+	engine       *engine.ContentEngine
+	peerLimiters map[peer.ID]*peerLimiterEntry
+	limitersMu   sync.Mutex
+	rateLimit    rate.Limit
+	burst        int
+	lastCleanup  time.Time
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+	return NewStreamHandlerWithRateLimit(h, eng, rate.Limit(5), 5)
+}
+
+func NewStreamHandlerWithRateLimit(h host.Host, eng *engine.ContentEngine, r rate.Limit, b int) *StreamHandler {
 	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+		host:         h,
+		engine:       eng,
+		peerLimiters: make(map[peer.ID]*peerLimiterEntry),
+		rateLimit:    r,
+		burst:        b,
+		lastCleanup:  time.Now(),
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
 }
 
+func (h *StreamHandler) SetRateLimit(r rate.Limit, b int) {
+	h.limitersMu.Lock()
+	defer h.limitersMu.Unlock()
+	h.rateLimit = r
+	h.burst = b
+	for _, entry := range h.peerLimiters {
+		entry.limiter = rate.NewLimiter(r, b)
+	}
+}
+
+func (h *StreamHandler) AllowErrorLog(p peer.ID) bool {
+	h.limitersMu.Lock()
+	defer h.limitersMu.Unlock()
+
+	now := time.Now()
+	// Automatically clear inactive peer records (> 5 minutes inactive)
+	if now.Sub(h.lastCleanup) > 1*time.Minute {
+		for id, entry := range h.peerLimiters {
+			if now.Sub(entry.lastSeen) > 5*time.Minute {
+				delete(h.peerLimiters, id)
+			}
+		}
+		h.lastCleanup = now
+	}
+
+	entry, exists := h.peerLimiters[p]
+	if !exists {
+		entry = &peerLimiterEntry{
+			limiter:  rate.NewLimiter(h.rateLimit, h.burst),
+			lastSeen: now,
+		}
+		h.peerLimiters[p] = entry
+	} else {
+		entry.lastSeen = now
+	}
+
+	return entry.limiter.Allow()
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	remotePeer := s.Conn().RemotePeer()
+	log.Printf("[Chunk Protocol] New stream from %s", remotePeer)
 
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", remotePeer)
 				return
 			}
-			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			if h.AllowErrorLog(remotePeer) {
+				log.Printf("[Chunk Protocol] Error reading message from peer %s: %v", remotePeer, err)
+			}
 			return
 		}
 
 		if msg.Version != CurrentMessageVersion {
-			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
+			if h.AllowErrorLog(remotePeer) {
+				log.Printf("[Chunk Protocol] Unsupported version %d from peer %s", msg.Version, remotePeer)
+			}
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
@@ -56,10 +121,28 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
 			h.handleRequestChunk(s, msg)
+		case MsgError:
+			h.handleErrorMsg(s, msg)
 		default:
-			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
+			if h.AllowErrorLog(remotePeer) {
+				log.Printf("[Chunk Protocol] Unsupported message type %d from peer %s", msg.Type, remotePeer)
+			}
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
+	}
+}
+
+func (h *StreamHandler) handleErrorMsg(s network.Stream, msg *Message) {
+	remotePeer := s.Conn().RemotePeer()
+	code, msgStr, err := ParseError(msg.Payload)
+	if err != nil {
+		if h.AllowErrorLog(remotePeer) {
+			log.Printf("[Chunk Protocol] Peer %s sent invalid error message: %v", remotePeer, err)
+		}
+		return
+	}
+	if h.AllowErrorLog(remotePeer) {
+		log.Printf("[Chunk Protocol] Peer %s reported error: [%d] %s", remotePeer, code, msgStr)
 	}
 }
 
@@ -118,16 +201,25 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
-		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
+		remotePeer := s.Conn().RemotePeer()
+		if h.AllowErrorLog(remotePeer) {
+			log.Printf("[Chunk Protocol] Peer %s error reading ACK: %v", remotePeer, err)
+		}
 		return
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		remotePeer := s.Conn().RemotePeer()
+		if h.AllowErrorLog(remotePeer) {
+			log.Printf("[Chunk Protocol] Client %s reported error on chunk %x: [%d] %s", remotePeer, chunkID, code, msgStr)
+		}
 		return
 	}
 	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+		remotePeer := s.Conn().RemotePeer()
+		if h.AllowErrorLog(remotePeer) {
+			log.Printf("[Chunk Protocol] Peer %s sent expected ACK, got type %d", remotePeer, ackMsg.Type)
+		}
 		return
 	}
 }
