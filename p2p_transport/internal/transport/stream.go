@@ -73,6 +73,8 @@ func (t *Transport) ConnectPeer(ctx context.Context, addrInfo peer.AddrInfo) err
 	return nil
 }
 
+var DefaultStreamDeadline = 30 * time.Second
+
 func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_protocol.ID) (network.Stream, error) {
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
@@ -84,6 +86,12 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 	s, err := t.host.NewStream(streamCtx, target, pid)
 	if err != nil {
 		return nil, fmt.Errorf("NewStream failed: %w", err)
+	}
+
+	deadline := time.Now().Add(DefaultStreamDeadline)
+	if err := s.SetDeadline(deadline); err != nil {
+		s.Reset()
+		return nil, fmt.Errorf("failed to set stream deadline: %w", err)
 	}
 
 	return s, nil
