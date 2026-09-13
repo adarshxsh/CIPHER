@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,8 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to decryption key file")
+	exportKeyFile := flag.String("export-key-file", "", "Path to export raw decryption key to file")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
@@ -123,7 +126,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewFSKeyProvider(*storePath)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -247,9 +253,16 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyPath := filepath.Join(*storePath, "keys", fmt.Sprintf("%x.key", m.Descriptor.ID))
+		if *exportKeyFile != "" {
+			if err := engine.ExportKeyToFile(*exportKeyFile, key); err != nil {
+				log.Fatalf("Failed to export key to file: %v", err)
+			}
+			log.Printf("    Exported Key File: %s", *exportKeyFile)
+		}
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: [REDACTED - Exported to %s]", keyPath)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +276,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key-file \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyPath)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,12 +381,36 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
+		var resolvedKey []byte
+		if *keyFile != "" {
+			kBytes, err := engine.LoadKeyFromFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to load key from file: %v", err)
+			}
+			resolvedKey = kBytes
+		} else if envKey := os.Getenv("CIPHER_DECRYPTION_KEY"); envKey != "" {
+			envKeyTrim := strings.TrimSpace(envKey)
+			if len(envKeyTrim) == 64 {
+				kBytes, err := hex.DecodeString(envKeyTrim)
+				if err != nil {
+					log.Fatalf("Invalid hex in CIPHER_DECRYPTION_KEY env var: %v", err)
+				}
+				resolvedKey = kBytes
+			} else if len(envKey) == 32 {
+				resolvedKey = []byte(envKey)
+			} else {
+				log.Fatalf("Invalid CIPHER_DECRYPTION_KEY env var length (must be 64 hex chars or 32 raw bytes)")
+			}
+		} else if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
 			if err != nil || len(kBytes) != 32 {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
-			keys.Put(ctx, contentID, kBytes)
+			resolvedKey = kBytes
+		}
+
+		if len(resolvedKey) > 0 {
+			keys.Put(ctx, contentID, resolvedKey)
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.
@@ -402,6 +439,16 @@ func main() {
 				log.Fatalf("Reassemble failed: %v", err)
 			}
 			log.Printf("[✓] Reassembled to: %s", *reassembleOut)
+
+			if *exportKeyFile != "" {
+				key, err := keys.Get(ctx, contentID)
+				if err == nil {
+					if err := engine.ExportKeyToFile(*exportKeyFile, key); err != nil {
+						log.Fatalf("Failed to export key to file: %v", err)
+					}
+					log.Printf("Exported decryption key to %s", *exportKeyFile)
+				}
+			}
 		}
 	}
 
