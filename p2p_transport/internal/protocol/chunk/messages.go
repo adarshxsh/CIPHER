@@ -128,11 +128,18 @@ func BuildManifest(id core.ContentID, data []byte) *Message {
 
 func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	var id core.ContentID
-	if len(payload) < 32 {
+	if len(payload) < ContentIDSize {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
-	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+	if len(payload) > MaxManifestSize {
+		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d (exceeds maximum %d)", len(payload), MaxManifestSize)
+	}
+	data := payload[ContentIDSize:]
+	if len(data) > MaxManifestSize-ContentIDSize {
+		return id, nil, fmt.Errorf("invalid manifest data length for MANIFEST: %d (exceeds maximum %d)", len(data), MaxManifestSize-ContentIDSize)
+	}
+	copy(id[:], payload[:ContentIDSize])
+	return id, data, nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
