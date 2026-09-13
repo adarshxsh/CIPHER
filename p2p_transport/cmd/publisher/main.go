@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +47,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	providerIdentityPath := flag.String("provider-identity", "", "Path to provider identity key file to create an attestation for")
+	providerIDFlag := flag.String("provider-id", "", "Provider peer ID to create an attestation for")
 
 	flag.Parse()
 
@@ -113,6 +116,7 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+	eng.SetPublisherKey(priv)
 
 	// Register chunk protocol stream handler for initial seeding
 	chunk.NewStreamHandler(h, eng)
@@ -128,6 +132,48 @@ func main() {
 	m, err := eng.Ingest(ctx, f, manifest.TypeFile)
 	if err != nil {
 		log.Fatalf("Failed to ingest file: %v", err)
+	}
+
+	// Generate provider ownership attestation if a target provider ID or identity path is available
+	var targetProviderID peer.ID
+	if *providerIDFlag != "" {
+		pid, err := peer.Decode(*providerIDFlag)
+		if err == nil {
+			targetProviderID = pid
+		}
+	} else if *providerIdentityPath != "" {
+		provKey, err := identity.LoadOrCreateFromPath(*providerIdentityPath)
+		if err == nil {
+			pid, err := peer.IDFromPrivateKey(provKey)
+			if err == nil {
+				targetProviderID = pid
+			}
+		}
+	} else {
+		// Check if prov.key or provider.key exists in store directory
+		for _, name := range []string{"prov.key", "provider.key"} {
+			provKeyPath := filepath.Join(*storePath, name)
+			if _, err := os.Stat(provKeyPath); err == nil {
+				provKey, err := identity.LoadOrCreateFromPath(provKeyPath)
+				if err == nil {
+					pid, err := peer.IDFromPrivateKey(provKey)
+					if err == nil {
+						targetProviderID = pid
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if targetProviderID != "" {
+		att, err := discovery.CreateAttestation(priv, m.Descriptor.ID, targetProviderID)
+		if err == nil {
+			m.Attestation = att
+			log.Printf("[Publisher] Created ownership attestation for provider %s", targetProviderID)
+		} else {
+			log.Printf("[Publisher] Warning: failed to create attestation for provider %s: %v", targetProviderID, err)
+		}
 	}
 
 	// Persist manifest in engine

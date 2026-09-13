@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -19,9 +20,70 @@ var StorageProviderNamespace = core.ContentID{
 	0x53, 0x45, 0x52, 0x56, 0x49, 0x43, 0x45, 0x01, // "SERVICE\x01"
 }
 
+// Attestation represents a publisher delegation authorizing a provider to host content.
+type Attestation struct {
+	ContentID  core.ContentID `json:"content_id"`
+	ProviderID peer.ID        `json:"provider_id"`
+	Timestamp  int64          `json:"timestamp"`
+	Signature  []byte         `json:"signature"`
+}
+
+// AttestationSigningBytes constructs the canonical payload for attestation signing and verification.
+func AttestationSigningBytes(contentID core.ContentID, providerID peer.ID, timestamp int64) []byte {
+	return []byte(fmt.Sprintf("attestation:%x:%s:%d", contentID, providerID, timestamp))
+}
+
+// CreateAttestation generates a signed ownership attestation authorizing providerID for contentID.
+func CreateAttestation(publisherPrivKey crypto.PrivKey, contentID core.ContentID, providerID peer.ID) (*Attestation, error) {
+	if publisherPrivKey == nil {
+		return nil, fmt.Errorf("publisher private key is required")
+	}
+	timestamp := time.Now().Unix()
+	signingData := AttestationSigningBytes(contentID, providerID, timestamp)
+	sig, err := publisherPrivKey.Sign(signingData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign attestation: %w", err)
+	}
+	return &Attestation{
+		ContentID:  contentID,
+		ProviderID: providerID,
+		Timestamp:  timestamp,
+		Signature:  sig,
+	}, nil
+}
+
+// VerifyAttestation validates that att was signed by publisherPubKey for expectedContentID and expectedProviderID.
+func VerifyAttestation(att *Attestation, publisherPubKey crypto.PubKey, expectedContentID core.ContentID, expectedProviderID peer.ID) error {
+	if att == nil {
+		return fmt.Errorf("attestation is nil")
+	}
+	if publisherPubKey == nil {
+		return fmt.Errorf("publisher public key is required")
+	}
+	if att.ContentID != expectedContentID {
+		return fmt.Errorf("attestation content ID mismatch: expected %x, got %x", expectedContentID, att.ContentID)
+	}
+	if att.ProviderID != expectedProviderID {
+		return fmt.Errorf("attestation provider ID mismatch: expected %s, got %s", expectedProviderID, att.ProviderID)
+	}
+	signingData := AttestationSigningBytes(att.ContentID, att.ProviderID, att.Timestamp)
+	valid, err := publisherPubKey.Verify(signingData, att.Signature)
+	if err != nil {
+		return fmt.Errorf("failed to verify attestation signature: %w", err)
+	}
+	if !valid {
+		return fmt.Errorf("invalid attestation signature")
+	}
+	return nil
+}
+
 // Provide announces to the DHT that this node can provide the content identified by the given ContentID.
 func Provide(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID) error {
+	return ProvideWithAttestation(ctx, kdht, id, nil)
+}
 
+// ProvideWithAttestation announces content availability to the DHT, supporting optional ownership attestations.
+func ProvideWithAttestation(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, att *Attestation) error {
 	cid, err := contentIDToCID(id)
 	if err != nil {
 		return fmt.Errorf("failed to convert ContentID to CID: %w", err)
