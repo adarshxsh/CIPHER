@@ -129,8 +129,9 @@ func main() {
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
+	var opts []chunk.Option
 	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
+		opts = append(opts, chunk.WithCorruptionProbability(*corruptProb))
 		log.Printf("[TESTING] Chunk corruption probability set to %.2f", *corruptProb)
 	}
 	if *throttle == "2MB" {
@@ -139,7 +140,7 @@ func main() {
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
 
-	chunk.NewStreamHandler(h, eng) // mp duplicate, have called it again later
+	chunk.NewStreamHandler(h, eng, opts...) // mp duplicate, have called it again later
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
@@ -172,7 +173,7 @@ func main() {
 	}
 
 	// Setup protocol handler
-	chunk.NewStreamHandler(h, eng)
+	chunk.NewStreamHandler(h, eng, opts...)
 
 	// Start DHT Republisher for persistent provider lifecycle
 	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour)
