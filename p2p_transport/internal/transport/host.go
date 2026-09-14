@@ -28,9 +28,15 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	rm, err := NewScalingResourceManager()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
@@ -57,6 +63,7 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
+		rm.Close()
 		return nil, nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
 
