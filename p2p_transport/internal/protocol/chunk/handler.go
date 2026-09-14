@@ -4,26 +4,33 @@ import (
 	"context"
 	"io"
 	"log"
-	"math/rand"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
-
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host          host.Host
+	engine        *engine.ContentEngine
+	mu            sync.RWMutex
+	corruptProb   float64
+	faultInjector func(data *core.Chunk) *core.Chunk
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...HandlerOption) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,11 +105,7 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
-		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
-	}
+	chunkData = h.applyFaultInjection(chunkData)
 
 	resp, err := BuildChunk(chunkData)
 	if err != nil {
