@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"cipher/internal/content/core"
@@ -57,10 +58,40 @@ type FileSessionManager struct {
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	if info, err := os.Stat(dir); err == nil {
+		if info.Mode().Perm() != 0700 {
+			if err := os.Chmod(dir, 0700); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		return nil, err
+	}
+
+	mgr := &FileSessionManager{dir: dir}
+	if err := mgr.cleanOrphanedTmpFiles(); err != nil {
+		return nil, err
+	}
+	return mgr, nil
+}
+
+func (m *FileSessionManager) cleanOrphanedTmpFiles() error {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmp") {
+			_ = os.Remove(filepath.Join(m.dir, entry.Name()))
+		}
+	}
+	return nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -69,11 +100,20 @@ func (m *FileSessionManager) getPath(id core.ContentID) string {
 
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No session found
 		}
+		return nil, err
+	}
+	if info.Mode().Perm() != 0600 {
+		if err := os.Chmod(path, 0600); err != nil {
+			return nil, err
+		}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
 	var s TransferSession
@@ -92,10 +132,19 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	path := m.getPath(session.ContentID)
 	// Write to temporary file and rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, b, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *FileSessionManager) Close(id core.ContentID) error {
@@ -105,6 +154,9 @@ func (m *FileSessionManager) Close(id core.ContentID) error {
 
 func (m *FileSessionManager) Delete(id core.ContentID) error {
 	path := m.getPath(id)
+	tmpPath := path + ".tmp"
+	_ = os.Remove(tmpPath)
+
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -113,6 +165,7 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 }
 
 func (m *FileSessionManager) List() ([]*TransferSession, error) {
+	_ = m.cleanOrphanedTmpFiles()
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -123,7 +176,17 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 	var sessions []*TransferSession
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
+			filePath := filepath.Join(m.dir, entry.Name())
+			info, err := entry.Info()
+			if err != nil {
+				info, err = os.Stat(filePath)
+			}
+			if err == nil && info.Mode().Perm() != 0600 {
+				if err := os.Chmod(filePath, 0600); err != nil {
+					return nil, err
+				}
+			}
+			b, err := os.ReadFile(filePath)
 			if err != nil {
 				continue
 			}
