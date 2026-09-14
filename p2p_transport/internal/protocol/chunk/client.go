@@ -61,12 +61,20 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
+	if err := ValidateManifestPayload(resp.Payload); err != nil {
+		return nil, fmt.Errorf("invalid manifest response payload: %w", err)
+	}
+
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
 		return nil, err
 	}
 	if respID != id {
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("manifest data size exceeds maximum: %w", ErrInvalidManifestPayload)
 	}
 
 	return data, nil
