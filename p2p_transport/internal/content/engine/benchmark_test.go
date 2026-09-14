@@ -42,6 +42,7 @@ func BenchmarkContentEngine_Ingest(b *testing.B) {
 	ctx := context.Background()
 
 	b.SetBytes(int64(dataSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -81,6 +82,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	}
 
 	b.SetBytes(int64(dataSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
