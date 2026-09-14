@@ -56,6 +56,14 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("manifest size %d != expected %d", m.Descriptor.Size, len(originalData))
 	}
 
+	computedID, err := m.ComputeContentID()
+	if err != nil {
+		t.Fatalf("ComputeContentID failed: %v", err)
+	}
+	if m.Descriptor.ID != computedID {
+		t.Errorf("manifest Descriptor.ID %x != ComputeContentID() %x", m.Descriptor.ID, computedID)
+	}
+
 	expectedChunks := (len(originalData) + int(config.ChunkSize) - 1) / int(config.ChunkSize)
 	if len(m.ChunkIDs) != expectedChunks {
 		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
