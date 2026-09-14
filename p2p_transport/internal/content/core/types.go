@@ -2,6 +2,9 @@ package core
 
 import "context"
 
+// MaxCiphertextSize is the largest chunk payload accepted in the system.
+const MaxCiphertextSize = 2 * 1024 * 1024
+
 type ChunkID [32]byte
 type ContentID [32]byte
 type Hash [32]byte
