@@ -2,6 +2,8 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -46,7 +48,8 @@ func TestMessageEnvelope_Serialization(t *testing.T) {
 }
 
 func TestProtocolCompatibility_OldDecoder(t *testing.T) {
-	// A new version comes in, we read it
+	// A new version comes in, ReadMessage delegates framing checks to DecodeFrame
+	// and strictly rejects unsupported versions.
 	msg := &chunk.Message{
 		Version: 2, // Newer version
 		Type:    chunk.MsgRequestManifest,
@@ -58,21 +61,14 @@ func TestProtocolCompatibility_OldDecoder(t *testing.T) {
 		t.Fatalf("WriteMessage failed: %v", err)
 	}
 
-	// When reading, we could theoretically reject it inside ReadMessage if we strictly check version.
-	// We didn't enforce it in ReadMessage yet, let's enforce it in the handler/application logic, 
-	// or we can add it to ReadMessage. For now, let's just make sure we can parse the envelope and 
-	// the application handler can reject `msg.Version != CurrentMessageVersion`.
-	parsedMsg, err := chunk.ReadMessage(&buf)
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
-	}
-	if parsedMsg.Version != 2 {
-		t.Errorf("Expected parsed version to remain intact")
+	_, err := chunk.ReadMessage(&buf)
+	if !errors.Is(err, chunk.ErrInvalidProtocolVersion) {
+		t.Fatalf("expected ErrInvalidProtocolVersion, got %v", err)
 	}
 }
 
 func TestProtocolCompatibility_MalformedMessage(t *testing.T) {
-	// Empty payload for a REQUEST_MANIFEST
+	// Payload parser should reject a payload that is too short
 	msg := &chunk.Message{
 		Version: chunk.CurrentMessageVersion,
 		Type:    chunk.MsgRequestManifest,
@@ -81,27 +77,50 @@ func TestProtocolCompatibility_MalformedMessage(t *testing.T) {
 	var buf bytes.Buffer
 	chunk.WriteMessage(&buf, msg)
 
-	parsedMsg, _ := chunk.ReadMessage(&buf)
-	
+	parsedMsg, err := chunk.ReadMessage(&buf)
+	if err != nil {
+		t.Fatalf("ReadMessage failed: %v", err)
+	}
+
 	// Payload parser should reject it
-	_, err := chunk.ParseRequestManifest(parsedMsg.Payload)
+	_, err = chunk.ParseRequestManifest(parsedMsg.Payload)
 	if err == nil {
 		t.Error("Expected error parsing malformed REQUEST_MANIFEST, got nil")
 	}
 }
 
 func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
+	// ReadMessage delegates to DecodeFrame which rejects unknown message types
 	msg := &chunk.Message{
 		Version: chunk.CurrentMessageVersion,
 		Type:    0x99, // Unknown type
-		Payload: []byte{},
+		Payload: []byte("data"),
 	}
 	var buf bytes.Buffer
 	chunk.WriteMessage(&buf, msg)
 
-	parsedMsg, _ := chunk.ReadMessage(&buf)
-	if parsedMsg.Type != 0x99 {
-		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
+	_, err := chunk.ReadMessage(&buf)
+	if !errors.Is(err, chunk.ErrUnknownMessageType) {
+		t.Fatalf("expected ErrUnknownMessageType, got %v", err)
 	}
-	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_OversizedPayloadRejected(t *testing.T) {
+	var buf bytes.Buffer
+
+	frameSize := uint32(chunk.MaxChunkRequestSize + 1 + 3)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgRequestChunk)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
 }
