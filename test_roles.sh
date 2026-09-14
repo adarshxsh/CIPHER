@@ -12,6 +12,7 @@ rm -rf store_publisher store_provider store_client test_input.dat test_output.da
 rm -f publisher.log provider.log client.log bootstrap.log
 
 export CGO_ENABLED=0
+export CIPHER_ALLOW_LOCAL_IP=1
 
 echo "[1/4] Building binaries (publisher, provider, client, bootstrap)..."
 go build -o bin/publisher ./cmd/publisher
