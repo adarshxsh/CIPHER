@@ -113,6 +113,7 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+	eng.SetPublisherKey(priv)
 
 	// Register chunk protocol stream handler for initial seeding
 	chunk.NewStreamHandler(h, eng)

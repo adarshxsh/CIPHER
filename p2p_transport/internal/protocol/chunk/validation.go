@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -225,13 +226,22 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, manifestBytes, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	if len(manifestBytes) > 0 {
+		m, err := manifest.Deserialize(manifestBytes)
+		if err == nil {
+			if !m.Verify() {
+				return fmt.Errorf("manifest: %w: invalid signature", ErrInvalidManifestPayload)
+			}
+		}
 	}
 
 	return nil

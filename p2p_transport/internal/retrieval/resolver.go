@@ -55,11 +55,31 @@ func ResolveManifest(
 		m, err := manifest.Deserialize(manifestData)
 		if err != nil {
 			log.Printf(
-				"[DHT] Provider %s returned invalid manifest: %v",
+				"[DHT] Provider %s returned invalid manifest structure: %v",
 				provider,
 				err,
 			)
 			lastErr = err
+			continue
+		}
+
+		if !m.Verify() {
+			log.Printf(
+				"[DHT] Provider %s returned manifest with invalid signature",
+				provider,
+			)
+			lastErr = fmt.Errorf("provider %s returned manifest with invalid signature", provider)
+			continue
+		}
+
+		if m.Descriptor.ID != id {
+			log.Printf(
+				"[DHT] Provider %s returned manifest content ID mismatch (expected %x, got %x)",
+				provider,
+				id,
+				m.Descriptor.ID,
+			)
+			lastErr = fmt.Errorf("provider %s returned manifest content ID mismatch", provider)
 			continue
 		}
 
