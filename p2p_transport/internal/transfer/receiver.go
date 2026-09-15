@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -15,6 +16,46 @@ import (
 )
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+
+// SanitizeFilename cleans rawFilename, extracts its base component, and validates that
+// the resulting output path resides strictly within downloadsDir.
+func SanitizeFilename(downloadsDir, rawFilename string) (string, error) {
+	// 1. Normalize path separators to POSIX '/' for cross-platform base extraction
+	cleanFilename := strings.ReplaceAll(rawFilename, "\\", "/")
+
+	// 2. Extract base filename
+	baseFilename := filepath.Base(cleanFilename)
+
+	// 3. Reject empty or invalid directory references
+	trimmedBase := strings.TrimSpace(baseFilename)
+	if trimmedBase == "" || baseFilename == "." || baseFilename == ".." || baseFilename == "/" || baseFilename == "\\" {
+		return "", fmt.Errorf("invalid filename: %q", rawFilename)
+	}
+
+	// 4. Resolve absolute paths for directory containment check
+	absDownloads, err := filepath.Abs(downloadsDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve downloads directory: %w", err)
+	}
+
+	outPath := filepath.Join(absDownloads, baseFilename)
+	absOut, err := filepath.Abs(outPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve output path: %w", err)
+	}
+
+	// 5. Verify containment within downloadsDir
+	rel, err := filepath.Rel(absDownloads, absOut)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "..\\") {
+		return "", fmt.Errorf("path traversal attempt detected: %q resolves outside target directory", rawFilename)
+	}
+
+	return filepath.Join(downloadsDir, baseFilename), nil
+}
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
@@ -38,7 +79,11 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	outPath, err := SanitizeFilename(downloadsDir, header.Filename)
+	if err != nil {
+		return fmt.Errorf("path validation failed for filename %q: %w", header.Filename, err)
+	}
+
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
