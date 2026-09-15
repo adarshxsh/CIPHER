@@ -1,5 +1,13 @@
 package chunk
 
+import "time"
+
+const (
+	// Default timeouts
+	DefaultReadTimeout  = 30 * time.Second
+	DefaultWriteTimeout = 15 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
@@ -81,11 +89,10 @@ const (
 )
 
 const (
-	// The initial hardened protocol allows one chunk transaction
-	// per stream.
+	// Default bounds for transactions and messages per stream.
 	MaxChunksPerRequest      = 1
-	MaxTransactionsPerStream = 1
-	MaxMessagesPerStream     = 4
+	MaxTransactionsPerStream = 100
+	MaxMessagesPerStream     = 400
 )
 
 const (
