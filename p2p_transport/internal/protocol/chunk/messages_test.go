@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +105,59 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_OversizedPayloads(t *testing.T) {
+	// 1. MsgRequestManifest declaring 513 bytes (limit is 512)
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.LittleEndian, uint32(3+513))
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgRequestManifest))
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error for MsgRequestManifest exceeding 512 bytes, got nil")
+	}
+
+	// 2. MsgAck declaring 34 bytes (limit is 33)
+	buf.Reset()
+	binary.Write(&buf, binary.LittleEndian, uint32(3+34))
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgAck))
+
+	_, err = chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error for MsgAck exceeding 33 bytes, got nil")
+	}
+
+	// 3. Inflated MsgRequestManifest declaring 2MB frame
+	buf.Reset()
+	binary.Write(&buf, binary.LittleEndian, uint32(2000000))
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgRequestManifest))
+
+	_, err = chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error for inflated MsgRequestManifest frame, got nil")
+	}
+}
+
+func TestReadMessage_InvalidFrameSizes(t *testing.T) {
+	// Frame size < 3
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.LittleEndian, uint32(2))
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error for frame size < 3, got nil")
+	}
+
+	// Frame size > MaxFrameSize (2MB + 1)
+	buf.Reset()
+	binary.Write(&buf, binary.LittleEndian, uint32(2*1024*1024+1))
+
+	_, err = chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error for frame size > MaxFrameSize, got nil")
+	}
 }
