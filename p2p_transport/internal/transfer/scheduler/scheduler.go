@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -22,6 +22,7 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Reputation  *ReputationManager
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -29,16 +30,25 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		Reputation:  NewReputationManager(DefaultReputationConfig()),
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	if s.Reputation == nil {
+		s.Reputation = NewReputationManager(DefaultReputationConfig())
+	}
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
+		if s.Reputation.IsBannedForPeer(source.PeerID) {
+			log.Printf("[Scheduler] Skipping banned peer source %s", source.PeerID)
+			continue
+		}
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
@@ -47,7 +57,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Reputation)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
@@ -83,7 +93,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
 				}
 
-				// Real network / integrity error: count attempts
+				// Real network / integrity error: count attempts and record fault
+				if res.PeerID != "" && s.Reputation != nil {
+					s.Reputation.RecordFault(res.PeerID)
+				}
+
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
 					queue.Push(res.Task)
@@ -92,6 +106,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
+				if res.PeerID != "" && s.Reputation != nil {
+					s.Reputation.RecordSuccess(res.PeerID)
+				}
 				completions <- res
 				pendingTasks--
 			}
