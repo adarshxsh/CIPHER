@@ -13,7 +13,7 @@ func TestContentIDToCID(t *testing.T) {
 		id[i] = byte(i)
 	}
 
-	c, err := contentIDToCID(id)
+	c, err := ContentIDToCID(id)
 	if err != nil {
 		t.Fatalf("contentIDToCID failed: %v", err)
 	}

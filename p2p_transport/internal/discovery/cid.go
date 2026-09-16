@@ -7,7 +7,8 @@ import (
 	"github.com/multiformats/go-multihash"
 )
 
-func contentIDToCID(id core.ContentID) (cid.Cid, error) {
+// ContentIDToCID converts a core.ContentID to a multihash CIDv1.
+func ContentIDToCID(id core.ContentID) (cid.Cid, error) {
 	mh, err := multihash.Encode(id[:], multihash.SHA2_256)
 
 	if err != nil {
