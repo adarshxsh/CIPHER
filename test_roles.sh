@@ -35,22 +35,22 @@ trap cleanup EXIT
 
 sleep 2
 
-CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
-PUB_ADDR=$(grep "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
+CONTENT_ID=$(grep -a "^ContentID" publisher.log | awk '{print $NF}')
+KEY_FILE="./store_publisher/keys/$CONTENT_ID.key"
+PUB_ADDR=$(grep -a "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
 
-if [ -z "$CONTENT_ID" ] || [ -z "$KEY" ] || [ -z "$PUB_ADDR" ]; then
+if [ -z "$CONTENT_ID" ] || [ ! -f "$KEY_FILE" ] || [ -z "$PUB_ADDR" ]; then
     echo "Error: Failed to parse publisher parameters from log:"
     cat publisher.log
     exit 1
 fi
 
 echo "  - ContentID: $CONTENT_ID"
-echo "  - Key:       $KEY"
+echo "  - KeyFile:   $KEY_FILE"
 echo "  - Address:   $PUB_ADDR"
 
 echo "[4/5] Running Client to fetch, verify, and reassemble content..."
-./bin/client -p 55001 -ws-port 55002 -identity ./store_client/identity.key -store ./store_client -d "$PUB_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output.dat > client.log 2>&1
+./bin/client -p 55001 -ws-port 55002 -identity ./store_client/identity.key -store ./store_client -d "$PUB_ADDR" -fetch "$CONTENT_ID" -key-file "$KEY_FILE" -out test_output.dat > client.log 2>&1
 
 DOWNLOADED_HASH=$(shasum -a 256 test_output.dat | awk '{print $1}')
 echo "Downloaded SHA-256: $DOWNLOADED_HASH"
@@ -77,7 +77,7 @@ PROV_PID=$!
 sleep 2
 
 # Run Client using ONLY DHT discovery (no direct -d flag)
-./bin/client -p 55010 -ws-port 55011 -identity ./store_client2/identity.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output_dht.dat > client_dht.log 2>&1
+./bin/client -p 55010 -ws-port 55011 -identity ./store_client2/identity.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file "$KEY_FILE" -out test_output_dht.dat > client_dht.log 2>&1
 
 DHT_DOWNLOADED_HASH=$(shasum -a 256 test_output_dht.dat | awk '{print $1}')
 echo "DHT Downloaded SHA-256: $DHT_DOWNLOADED_HASH"
