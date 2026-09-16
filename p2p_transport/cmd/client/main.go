@@ -46,6 +46,8 @@ func main() {
 	forceRelay := flag.Bool("force-relay", false, "Force traffic over relay")
 
 	transferStatus := flag.Bool("status", false, "List all active transfer sessions")
+	offset := flag.Int("offset", 0, "Offset for paginated session listing")
+	limit := flag.Int("limit", 50, "Limit for paginated session listing")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
@@ -59,7 +61,7 @@ func main() {
 	}
 
 	if *transferStatus {
-		sessions, err := sm.List()
+		sessions, err := sm.ListSessions(*offset, *limit)
 		if err != nil {
 			log.Fatalf("Failed to list sessions: %v", err)
 		}

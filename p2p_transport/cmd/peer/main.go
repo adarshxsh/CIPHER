@@ -53,6 +53,8 @@ func main() {
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
+	offset := flag.Int("offset", 0, "Offset for paginated session listing")
+	limit := flag.Int("limit", 50, "Limit for paginated session listing")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
@@ -147,7 +149,7 @@ func main() {
 	}
 
 	if *transferStatus {
-		sessions, err := sm.List()
+		sessions, err := sm.ListSessions(*offset, *limit)
 		if err != nil {
 			log.Fatalf("Failed to list sessions: %v", err)
 		}
