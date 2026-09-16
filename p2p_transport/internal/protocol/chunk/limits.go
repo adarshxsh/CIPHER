@@ -1,9 +1,19 @@
 package chunk
 
+import (
+	"time"
+)
+
 const (
+	// DefaultStreamTimeout is the default read/write deadline for chunk protocol streams.
+	DefaultStreamTimeout = 15 * time.Second
+
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
 )
+
+// StreamTimeout is the active deadline used by stream operations (can be overridden in tests).
+var StreamTimeout = DefaultStreamTimeout
 
 const (
 	// StandardChunkSize is the normal plaintext chunk size.
@@ -81,9 +91,12 @@ const (
 )
 
 const (
+	MaxChunksPerRequest = 1
+)
+
+var (
 	// The initial hardened protocol allows one chunk transaction
 	// per stream.
-	MaxChunksPerRequest      = 1
 	MaxTransactionsPerStream = 1
 	MaxMessagesPerStream     = 4
 )

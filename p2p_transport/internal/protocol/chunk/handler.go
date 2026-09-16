@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -33,7 +34,20 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	if err := s.SetReadDeadline(time.Now().Add(StreamTimeout)); err != nil {
+		log.Printf("[Chunk Protocol] Failed to set initial read deadline: %v", err)
+		return
+	}
+
+	msgCount := 0
+	txCount := 0
+
 	for {
+		if err := s.SetReadDeadline(time.Now().Add(StreamTimeout)); err != nil {
+			log.Printf("[Chunk Protocol] Failed to refresh read deadline: %v", err)
+			return
+		}
+
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
@@ -41,6 +55,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			return
+		}
+
+		msgCount++
+		if msgCount > MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Message count limit exceeded (%d > %d)", msgCount, MaxMessagesPerStream)
+			WriteMessage(s, BuildError(ErrBadRequest, "message limit exceeded"))
 			return
 		}
 
@@ -53,12 +74,25 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 
 		switch msg.Type {
 		case MsgRequestManifest:
+			txCount++
+			if txCount > MaxTransactionsPerStream {
+				log.Printf("[Chunk Protocol] Transaction count limit exceeded (%d > %d)", txCount, MaxTransactionsPerStream)
+				WriteMessage(s, BuildError(ErrBadRequest, "transaction limit exceeded"))
+				return
+			}
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			txCount++
+			if txCount > MaxTransactionsPerStream {
+				log.Printf("[Chunk Protocol] Transaction count limit exceeded (%d > %d)", txCount, MaxTransactionsPerStream)
+				WriteMessage(s, BuildError(ErrBadRequest, "transaction limit exceeded"))
+				return
+			}
+			h.handleRequestChunk(s, msg, &msgCount)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			return
 		}
 	}
 }
@@ -84,7 +118,7 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, msgCount *int) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -116,11 +150,24 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	if err := s.SetReadDeadline(time.Now().Add(StreamTimeout)); err != nil {
+		log.Printf("[Chunk Protocol] Failed to set read deadline for ACK: %v", err)
+		return
+	}
+
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
+
+	(*msgCount)++
+	if *msgCount > MaxMessagesPerStream {
+		log.Printf("[Chunk Protocol] Message count limit exceeded on ACK (%d > %d)", *msgCount, MaxMessagesPerStream)
+		WriteMessage(s, BuildError(ErrBadRequest, "message limit exceeded"))
+		return
+	}
+
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
