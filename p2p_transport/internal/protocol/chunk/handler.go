@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"math/rand"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,20 +12,34 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+type HandlerOption func(*StreamHandler)
 
-type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+func WithInterceptor(interceptor ChunkInterceptor) HandlerOption {
+	return func(h *StreamHandler) {
+		h.interceptor = interceptor
+	}
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+type StreamHandler struct {
+	host        host.Host
+	engine      *engine.ContentEngine
+	interceptor ChunkInterceptor
+}
+
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...HandlerOption) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
 	}
+	for _, opt := range opts {
+		opt(handler)
+	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func (h *StreamHandler) SetInterceptor(interceptor ChunkInterceptor) {
+	h.interceptor = interceptor
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -98,10 +111,13 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
-		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+	if h.interceptor != nil {
+		var interceptErr error
+		chunkData, interceptErr = h.interceptor.InterceptChunk(ctx, chunkData)
+		if interceptErr != nil {
+			WriteMessage(s, BuildError(ErrInternal, "interceptor failed"))
+			return
+		}
 	}
 
 	resp, err := BuildChunk(chunkData)

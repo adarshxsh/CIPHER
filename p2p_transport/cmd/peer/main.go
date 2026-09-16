@@ -59,7 +59,6 @@ func main() {
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
-	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -129,10 +128,6 @@ func main() {
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
-	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
-		log.Printf("[TESTING] Chunk corruption probability set to %.2f", *corruptProb)
-	}
 	if *throttle == "2MB" {
 		// 2MB/s = 8 chunks/sec (256KB each). Sleep 125ms per chunk.
 		scheduler.TestThrottle = 500 * time.Millisecond
@@ -256,14 +251,14 @@ func main() {
 		if *wsPort == 0 {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
-		
-		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
-			"  -p 5001 \\\n" +
-			"  -ws-port 5002 \\\n" +
-			"  -store ./store_b \\\n" +
-			"  -d \"%s\" \\\n" +
-			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
+
+		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n"+
+			"  -p 5001 \\\n"+
+			"  -ws-port 5002 \\\n"+
+			"  -store ./store_b \\\n"+
+			"  -d \"%s\" \\\n"+
+			"  -fetch \"%x\" \\\n"+
+			"  -key \"%x\" \\\n"+
 			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
 		log.Printf("-----------------------------------------------------------\n")
 	}
