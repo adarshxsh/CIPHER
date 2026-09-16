@@ -72,6 +72,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	for chunk := range chunkCh {
 		// Encrypt the chunk
 		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
 
@@ -83,11 +84,16 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 		// Store the chunk
 		if err := e.sink.PutChunk(ctx, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
 			return nil, fmt.Errorf("failed to store chunk: %w", err)
 		}
 
 		chunkIDs = append(chunkIDs, chunkID)
 		totalSize += uint64(chunk.Header.PlainSize)
+
+		// Return buffer to sync.Pool after processing
+		e.chunker.PutBuffer(chunk.Data)
+		chunk.Data = nil
 	}
 
 	if err := <-errCh; err != nil {
