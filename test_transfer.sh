@@ -6,7 +6,7 @@ go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
 
-./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 > peer_a.log 2>&1 &
+./bin/peer -show-key -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 > peer_a.log 2>&1 &
 PEER_A_PID=$!
 
 sleep 3
