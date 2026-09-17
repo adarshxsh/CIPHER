@@ -59,8 +59,8 @@ func TestProtocolCompatibility_OldDecoder(t *testing.T) {
 	}
 
 	// When reading, we could theoretically reject it inside ReadMessage if we strictly check version.
-	// We didn't enforce it in ReadMessage yet, let's enforce it in the handler/application logic, 
-	// or we can add it to ReadMessage. For now, let's just make sure we can parse the envelope and 
+	// We didn't enforce it in ReadMessage yet, let's enforce it in the handler/application logic,
+	// or we can add it to ReadMessage. For now, let's just make sure we can parse the envelope and
 	// the application handler can reject `msg.Version != CurrentMessageVersion`.
 	parsedMsg, err := chunk.ReadMessage(&buf)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestProtocolCompatibility_MalformedMessage(t *testing.T) {
 	chunk.WriteMessage(&buf, msg)
 
 	parsedMsg, _ := chunk.ReadMessage(&buf)
-	
+
 	// Payload parser should reject it
 	_, err := chunk.ParseRequestManifest(parsedMsg.Payload)
 	if err == nil {
