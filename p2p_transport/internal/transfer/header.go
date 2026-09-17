@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	ProtocolVersion1 byte = 1
+	ProtocolVersion1    byte = 1
 	MsgTypeFileTransfer byte = 1
+	MaxFilenameLength        = 255
 )
 
 // Header represents the binary metadata sent before the file contents.
@@ -41,6 +42,9 @@ func (h *Header) WriteTo(w io.Writer) error {
 
 	// 3. Write Filename Length
 	filenameBytes := []byte(h.Filename)
+	if len(filenameBytes) == 0 || len(filenameBytes) > MaxFilenameLength {
+		return fmt.Errorf("invalid filename length: %d (must be between 1 and %d bytes)", len(filenameBytes), MaxFilenameLength)
+	}
 	filenameLen := uint16(len(filenameBytes))
 	if err := binary.Write(w, binary.BigEndian, filenameLen); err != nil {
 		return fmt.Errorf("failed to write filename length: %w", err)
@@ -80,6 +84,10 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	var filenameLen uint16
 	if err := binary.Read(r, binary.BigEndian, &filenameLen); err != nil {
 		return fmt.Errorf("failed to read filename length: %w", err)
+	}
+
+	if filenameLen == 0 || filenameLen > MaxFilenameLength {
+		return fmt.Errorf("invalid filename length: %d (must be between 1 and %d bytes)", filenameLen, MaxFilenameLength)
 	}
 
 	// 4. Read Filename
