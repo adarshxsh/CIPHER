@@ -12,6 +12,9 @@ import (
 	"cipher/internal/content/core"
 )
 
+// MaxCiphertextSize is the maximum allowed size for a chunk payload (2 MiB).
+const MaxCiphertextSize = 2 * 1024 * 1024
+
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
 	baseDir string
@@ -94,25 +97,36 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
-	chunk := &core.Chunk{}
-	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
+	c := &core.Chunk{}
+	if err := binary.Read(f, binary.LittleEndian, &c.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	if c.Header.CipherSize > MaxCiphertextSize {
+		return nil, fmt.Errorf("chunk cipher size %d exceeds maximum allowed size %d", c.Header.CipherSize, MaxCiphertextSize)
+	}
+	if c.Header.PlainSize > MaxCiphertextSize {
+		return nil, fmt.Errorf("chunk plain size %d exceeds maximum allowed size %d", c.Header.PlainSize, MaxCiphertextSize)
+	}
+
+	expectedSize := c.Header.CipherSize
+	if expectedSize == 0 {
+		expectedSize = c.Header.PlainSize
+	}
+
+	data := make([]byte, expectedSize)
+	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	var extra [1]byte
+	if n, _ := f.Read(extra[:]); n > 0 {
+		return nil, fmt.Errorf("chunk file contains extra trailing bytes past declared header length")
+	}
 
-	return chunk, nil
+	c.Data = data
+
+	return c, nil
 }
 
 func (s *FSStorage) manifestPath(id core.ContentID) string {
