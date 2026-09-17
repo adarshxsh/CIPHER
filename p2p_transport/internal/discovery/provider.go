@@ -71,6 +71,7 @@ func FindStorageProviders(ctx context.Context, kdht *dht.IpfsDHT, limit int) ([]
 }
 
 // FindProviders searches the DHT for peers that can provide the content identified by the given ContentID.
+// Multiaddress results are sanitized to filter out unroutable, private, or loopback addresses prior to returning.
 func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PROVIDER_LIMIT int) ([]peer.AddrInfo, error) {
 
 	if PROVIDER_LIMIT <= 0 {
@@ -82,11 +83,12 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
 	}
 
-	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+	rawCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+	sanitizedCh := SanitizeProviderChannel(ctx, rawCh, IsPrivateNetworkAllowed())
 
 	var providers []peer.AddrInfo
 
-	for p := range providerCh {
+	for p := range sanitizedCh {
 		providers = append(providers, p)
 
 		if len(providers) >= PROVIDER_LIMIT {

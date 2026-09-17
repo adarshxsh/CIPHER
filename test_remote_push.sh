@@ -13,6 +13,7 @@ rm -f test_orig.dat test_recovered.dat test_recovered_fault.dat
 rm -f bootstrap.log provider1.log provider2.log provider3.log publisher.log client1.log client2.log
 
 export CGO_ENABLED=0
+export CIPHER_ALLOW_PRIVATE_DHT=1
 
 cleanup() {
     echo "\nCleaning up background processes..."
