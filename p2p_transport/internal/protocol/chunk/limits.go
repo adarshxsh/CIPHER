@@ -77,7 +77,7 @@ const (
 
 	// Manifest responses can be larger than request payloads but remain bound
 	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	MaxManifestSize = MaxMessagePayloadSize - ContentIDSize
 )
 
 const (
@@ -111,7 +111,7 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 		return MaxChunkRequestSize
 
 	case MsgManifest:
-		return MaxManifestSize
+		return ContentIDSize + MaxManifestSize
 
 	case MsgRequestChunk:
 		return MaxChunkRequestSize
