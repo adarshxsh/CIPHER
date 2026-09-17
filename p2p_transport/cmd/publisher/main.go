@@ -46,6 +46,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	profileFlag := flag.String("profile", string(transport.ProfileDefault), "Node resource profile (bootstrap, relay, client, default)")
+	limitConfigPath := flag.String("limits-config", "", "Path to custom resource limits JSON config file")
 
 	flag.Parse()
 
@@ -69,7 +71,16 @@ func main() {
 	}
 
 	// 2. Start libp2p host and DHT
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		*relayAddr,
+		*forceRelay,
+		transport.WithNodeProfile(transport.NodeProfile(*profileFlag)),
+		transport.WithLimitConfigFile(*limitConfigPath),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
