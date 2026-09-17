@@ -7,20 +7,23 @@ import (
 	"io"
 	"sort"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
+
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
 )
 
 type ContentEngine struct {
-	config    core.EngineConfig
-	chunker   *chunker.Chunker
-	encryptor core.Encryptor
-	digest    core.Digest
-	source    core.ChunkSource
-	sink      core.ChunkSink
+	config        core.EngineConfig
+	chunker       *chunker.Chunker
+	encryptor     core.Encryptor
+	digest        core.Digest
+	source        core.ChunkSource
+	sink          core.ChunkSink
 	manifestStore core.ManifestStore
-	keys      core.KeyProvider
+	keys          core.KeyProvider
+	publisherKey  crypto.PrivKey
 }
 
 func NewContentEngine(
@@ -42,6 +45,11 @@ func NewContentEngine(
 		manifestStore: manifestStore,
 		keys:          keys,
 	}
+}
+
+// SetPublisherKey sets the publisher private key used for signing manifest descriptors.
+func (e *ContentEngine) SetPublisherKey(priv crypto.PrivKey) {
+	e.publisherKey = priv
 }
 
 // Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
@@ -118,6 +126,19 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 			ChunkNonceSize: 12,
 			KeyID:          "embedded",
 		},
+	}
+
+	pubKey := e.publisherKey
+	if pubKey == nil {
+		ephemeralKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 256)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate ephemeral publisher key: %w", err)
+		}
+		pubKey = ephemeralKey
+	}
+
+	if err := m.Sign(pubKey); err != nil {
+		return nil, fmt.Errorf("failed to sign manifest: %w", err)
 	}
 
 	return m, nil

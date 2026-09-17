@@ -63,6 +63,16 @@ func ResolveManifest(
 			continue
 		}
 
+		if err := m.VerifyPublisher(); err != nil {
+			log.Printf(
+				"[DHT] Provider %s returned manifest with unverified or invalid publisher signature: %v",
+				provider,
+				err,
+			)
+			lastErr = err
+			continue
+		}
+
 		log.Printf(
 			"[DHT] Successfully resolved manifest from provider %s",
 			provider,
