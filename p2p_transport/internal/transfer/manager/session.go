@@ -3,6 +3,7 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -10,6 +11,11 @@ import (
 	"cipher/internal/content/core"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	MaxSessionFileSize int64 = 64 * 1024 // 64 KiB per-file read limit boundary
+	MaxListedSessions  int   = 500       // Maximum session count threshold during List()
 )
 
 type SessionStatus string
@@ -53,34 +59,57 @@ type SessionManager interface {
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
 type FileSessionManager struct {
-	dir string
+	dir         string
+	maxSessions int
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	return &FileSessionManager{
+		dir:         dir,
+		maxSessions: MaxListedSessions,
+	}, nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
 	return filepath.Join(m.dir, fmt.Sprintf("%x.json", id))
 }
 
+func (m *FileSessionManager) readSessionFile(path string) (*TransferSession, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	lr := io.LimitReader(f, MaxSessionFileSize+1)
+	b, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > MaxSessionFileSize {
+		return nil, fmt.Errorf("session file %s exceeds maximum size of %d bytes", path, MaxSessionFileSize)
+	}
+
+	var s TransferSession
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
-	b, err := os.ReadFile(path)
+	s, err := m.readSessionFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No session found
 		}
 		return nil, err
 	}
-	var s TransferSession
-	if err := json.Unmarshal(b, &s); err != nil {
-		return nil, err
-	}
-	return &s, nil
+	return s, nil
 }
 
 func (m *FileSessionManager) Save(session *TransferSession) error {
@@ -120,17 +149,23 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
+
+	maxCount := m.maxSessions
+	if maxCount <= 0 {
+		maxCount = MaxListedSessions
+	}
+
 	var sessions []*TransferSession
 	for _, entry := range entries {
+		if len(sessions) >= maxCount {
+			break
+		}
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
+			s, err := m.readSessionFile(filepath.Join(m.dir, entry.Name()))
 			if err != nil {
 				continue
 			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
-			}
+			sessions = append(sessions, s)
 		}
 	}
 	return sessions, nil
