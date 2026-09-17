@@ -51,6 +51,8 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to key file (or '-' for stdin) for decryption key")
+	keyOut := flag.String("key-out", "", "Path to file where decryption key will be exported")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
@@ -123,7 +125,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -212,8 +214,16 @@ func main() {
 		}
 		defer f.Close()
 
+		var customKey []byte
+		if *keyFile != "" {
+			customKey, err = storage.LoadKeyFromFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to load key file: %v", err)
+			}
+		}
+
 		// Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
-		m, err := eng.Ingest(ctx, f, manifest.TypeFile)
+		m, err := eng.IngestWithKey(ctx, f, manifest.TypeFile, customKey)
 		if err != nil {
 			log.Fatalf("Failed to ingest: %v", err)
 		}
@@ -221,6 +231,15 @@ func main() {
 		// Save manifest bytes to engine memory so it can be served
 		mBytes, _ := m.Serialize()
 		eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
+
+		// Export key to file if requested
+		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		if *keyOut != "" {
+			if err := storage.ExportKeyToFile(*keyOut, key); err != nil {
+				log.Fatalf("Failed to export key to file: %v", err)
+			}
+			log.Printf("Exported decryption key to: %s", *keyOut)
+		}
 
 		// Advertise/ broadcast the content on the DHT
 
@@ -246,10 +265,9 @@ func main() {
 			)
 		}
 
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key Fingerprint: %s...", storage.KeyFingerprint(key))
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +281,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  --key-file \"key.bin\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,12 +386,22 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
+		if *keyFile != "" {
+			kBytes, err := storage.LoadKeyFromFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to load key file: %v", err)
+			}
+			if err := keys.Put(ctx, contentID, kBytes); err != nil {
+				log.Fatalf("Failed to store key: %v", err)
+			}
+		} else if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
 			if err != nil || len(kBytes) != 32 {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
-			keys.Put(ctx, contentID, kBytes)
+			if err := keys.Put(ctx, contentID, kBytes); err != nil {
+				log.Fatalf("Failed to store key: %v", err)
+			}
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.
@@ -391,6 +419,18 @@ func main() {
 		}
 
 		log.Printf("[✓] Download complete!")
+
+		if *keyOut != "" {
+			kBytes, err := keys.Get(ctx, contentID)
+			if err != nil {
+				log.Printf("Warning: Could not get key for export: %v", err)
+			} else {
+				if err := storage.ExportKeyToFile(*keyOut, kBytes); err != nil {
+					log.Fatalf("Failed to export key to file: %v", err)
+				}
+				log.Printf("[✓] Key exported to: %s", *keyOut)
+			}
+		}
 
 		if *reassembleOut != "" {
 			outF, err := os.Create(*reassembleOut)

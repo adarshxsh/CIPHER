@@ -46,6 +46,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	keyFile := flag.String("key-file", "", "Path to key file (or '-' for stdin) to import content encryption key")
+	keyOut := flag.String("key-out", "", "Path to file where content decryption key will be exported")
 
 	flag.Parse()
 
@@ -110,7 +112,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -125,7 +127,15 @@ func main() {
 	}
 	defer f.Close()
 
-	m, err := eng.Ingest(ctx, f, manifest.TypeFile)
+	var customKey []byte
+	if *keyFile != "" {
+		customKey, err = storage.LoadKeyFromFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to load key file: %v", err)
+		}
+	}
+
+	m, err := eng.IngestWithKey(ctx, f, manifest.TypeFile, customKey)
 	if err != nil {
 		log.Fatalf("Failed to ingest file: %v", err)
 	}
@@ -137,6 +147,15 @@ func main() {
 	}
 	if err := eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes); err != nil {
 		log.Fatalf("Failed to store manifest: %v", err)
+	}
+
+	// Export key to file if requested
+	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	if *keyOut != "" {
+		if err := storage.ExportKeyToFile(*keyOut, key); err != nil {
+			log.Fatalf("Failed to export key to file: %v", err)
+		}
+		log.Printf("Exported content decryption key to: %s", *keyOut)
 	}
 
 	// 6. Execute Remote Push if requested
@@ -196,14 +215,12 @@ func main() {
 		}
 	}
 
-	key, _ := keys.Get(ctx, m.Descriptor.ID)
-
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
-	fmt.Printf("File Ingested : %s\n", *filePath)
-	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
-	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
-	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
+	fmt.Printf("File Ingested  : %s\n", *filePath)
+	fmt.Printf("ContentID      : %x\n", m.Descriptor.ID)
+	fmt.Printf("Key Fingerprint: %s...\n", storage.KeyFingerprint(key))
+	fmt.Printf("Chunks Total   : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
+	fmt.Printf("Publisher ID   : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
 	for _, addr := range h.Addrs() {
 		fmt.Printf("  - %s/p2p/%s\n", addr.String(), h.ID().String())

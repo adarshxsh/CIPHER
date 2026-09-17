@@ -20,11 +20,12 @@ import (
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
+	dir := t.TempDir()
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
-	store := storage.NewFSStore(t.TempDir()) // isolated per engine
+	keys := storage.NewFSKeyProvider(dir)
+	store := storage.NewFSStore(dir) // isolated per engine
 	return engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 }
 
