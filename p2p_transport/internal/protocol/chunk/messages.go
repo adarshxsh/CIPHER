@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
+	"unicode"
 
 	"cipher/internal/content/core"
 )
 
 const (
 	CurrentMessageVersion uint16 = 1
+	MaxErrorLogLen               = 128
 )
 
 type MessageType uint8
@@ -205,9 +209,37 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+
+// SanitizeErrorString strips non-printable ASCII/control characters, newlines,
+// and ANSI escape sequences from an error message string, and truncates it with
+// an ellipsis suffix if it exceeds MaxErrorLogLen.
+func SanitizeErrorString(s string) string {
+	// Strip ANSI escape sequences
+	s = ansiRegexp.ReplaceAllString(s, "")
+
+	var buf strings.Builder
+	buf.Grow(len(s))
+	for _, r := range s {
+		if r >= 32 && r != 127 && unicode.IsPrint(r) {
+			buf.WriteRune(r)
+		}
+	}
+	res := buf.String()
+	runes := []rune(res)
+	if len(runes) > MaxErrorLogLen {
+		if MaxErrorLogLen > 3 {
+			return string(runes[:MaxErrorLogLen-3]) + "..."
+		}
+		return string(runes[:MaxErrorLogLen])
+	}
+	return res
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	rawMsg := string(payload[1:])
+	return ErrorCode(payload[0]), SanitizeErrorString(rawMsg), nil
 }

@@ -4,19 +4,25 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
+	"log"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/p2p/net/mock"
+	"golang.org/x/time/rate"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
-	"cipher/internal/transport"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
+	"cipher/internal/protocol"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
@@ -129,5 +135,86 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	}
 	if err.Error() != "remote error (code 1): manifest not found" {
 		t.Errorf("Unexpected error msg: %v", err)
+	}
+}
+
+func TestHandler_ErrorLogRateLimiting(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+
+	// Create rate limiter with burst=3, rate=1 per minute
+	limiter := chunk.NewPeerRateLimiter(rate.Limit(1.0/60.0), 3, 100, 10*time.Minute)
+	chunk.NewStreamHandlerWithLimiter(h1, eng1, limiter)
+
+	// Capture log output
+	origWriter := log.Writer()
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origWriter)
+
+	ctx := context.Background()
+	tr2 := transport.NewTransport(h2)
+	stream, err := tr2.OpenStream(ctx, h1.ID(), protocol.ChunkTransportProtocolID)
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// Send 8 error messages rapidly
+	for i := 0; i < 8; i++ {
+		errMsg := chunk.BuildError(chunk.ErrBadRequest, fmt.Sprintf("burst error %d", i))
+		if err := chunk.WriteMessage(stream, errMsg); err != nil {
+			t.Fatalf("WriteMessage failed at %d: %v", i, err)
+		}
+	}
+
+	// Give a short moment for stream handler goroutine to process
+	time.Sleep(50 * time.Millisecond)
+
+	logOutput := logBuf.String()
+	// Count occurrences of "burst error" in log output
+	count := strings.Count(logOutput, "burst error")
+	if count != 3 {
+		t.Errorf("expected exactly 3 logged error messages due to rate limit, got %d. Log output:\n%s", count, logOutput)
+	}
+}
+
+func TestHandler_LogSanitization(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+
+	chunk.NewStreamHandler(h1, eng1)
+
+	origWriter := log.Writer()
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origWriter)
+
+	ctx := context.Background()
+	tr2 := transport.NewTransport(h2)
+	stream, err := tr2.OpenStream(ctx, h1.ID(), protocol.ChunkTransportProtocolID)
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// Malicious error payload with newlines and ANSI escape codes
+	maliciousText := "Error!\n2026-09-16 [FORGED] Fake log line\r\n\x1b[31mRED ALERT\x1b[0m"
+	errMsg := chunk.BuildError(chunk.ErrBadRequest, maliciousText)
+	if err := chunk.WriteMessage(stream, errMsg); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	logOutput := logBuf.String()
+	// The logged message should be a single line containing sanitized text without control chars or ANSI codes
+	if strings.Contains(logOutput, "\x1b[31m") {
+		t.Errorf("log output contains ANSI escape sequence: %q", logOutput)
+	}
+	// Verify that forged log line is sanitized into a single line
+	expectedSubstring := "Error!2026-09-16 [FORGED] Fake log lineRED ALERT"
+	if !strings.Contains(logOutput, expectedSubstring) {
+		t.Errorf("expected sanitized string %q in log output, got:\n%s", expectedSubstring, logOutput)
 	}
 }
