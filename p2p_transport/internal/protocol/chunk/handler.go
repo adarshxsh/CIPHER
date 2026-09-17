@@ -11,6 +11,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	"cipher/internal/transport"
 )
 
 var TestCorruptProb float64
@@ -25,7 +26,7 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 		host:   h,
 		engine: eng,
 	}
-	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	h.SetStreamHandler(protocol.ChunkTransportProtocolID, transport.WrapStreamHandler(handler.handleStream))
 	return handler
 }
 
