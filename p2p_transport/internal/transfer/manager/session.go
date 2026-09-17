@@ -1,10 +1,13 @@
 package manager
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"cipher/internal/content/core"
@@ -25,11 +28,11 @@ const (
 type TransferSession struct {
 	ContentID   core.ContentID `json:"content_id"`
 	TargetPeer  peer.ID        `json:"target_peer"`
-	Completed   []bool         `json:"completed"` // true if the chunk at the same index in the manifest is completed
 	TotalChunks int            `json:"total_chunks"`
 	StartedAt   time.Time      `json:"started_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	Status      SessionStatus  `json:"status"`
+	Completed   []bool         `json:"completed"` // true if the chunk at the same index in the manifest is completed
 }
 
 // CompletedCount returns the number of chunks downloaded.
@@ -43,12 +46,28 @@ func (s *TransferSession) CompletedCount() int {
 	return count
 }
 
+// SessionSummary represents lightweight session metadata without chunk completion arrays.
+type SessionSummary struct {
+	ContentID       core.ContentID `json:"content_id"`
+	TargetPeer      peer.ID        `json:"target_peer"`
+	TotalChunks     int            `json:"total_chunks"`
+	CompletedChunks int            `json:"completed_chunks"`
+	StartedAt       time.Time      `json:"started_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	Status          SessionStatus  `json:"status"`
+}
+
+// CompletedCount returns the number of completed chunks.
+func (s *SessionSummary) CompletedCount() int {
+	return s.CompletedChunks
+}
+
 type SessionManager interface {
 	Open(id core.ContentID) (*TransferSession, error)
 	Save(session *TransferSession) error
 	Close(id core.ContentID) error
 	Delete(id core.ContentID) error
-	List() ([]*TransferSession, error)
+	List(offset, limit int) ([]*SessionSummary, error)
 }
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
@@ -112,7 +131,108 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 	return nil
 }
 
-func (m *FileSessionManager) List() ([]*TransferSession, error) {
+const MaxSessionFileSize int64 = 64 * 1024 // 64 KB cap per session file
+
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 4096)
+	},
+}
+
+// DecodeSessionSummary reads a session stream with a limited reader guard (64KB cap)
+// and extracts metadata and completed chunk count without allocating completion arrays.
+func DecodeSessionSummary(r io.Reader) (*SessionSummary, error) {
+	limitedReader := io.LimitReader(r, MaxSessionFileSize)
+
+	br := bufioReaderPool.Get().(*bufio.Reader)
+	br.Reset(limitedReader)
+	defer func() {
+		br.Reset(nil)
+		bufioReaderPool.Put(br)
+	}()
+
+	dec := json.NewDecoder(br)
+
+	var summary SessionSummary
+
+	t, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := t.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, fmt.Errorf("expected '{', got %v", t)
+	}
+
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			break
+		}
+		key, ok := t.(string)
+		if !ok {
+			break
+		}
+
+		switch key {
+		case "content_id":
+			_ = dec.Decode(&summary.ContentID)
+		case "target_peer":
+			_ = dec.Decode(&summary.TargetPeer)
+		case "status":
+			_ = dec.Decode(&summary.Status)
+		case "total_chunks":
+			_ = dec.Decode(&summary.TotalChunks)
+		case "started_at":
+			_ = dec.Decode(&summary.StartedAt)
+		case "updated_at":
+			_ = dec.Decode(&summary.UpdatedAt)
+		case "completed":
+			// Fast stream scan for completed booleans without token allocations
+			combined := io.MultiReader(dec.Buffered(), br)
+			scanBr := bufioReaderPool.Get().(*bufio.Reader)
+			scanBr.Reset(combined)
+
+			// Find opening '['
+			for {
+				b, err := scanBr.ReadByte()
+				if err != nil {
+					break
+				}
+				if b == '[' {
+					break
+				}
+			}
+
+			// Count 't' bytes until ']' or EOF
+			for {
+				b, err := scanBr.ReadByte()
+				if err != nil {
+					break
+				}
+				if b == ']' {
+					break
+				}
+				if b == 't' {
+					summary.CompletedChunks++
+				}
+			}
+
+			dec = json.NewDecoder(scanBr)
+			defer func() {
+				scanBr.Reset(nil)
+				bufioReaderPool.Put(scanBr)
+			}()
+		default:
+			var raw json.RawMessage
+			_ = dec.Decode(&raw)
+		}
+	}
+
+	return &summary, nil
+}
+
+func (m *FileSessionManager) List(offset, limit int) ([]*SessionSummary, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -120,18 +240,42 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
-	var sessions []*TransferSession
+
+	var jsonFiles []string
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
-			}
+			jsonFiles = append(jsonFiles, entry.Name())
 		}
 	}
-	return sessions, nil
+
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset >= len(jsonFiles) {
+		return []*SessionSummary{}, nil
+	}
+
+	end := offset + limit
+	if end > len(jsonFiles) {
+		end = len(jsonFiles)
+	}
+
+	var summaries []*SessionSummary
+	for _, filename := range jsonFiles[offset:end] {
+		filePath := filepath.Join(m.dir, filename)
+		f, err := os.Open(filePath)
+		if err != nil {
+			continue
+		}
+		summary, err := DecodeSessionSummary(f)
+		_ = f.Close()
+		if err == nil && summary != nil {
+			summaries = append(summaries, summary)
+		}
+	}
+
+	return summaries, nil
 }
