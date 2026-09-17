@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"math/rand/v2"
+	"sync"
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -19,9 +22,12 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport     *transport.Transport
+	Engine        *engine.ContentEngine
+	MaxAttempts   int
+	BaseBackoff   time.Duration
+	MaxBackoff    time.Duration
+	QueueCapacity int
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -29,13 +35,64 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		BaseBackoff: 100 * time.Millisecond,
+		MaxBackoff:  2 * time.Second,
 	}
 }
 
+func calculateBackoff(attempt int, baseBackoff, maxBackoff time.Duration) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	mult := 1 << uint(min(attempt-1, 30))
+	delay := baseBackoff * time.Duration(mult)
+	if delay > maxBackoff || delay < 0 {
+		delay = maxBackoff
+	}
+
+	jitter := time.Duration(rand.Float64() * float64(baseBackoff))
+	total := delay + jitter
+	if total > maxBackoff {
+		total = maxBackoff
+	}
+	return total
+}
+
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
+	queueCap := s.QueueCapacity
+	if queueCap <= 0 {
+		queueCap = len(tasks) * 2
+		if queueCap < 100 {
+			queueCap = 100
+		}
+	}
+	queue := NewChunkQueue(tasks, queueCap)
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
-	
+
+	asyncCap := len(tasks)
+	if asyncCap < 100 {
+		asyncCap = 100
+	}
+	asyncCompletions := make(chan WorkerResult, asyncCap)
+	var completionWg sync.WaitGroup
+	completionWg.Add(1)
+	go func() {
+		defer completionWg.Done()
+		for res := range asyncCompletions {
+			select {
+			case completions <- res:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(asyncCompletions)
+		completionWg.Wait()
+	}()
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
@@ -51,13 +108,22 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
-	
+
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
-	
+
 	pendingTasks := len(tasks)
-	
+
+	baseBackoff := s.BaseBackoff
+	if baseBackoff <= 0 {
+		baseBackoff = 100 * time.Millisecond
+	}
+	maxBackoff := s.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 2 * time.Second
+	}
+
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
@@ -68,7 +134,6 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					activeWorkers--
 					continue
 				}
-				
 				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
 				if errors.Is(res.Error, chunk.ErrRemoteChunkNotFound) {
 					if res.Task.MissedPeers == nil {
@@ -77,7 +142,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					res.Task.MissedPeers[res.PeerID] = true
 
 					if len(res.Task.MissedPeers) < len(sources) {
-						queue.Push(res.Task)
+						if !queue.Push(res.Task) {
+							log.Printf("[Scheduler] Warning: failed to requeue task %d, queue full", res.Task.Index)
+						}
 						continue
 					}
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
@@ -86,21 +153,34 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				// Real network / integrity error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+					delay := calculateBackoff(res.Task.Attempts, baseBackoff, maxBackoff)
+					go func(t ChunkTask, d time.Duration) {
+						timer := time.NewTimer(d)
+						defer timer.Stop()
+						select {
+						case <-ctx.Done():
+							return
+						case <-timer.C:
+							if !queue.Push(t) {
+								log.Printf("[Scheduler] Warning: failed to requeue task %d, queue full", t.Index)
+							}
+						}
+					}(res.Task, delay)
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
 			} else {
 				// Success
-				completions <- res
+				asyncCompletions <- res
 				pendingTasks--
 			}
 		}
 	}
-	
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
-	
+
 	return nil
 }
+
