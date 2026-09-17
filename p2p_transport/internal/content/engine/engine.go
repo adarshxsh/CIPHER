@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -131,12 +130,7 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
-
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
-
+	// Fetch, verify, decrypt, and write chunks sequentially one-by-one directly to the target stream
 	for _, chunkID := range m.ChunkIDs {
 		chunk, err := e.source.GetChunk(ctx, chunkID)
 		if err != nil {
@@ -154,19 +148,13 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
-	}
-
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
-
-	// Write out
-	for _, chunk := range chunks {
+		// Write directly to output stream
 		if _, err := w.Write(chunk.Data); err != nil {
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
 		}
+
+		// Release chunk payload buffer memory immediately
+		chunk.Data = nil
 	}
 
 	return nil
