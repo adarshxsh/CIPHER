@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 
@@ -65,7 +66,12 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if respID != id {
+	if subtle.ConstantTimeCompare(respID[:], id[:]) != 1 {
+		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	digest := c.digest.Sum(data)
+	if subtle.ConstantTimeCompare(digest[:], id[:]) != 1 {
 		return nil, fmt.Errorf("content ID mismatch in response")
 	}
 

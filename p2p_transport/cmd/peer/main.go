@@ -225,7 +225,7 @@ func main() {
 		// Advertise/ broadcast the content on the DHT
 
 		log.Printf(
-			"[DHT] Providing ContentID %s",
+			"[DHT] Providing ContentID %x",
 			m.Descriptor.ID,
 		)
 
@@ -235,13 +235,13 @@ func main() {
 			m.Descriptor.ID,
 		); err != nil {
 			log.Printf(
-				"[DHT] Failed to advertise content %s: %v",
+				"[DHT] Failed to advertise content %x: %v",
 				m.Descriptor.ID,
 				err,
 			)
 		} else {
 			log.Printf(
-				"[DHT] Successfully advertised content %s",
+				"[DHT] Successfully advertised content %x",
 				m.Descriptor.ID,
 			)
 		}
@@ -403,6 +403,7 @@ func main() {
 			}
 			log.Printf("[✓] Reassembled to: %s", *reassembleOut)
 		}
+		return
 	}
 
 	// Wait for termination signal

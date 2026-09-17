@@ -1,6 +1,7 @@
 package chunk_test
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -127,5 +128,26 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_ValidAndTamperedPayloads(t *testing.T) {
+	validData := []byte("canonical manifest payload bytes")
+	var requestedID core.ContentID
+	digest := sha256.Sum256(validData)
+	copy(requestedID[:], digest[:])
+
+	// Valid payload
+	validMsg := chunk.BuildManifest(requestedID, validData)
+	if err := chunk.ValidateManifestForRequest(requestedID, validMsg.Payload); err != nil {
+		t.Fatalf("expected valid manifest to pass validation: %v", err)
+	}
+
+	// Tampered payload with matching header ID
+	tamperedData := []byte("canonical manifest payload TAMPERED")
+	tamperedMsg := chunk.BuildManifest(requestedID, tamperedData)
+	err := chunk.ValidateManifestForRequest(requestedID, tamperedMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected ErrContentMismatch for tampered payload, got %v", err)
 	}
 }

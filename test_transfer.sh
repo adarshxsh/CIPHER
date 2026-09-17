@@ -1,6 +1,6 @@
 #!/bin/bash
 cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+rm -rf store_a store_b test.mp4 out.mp4 peer_a.log
 export CGO_ENABLED=0
 go build -o bin/peer ./cmd/peer
 
@@ -11,8 +11,8 @@ PEER_A_PID=$!
 
 sleep 3
 
-CONTENT_ID=$(grep "ContentID:" peer_a.log | awk '{print $NF}')
-KEY=$(grep "Key:" peer_a.log | awk '{print $NF}')
+CONTENT_ID=$(grep "    ContentID:" peer_a.log | awk '{print $NF}')
+KEY=$(grep "    Key:" peer_a.log | awk '{print $NF}')
 ADDR=$(grep "127.0.0.1/tcp/47891/p2p/" peer_a.log | head -n 1 | awk '{print $NF}')
 
 echo "Content ID: $CONTENT_ID"
