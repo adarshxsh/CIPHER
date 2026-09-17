@@ -8,7 +8,9 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
@@ -33,6 +35,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	limiter := DefaultStreamRateLimiter()
+	defer func() {
+		if suppressed := limiter.FlushSuppressed(); suppressed > 0 {
+			log.Printf("[Chunk Protocol] Stream closed; rate limiter suppressed %d error messages from %s", suppressed, s.Conn().RemotePeer())
+		}
+	}()
+
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
@@ -55,7 +64,9 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		case MsgRequestManifest:
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, limiter)
+		case MsgError:
+			h.handleErrorMsg(s, msg, limiter)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
@@ -84,7 +95,7 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, limiter *RateLimiter) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -123,11 +134,37 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		h.logErrorWithLimiter(s.Conn().RemotePeer(), chunkID, code, msgStr, limiter)
 		return
 	}
 	if ackMsg.Type != MsgAck {
 		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
 		return
+	}
+}
+
+func (h *StreamHandler) handleErrorMsg(s network.Stream, msg *Message, limiter *RateLimiter) {
+	code, msgStr, err := ParseError(msg.Payload)
+	if err != nil {
+		log.Printf("[Chunk Protocol] Error parsing error message from %s: %v", s.Conn().RemotePeer(), err)
+		return
+	}
+	h.logErrorWithLimiter(s.Conn().RemotePeer(), core.ChunkID{}, code, msgStr, limiter)
+}
+
+func (h *StreamHandler) logErrorWithLimiter(peer peer.ID, chunkID core.ChunkID, code ErrorCode, msgStr string, limiter *RateLimiter) {
+	allowed, suppressed := limiter.Allow()
+	if !allowed {
+		return
+	}
+
+	if suppressed > 0 {
+		log.Printf("[Chunk Protocol] Throttled %d suppressed error log entries from %s", suppressed, peer)
+	}
+
+	if chunkID != (core.ChunkID{}) {
+		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+	} else {
+		log.Printf("[Chunk Protocol] Remote peer %s reported error: [%d] %s", peer, code, msgStr)
 	}
 }
