@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log"
+	"math"
 	"math/rand"
+	"sync/atomic"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,20 +15,68 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
-
-type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+// HandlerConfig defines configuration options for StreamHandler.
+type HandlerConfig struct {
+	CorruptProb float64
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+// Option defines a functional option for initializing a StreamHandler.
+type Option func(*HandlerConfig)
+
+// WithCorruptProb sets the corruption probability for fault injection testing.
+func WithCorruptProb(prob float64) Option {
+	return func(c *HandlerConfig) {
+		if prob < 0 {
+			prob = 0
+		} else if prob > 1 {
+			prob = 1
+		}
+		c.CorruptProb = prob
+	}
+}
+
+// WithConfig sets the HandlerConfig for a StreamHandler.
+func WithConfig(cfg HandlerConfig) Option {
+	return func(c *HandlerConfig) {
+		*c = cfg
+	}
+}
+
+type StreamHandler struct {
+	host            host.Host
+	engine          *engine.ContentEngine
+	corruptProbBits atomic.Uint64
+}
+
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...Option) *StreamHandler {
+	var cfg HandlerConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
 	}
+	handler.SetCorruptProb(cfg.CorruptProb)
+
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func (h *StreamHandler) SetCorruptProb(prob float64) {
+	if prob < 0 {
+		prob = 0
+	} else if prob > 1 {
+		prob = 1
+	}
+	bits := math.Float64bits(prob)
+	h.corruptProbBits.Store(bits)
+}
+
+func (h *StreamHandler) CorruptProb() float64 {
+	bits := h.corruptProbBits.Load()
+	return math.Float64frombits(bits)
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -98,10 +148,15 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	corruptProb := h.CorruptProb()
+	if corruptProb > 0 && rand.Float64() < corruptProb && len(chunkData.Data) > 0 {
+		// Corrupt the chunk for testing on a cloned byte slice
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+		chunkCopy := *chunkData
+		chunkCopy.Data = make([]byte, len(chunkData.Data))
+		copy(chunkCopy.Data, chunkData.Data)
+		chunkCopy.Data[0] ^= 0xFF
+		chunkData = &chunkCopy
 	}
 
 	resp, err := BuildChunk(chunkData)
