@@ -145,11 +145,23 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	fmt.Println()
 	if sess.TotalChunks > 0 {
-		fmt.Println("\n--- Peer Contribution Metrics ---")
-		for peerID, count := range peerContributions {
-			fmt.Printf("Peer %s: %d chunks (%.1f%%)\n", peerID, count, float64(count)/float64(sess.TotalChunks)*100)
+		fmt.Println("\n--- Peer Contribution & Reliability Metrics ---")
+		for _, p := range peers {
+			peerStr := p.String()
+			count := peerContributions[peerStr]
+			stats := sched.Tracker.GetStats(p)
+			bannedStr := ""
+			if stats.IsBanned {
+				bannedStr = " [BANNED/ISOLATED]"
+			}
+			fmt.Printf("Peer %s%s:\n", peerStr, bannedStr)
+			fmt.Printf("  Chunks Delivered   : %d (%.1f%%)\n", count, float64(count)/float64(sess.TotalChunks)*100)
+			fmt.Printf("  Reputation Score   : %d\n", stats.Score)
+			fmt.Printf("  Successes          : %d\n", stats.Successes)
+			fmt.Printf("  Timeouts           : %d\n", stats.Timeouts)
+			fmt.Printf("  Integrity Failures : %d\n", stats.IntegrityFailures)
 		}
-		fmt.Println("---------------------------------")
+		fmt.Println("------------------------------------------------")
 	}
 
 	schedErr := <-errCh
