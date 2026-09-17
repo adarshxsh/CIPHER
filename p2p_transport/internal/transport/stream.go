@@ -83,6 +83,7 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 
 	s, err := t.host.NewStream(streamCtx, target, pid)
 	if err != nil {
+		log.Printf("[ResourceManager] OpenStream failed for protocol %s with peer %s: %v", pid, target, err)
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
 
