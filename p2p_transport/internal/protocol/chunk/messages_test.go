@@ -2,6 +2,8 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -99,9 +101,52 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	var buf bytes.Buffer
 	chunk.WriteMessage(&buf, msg)
 
-	parsedMsg, _ := chunk.ReadMessage(&buf)
-	if parsedMsg.Type != 0x99 {
-		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error reading unsupported message type, got nil")
 	}
-	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+	if !errors.Is(err, chunk.ErrUnknownMessageType) {
+		t.Errorf("Expected ErrUnknownMessageType, got %v", err)
+	}
+}
+
+func TestReadMessage_RejectsInflatedControlMessageFrameSize(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Claim 2MB frame size for MsgRequestManifest (which only allows MaxChunkRequestSize = 512 bytes payload)
+	inflatedSize := uint32(2 * 1024 * 1024)
+	if err := binary.Write(&buf, binary.LittleEndian, inflatedSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgRequestManifest)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	// ReadMessage must peek header, detect oversized payload for MsgRequestManifest, and fail immediately without needing 2MB payload data.
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("Expected error for inflated frame size, got nil")
+	}
+	if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+		t.Fatalf("Expected ErrPayloadTooLarge, got %v", err)
+	}
+}
+
+func TestReadMessage_RejectsFrameSmallerThanMessageHeader(t *testing.T) {
+	var buf bytes.Buffer
+	tooSmallSize := uint32(2) // smaller than 3-byte message header
+	if err := binary.Write(&buf, binary.LittleEndian, tooSmallSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("Expected error for frame size smaller than message header, got nil")
+	}
+	if !errors.Is(err, chunk.ErrInvalidPayloadSize) {
+		t.Fatalf("Expected ErrInvalidPayloadSize, got %v", err)
+	}
 }
