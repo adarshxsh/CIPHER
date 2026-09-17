@@ -46,6 +46,11 @@ func NewContentEngine(
 
 // Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
 func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.ContentType) (*manifest.Manifest, error) {
+	return e.IngestWithKey(ctx, r, mtype, nil)
+}
+
+// IngestWithKey reads a file, chunks it, encrypts it with the provided key (or a generated one if nil), stores it, and returns the manifest.
+func (e *ContentEngine) IngestWithKey(ctx context.Context, r io.Reader, mtype manifest.ContentType, customKey []byte) (*manifest.Manifest, error) {
 	chunkCh, errCh := e.chunker.Split(r)
 
 	// Generate a unique ContentID for this upload
@@ -54,10 +59,17 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 		return nil, fmt.Errorf("failed to generate content id: %w", err)
 	}
 
-	// Generate a new encryption key
-	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("failed to generate key: %w", err)
+	key := make([]byte, 32)
+	if len(customKey) > 0 {
+		if len(customKey) != 32 {
+			return nil, fmt.Errorf("invalid custom key size: expected 32 bytes, got %d", len(customKey))
+		}
+		copy(key, customKey)
+	} else {
+		// Generate a new encryption key
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("failed to generate key: %w", err)
+		}
 	}
 
 	// Store key
