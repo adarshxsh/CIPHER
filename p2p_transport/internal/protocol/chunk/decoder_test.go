@@ -62,3 +62,63 @@ func TestDecodeFrame_RejectsOversizedPayloadBeforeAllocation(t *testing.T) {
 		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
+
+func TestDecodeFrame_RejectsInvalidVersion(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(32 + 3)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, uint16(99)); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgRequestChunk)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.DecodeFrame(&buf)
+	if !errors.Is(err, chunk.ErrInvalidProtocolVersion) {
+		t.Fatalf("expected ErrInvalidProtocolVersion, got %v", err)
+	}
+}
+
+func TestDecodeFrame_RejectsUnknownMessageType(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(10 + 3)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(0xFF); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.DecodeFrame(&buf)
+	if !errors.Is(err, chunk.ErrUnknownMessageType) {
+		t.Fatalf("expected ErrUnknownMessageType, got %v", err)
+	}
+}
+
+func TestDecodeFrameHeader_ValidAndOversized(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(32 + 3)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgRequestChunk)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	ver, msgType, payloadLen, err := chunk.DecodeFrameHeader(&buf)
+	if err != nil {
+		t.Fatalf("DecodeFrameHeader failed: %v", err)
+	}
+	if ver != chunk.CurrentMessageVersion || msgType != chunk.MsgRequestChunk || payloadLen != 32 {
+		t.Fatalf("unexpected header values: ver=%d msgType=%d payloadLen=%d", ver, msgType, payloadLen)
+	}
+}
