@@ -99,12 +99,27 @@ func ValidateRequestManifestPayload(payload []byte) error {
 }
 
 func ValidateManifestPayload(payload []byte) error {
-	if len(payload) < ContentIDSize {
+	minLen := ContentIDSize + 2
+	if len(payload) < minLen {
 		return fmt.Errorf(
 			"manifest: %w: received=%d minimum=%d",
 			ErrInvalidManifestPayload,
 			len(payload),
-			ContentIDSize,
+			minLen,
+		)
+	}
+
+	sigLen := binary.LittleEndian.Uint16(payload[ContentIDSize : ContentIDSize+2])
+	if sigLen == 0 {
+		return fmt.Errorf("manifest: %w: missing signature", ErrInvalidManifestPayload)
+	}
+
+	if len(payload) < minLen+int(sigLen) {
+		return fmt.Errorf(
+			"manifest: %w: received=%d minimum=%d",
+			ErrInvalidManifestPayload,
+			len(payload),
+			minLen+int(sigLen),
 		)
 	}
 	return nil
@@ -225,7 +240,7 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, _, _, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
