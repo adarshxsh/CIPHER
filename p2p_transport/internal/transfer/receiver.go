@@ -17,14 +17,31 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
-	defer s.Close()
+func Receive(s network.Stream) (err error) {
+	var outPath string
+	var outFile *os.File
+
+	defer func() {
+		if outFile != nil {
+			if closeErr := outFile.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("failed to close output file: %w", closeErr)
+			}
+		}
+		if err != nil {
+			if outPath != "" {
+				_ = os.Remove(outPath)
+			}
+			_ = s.Reset()
+		} else {
+			_ = s.Close()
+		}
+	}()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err = header.ReadFrom(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -32,20 +49,25 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
+	// Sanitize filename to prevent directory traversal
+	sanitizedFilename := filepath.Base(header.Filename)
+	if sanitizedFilename == "." || sanitizedFilename == string(filepath.Separator) {
+		return fmt.Errorf("invalid filename in header: %q", header.Filename)
+	}
+
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
-	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+	if err = os.MkdirAll(downloadsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
-	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
+	outPath = filepath.Join(downloadsDir, sanitizedFilename)
+	log.Printf("Receiving: %s (%.2f MB) into %s", sanitizedFilename, float64(header.FileSize)/(1024*1024), outPath)
 
-	outFile, err := os.Create(outPath)
+	outFile, err = os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
 
 	startTime := time.Now()
 
@@ -65,7 +87,8 @@ func Receive(s network.Stream) error {
 	}
 
 	if uint64(received) != header.FileSize {
-		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		err = fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		return err
 	}
 
 	duration := time.Since(startTime)
@@ -75,21 +98,21 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[ERROR] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		err = fmt.Errorf("checksum mismatch: expected %x, got %x", header.Checksum, computedChecksum)
+		return err
 	}
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+	if _, errConn := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); errConn == nil {
 		connType = "Relay"
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
