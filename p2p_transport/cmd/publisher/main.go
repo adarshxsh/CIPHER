@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +48,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	showKey := flag.Bool("show-key", false, "Display cleartext decryption key in standard output")
+	keyOut := flag.String("key-out", "", "Path to write the cleartext decryption key file")
 
 	flag.Parse()
 
@@ -110,7 +114,11 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keysDir := filepath.Join(*storePath, "keys")
+	keys, err := engine.NewFSKeyProvider(keysDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -198,10 +206,23 @@ func main() {
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
 
+	if *keyOut != "" {
+		if err := os.WriteFile(*keyOut, []byte(hex.EncodeToString(key)+"\n"), 0600); err != nil {
+			log.Printf("Warning: Failed to write key to output file %s: %v", *keyOut, err)
+		} else {
+			log.Printf("Decryption key written to %s", *keyOut)
+		}
+	}
+
+	keyDisplay := "[REDACTED]"
+	if *showKey {
+		keyDisplay = fmt.Sprintf("%x", key)
+	}
+
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: %s\n", keyDisplay)
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
