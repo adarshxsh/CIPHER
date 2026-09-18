@@ -110,7 +110,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewEncryptedFileKeyProvider("")
+	if err != nil {
+		log.Fatalf("Failed to initialize encrypted key store: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -196,12 +199,10 @@ func main() {
 		}
 	}
 
-	key, _ := keys.Get(ctx, m.Descriptor.ID)
-
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Println("Decryption Key: [STORED IN KEYSTORE]")
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
