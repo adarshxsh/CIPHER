@@ -84,7 +84,7 @@ const (
 	// The initial hardened protocol allows one chunk transaction
 	// per stream.
 	MaxChunksPerRequest      = 1
-	MaxTransactionsPerStream = 1
+	MaxTransactionsPerStream = 1000
 	MaxMessagesPerStream     = 4
 )
 
@@ -123,6 +123,9 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 		return HashSize + 1
 
 	case MsgError:
+		return MaxProtocolErrorSize
+
+	case MsgClose:
 		return MaxProtocolErrorSize
 
 	default:

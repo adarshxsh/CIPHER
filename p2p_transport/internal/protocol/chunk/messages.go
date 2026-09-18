@@ -23,6 +23,7 @@ const (
 	MsgChunk           MessageType = 0x04
 	MsgAck             MessageType = 0x05
 	MsgError           MessageType = 0x06
+	MsgClose           MessageType = 0x07
 )
 
 type ErrorCode uint8
@@ -210,4 +211,16 @@ func ParseError(payload []byte) (ErrorCode, string, error) {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
 	return ErrorCode(payload[0]), string(payload[1:]), nil
+}
+
+func BuildClose() *Message {
+	return &Message{
+		Version: CurrentMessageVersion,
+		Type:    MsgClose,
+		Payload: []byte{0x00},
+	}
+}
+
+func ParseClose(payload []byte) error {
+	return nil
 }
