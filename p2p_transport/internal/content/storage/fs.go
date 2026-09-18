@@ -8,9 +8,39 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"cipher/internal/content/core"
 )
+
+// MaxChunkSize defines the maximum size allowed for a chunk file payload (2 MiB).
+const MaxChunkSize = 2 * 1024 * 1024
+
+var chunkBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, MaxChunkSize)
+		return &buf
+	},
+}
+
+// GetBuffer retrieves a byte buffer of MaxChunkSize from the chunkBufferPool.
+func GetBuffer() []byte {
+	bufPtr := chunkBufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	if cap(buf) < MaxChunkSize {
+		buf = make([]byte, MaxChunkSize)
+	}
+	return buf[:MaxChunkSize]
+}
+
+// PutBuffer resets the slice and returns a byte buffer to the chunkBufferPool.
+func PutBuffer(buf []byte) {
+	if buf == nil || cap(buf) < MaxChunkSize {
+		return
+	}
+	buf = buf[:0]
+	chunkBufferPool.Put(&buf)
+}
 
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
@@ -94,24 +124,54 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+
 	chunk := &core.Chunk{}
+	headerSize := int64(binary.Size(chunk.Header))
+	if info.Size() < headerSize {
+		return nil, fmt.Errorf("chunk file too small: %d bytes", info.Size())
+	}
+
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	var expectedDataSize int64
+	if chunk.Header.CipherSize > 0 {
+		expectedDataSize = int64(chunk.Header.CipherSize)
+	} else if chunk.Header.PlainSize > 0 {
+		expectedDataSize = int64(chunk.Header.PlainSize)
+	} else {
+		expectedDataSize = info.Size() - headerSize
+	}
+
+	if expectedDataSize > int64(MaxChunkSize) {
+		return nil, fmt.Errorf("chunk data size %d exceeds maximum limit %d", expectedDataSize, MaxChunkSize)
+	}
+
+	if info.Size()-headerSize < expectedDataSize {
+		return nil, fmt.Errorf("chunk file truncated: expected %d bytes data, got %d", expectedDataSize, info.Size()-headerSize)
+	}
+
+	buf := GetBuffer()
+	dataBuf := buf[:expectedDataSize]
+
+	if _, err := io.ReadFull(f, dataBuf); err != nil {
+		PutBuffer(buf)
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	// Verify no trailing extra bytes exist in chunk file
+	var extra [1]byte
+	if n, _ := f.Read(extra[:]); n > 0 || (info.Size()-headerSize) > expectedDataSize {
+		PutBuffer(buf)
+		return nil, fmt.Errorf("chunk file contains extra trailing data")
+	}
 
+	chunk.Data = dataBuf
 	return chunk, nil
 }
 

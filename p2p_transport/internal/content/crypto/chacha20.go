@@ -57,7 +57,7 @@ func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
 		return errors.New("cipher size mismatch in header")
 	}
 
-	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, nil)
+	plaintext, err := aead.Open(chunk.Data[:0], chunk.Header.Nonce[:], chunk.Data, nil)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt chunk: %w", err)
 	}
