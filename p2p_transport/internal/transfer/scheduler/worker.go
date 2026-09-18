@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"cipher/internal/content/engine"
@@ -17,11 +18,18 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) error {
 	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("[Worker] Debug: worker cancelled: %v", ctx.Err())
+			return ctx.Err()
+		default:
+		}
+
 		task, ok := queue.Next()
 		if !ok {
-			return // Queue empty
+			return nil // Queue empty
 		}
 		
 		if source.Available != nil {
@@ -33,19 +41,39 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				log.Printf("[Worker] Debug: worker cancelled during FetchChunk result send: %v", ctx.Err())
+				return ctx.Err()
+			}
 			continue
 		}
 
 		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+			select {
+			case <-time.After(TestThrottle):
+			case <-ctx.Done():
+				log.Printf("[Worker] Debug: worker cancelled during throttle: %v", ctx.Err())
+				return ctx.Err()
+			}
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				log.Printf("[Worker] Debug: worker cancelled during PutChunk result send: %v", ctx.Err())
+				return ctx.Err()
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		case <-ctx.Done():
+			log.Printf("[Worker] Debug: worker cancelled during success result send: %v", ctx.Err())
+			return ctx.Err()
+		}
 	}
 }
