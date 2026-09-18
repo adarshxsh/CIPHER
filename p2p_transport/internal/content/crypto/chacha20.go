@@ -31,8 +31,11 @@ func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
 	return nonce
 }
 
-func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.New(key)
+func (e *ChaCha20Encryptor) EncryptChunk(key core.KeyHandle, chunk *core.Chunk) error {
+	if key == nil || len(key.Bytes()) == 0 {
+		return errors.New("invalid key handle")
+	}
+	aead, err := chacha20poly1305.New(key.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
@@ -47,8 +50,11 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	return nil
 }
 
-func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.New(key)
+func (e *ChaCha20Encryptor) DecryptChunk(key core.KeyHandle, chunk *core.Chunk) error {
+	if key == nil || len(key.Bytes()) == 0 {
+		return errors.New("invalid key handle")
+	}
+	aead, err := chacha20poly1305.New(key.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}

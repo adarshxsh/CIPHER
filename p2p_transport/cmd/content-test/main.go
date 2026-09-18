@@ -71,10 +71,13 @@ func main() {
 
 		// For manual testing, we persist the generated content key so it can be reassembled later
 		// (Normally this would be handled securely or retrieved over network)
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
-		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		os.WriteFile(keyPath, key, 0600)
-		log.Printf("Test content key saved to: %s", keyPath)
+		keyHandle, err := keys.GetHandle(ctx, m.Descriptor.ID)
+		if err == nil {
+			keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
+			os.WriteFile(keyPath, keyHandle.Bytes(), 0600)
+			keyHandle.Release()
+			log.Printf("Test content key saved to: %s", keyPath)
+		}
 	}
 
 	if *reassembleOut != "" {
