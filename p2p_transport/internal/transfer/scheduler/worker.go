@@ -19,9 +19,9 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
-		task, ok := queue.Next()
+		task, ok := queue.Next(ctx)
 		if !ok {
-			return // Queue empty
+			return // Queue empty or closed
 		}
 		
 		// If this source already returned candidate miss for this task, requeue and yield
