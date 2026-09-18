@@ -55,7 +55,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	}
 
 	// Generate a new encryption key
-	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
+	key := make([]byte, 32) // XChaCha20-Poly1305 takes a 32-byte key
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
@@ -113,9 +113,9 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 		MerkleRoot: wholeHash,
 		WholeHash:  wholeHash,
 		Crypto: manifest.CryptoDescriptor{
-			Algorithm:      "ChaCha20-Poly1305",
+			Algorithm:      "XChaCha20-Poly1305",
 			Version:        1,
-			ChunkNonceSize: 12,
+			ChunkNonceSize: 24,
 			KeyID:          "embedded",
 		},
 	}
