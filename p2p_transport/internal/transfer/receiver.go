@@ -17,8 +17,24 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
-	defer s.Close()
+func Receive(s network.Stream) (err error) {
+	var success bool
+	var outFile *os.File
+	var tmpPath string
+
+	defer func() {
+		if outFile != nil {
+			_ = outFile.Close()
+		}
+		if !success {
+			if tmpPath != "" {
+				_ = os.Remove(tmpPath)
+			}
+			_ = s.Reset()
+		} else {
+			_ = s.Close()
+		}
+	}()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
@@ -38,14 +54,19 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	cleanName := filepath.Base(filepath.Clean(header.Filename))
+	if cleanName == "." || cleanName == "/" || cleanName == "" {
+		cleanName = "downloaded_file"
+	}
+
+	outPath := filepath.Join(downloadsDir, cleanName)
+	tmpPath = outPath + ".tmp"
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
-	outFile, err := os.Create(outPath)
+	outFile, err = os.Create(tmpPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
 
 	startTime := time.Now()
 
@@ -75,10 +96,9 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
 		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", header.Checksum, computedChecksum)
 	}
 
 	// Determine Connection Type
@@ -89,9 +109,19 @@ func Receive(s network.Stream) error {
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
+	if err := outFile.Close(); err != nil {
+		return fmt.Errorf("failed to close file handle: %w", err)
+	}
+	outFile = nil
+
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return fmt.Errorf("failed to move temp file to final path: %w", err)
+	}
+
+	success = true
 	return nil
 }
