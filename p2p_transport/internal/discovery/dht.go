@@ -14,8 +14,26 @@ import (
 // NewDHT creates and returns a Kademlia DHT bound to the given host.
 // mode should be dht.ModeServer for peers (they help route/store records too,
 // matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+func NewDHT(h host.Host, mode dht.ModeOpt, dhtOpts ...dht.Option) (*dht.IpfsDHT, error) {
+	allowPrivate := IsAllowPrivateDHT()
+
+	var opts []dht.Option
+	opts = append(opts, dht.Mode(mode))
+
+	if !allowPrivate {
+		opts = append(opts,
+			dht.AddressFilter(PublicAddressFilter),
+			dht.RoutingTableFilter(dht.PublicRoutingTableFilter),
+			dht.QueryFilter(dht.PublicQueryFilter),
+			dht.RoutingTablePeerDiversityFilter(dht.NewRTPeerDiversityFilter(h, 2, 3)),
+		)
+	} else {
+		opts = append(opts, dht.AddressFilter(PublicAddressFilter))
+	}
+
+	opts = append(opts, dhtOpts...)
+
+	kdht, err := dht.New(h, opts...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
@@ -31,6 +49,7 @@ func Bootstrap(ctx context.Context, kdht *dht.IpfsDHT, h host.Host, seeds []peer
 		return fmt.Errorf("no bootstrap seeds provided")
 	}
 
+	allowPrivate := IsAllowPrivateDHT()
 	connected := 0
 
 	for _, seed := range seeds {
@@ -38,15 +57,21 @@ func Bootstrap(ctx context.Context, kdht *dht.IpfsDHT, h host.Host, seeds []peer
 			continue // Skip self
 		}
 
+		sanitizedSeed := SanitizeAddrInfo(seed, allowPrivate)
+		if len(sanitizedSeed.Addrs) == 0 {
+			log.Printf("[DHT] Skipping bootstrap seed %s: no valid routable multiaddresses", seed.ID)
+			continue
+		}
+
 		log.Printf(
 			"[DHT] Connecting to bootstrap peer %s...",
-			seed.ID,
+			sanitizedSeed.ID,
 		)
 
-		if err := h.Connect(ctx, seed); err != nil {
+		if err := h.Connect(ctx, sanitizedSeed); err != nil {
 			log.Printf(
 				"[DHT] Failed to connect to bootstrap peer %s: %v",
-				seed.ID,
+				sanitizedSeed.ID,
 				err,
 			)
 			continue
@@ -54,7 +79,7 @@ func Bootstrap(ctx context.Context, kdht *dht.IpfsDHT, h host.Host, seeds []peer
 
 		log.Printf(
 			"[DHT] Connected to bootstrap peer %s",
-			seed.ID,
+			sanitizedSeed.ID,
 		)
 
 		connected++
