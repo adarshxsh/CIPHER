@@ -39,7 +39,6 @@ func main() {
 	relayAddr := flag.String("relay", "", "Static relay multiaddress to use for NAT traversal")
 	forceRelay := flag.Bool("force-relay", false, "Force traffic over relay")
 	republishHours := flag.Int("republish-interval", 12, "Interval in hours for DHT republisher")
-	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending corrupt chunk for testing")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
@@ -107,12 +106,6 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
-
-	// Apply testing flags
-	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
-		log.Printf("[TESTING] Corrupt probability set to %.2f", *corruptProb)
-	}
 
 	// 5. Register Data-Plane Stream Handler (/cipher/chunk/1.0.0)
 	chunk.NewStreamHandler(h, eng)
