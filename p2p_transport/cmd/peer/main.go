@@ -175,7 +175,7 @@ func main() {
 	chunk.NewStreamHandler(h, eng)
 
 	// Start DHT Republisher for persistent provider lifecycle
-	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour)
+	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour, priv)
 
 	log.Printf("Peer initialized with ID: %s", h.ID().String())
 	log.Println("Listening on the following local addresses:")
@@ -233,6 +233,7 @@ func main() {
 			ctx,
 			kdht,
 			m.Descriptor.ID,
+			priv,
 		); err != nil {
 			log.Printf(
 				"[DHT] Failed to advertise content %s: %v",
