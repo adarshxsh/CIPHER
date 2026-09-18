@@ -2,6 +2,8 @@ package chunk
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 	"log"
 
@@ -67,6 +69,11 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 	if respID != id {
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	hash := sha256.Sum256(data)
+	if subtle.ConstantTimeCompare(id[:], hash[:]) != 1 {
+		return nil, fmt.Errorf("manifest multihash mismatch")
 	}
 
 	return data, nil
