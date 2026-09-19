@@ -10,6 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 
 	"cipher/internal/content/engine"
+	"cipher/internal/content/storage"
 	"cipher/internal/protocol"
 )
 
@@ -96,6 +97,9 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	if err != nil {
 		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
 		return
+	}
+	if chunkData != nil && len(chunkData.Data) > 0 {
+		defer storage.PutBuffer(chunkData.Data)
 	}
 
 	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {

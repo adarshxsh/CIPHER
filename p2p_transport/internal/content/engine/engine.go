@@ -10,6 +10,7 @@ import (
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+	"cipher/internal/content/storage"
 )
 
 type ContentEngine struct {
@@ -166,6 +167,9 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 	for _, chunk := range chunks {
 		if _, err := w.Write(chunk.Data); err != nil {
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
+		}
+		if chunk != nil && len(chunk.Data) > 0 {
+			storage.PutBuffer(chunk.Data)
 		}
 	}
 
