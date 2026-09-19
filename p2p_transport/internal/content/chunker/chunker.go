@@ -2,9 +2,31 @@ package chunker
 
 import (
 	"io"
+	"sync"
 
 	"cipher/internal/content/core"
 )
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0)
+	},
+}
+
+// PutBuffer puts a byte buffer back into the package buffer pool for reuse.
+func PutBuffer(buf []byte) {
+	if buf != nil {
+		bufferPool.Put(buf)
+	}
+}
+
+// RecycleChunk puts the chunk's data buffer back into the package buffer pool.
+func RecycleChunk(chunk *core.Chunk) {
+	if chunk != nil && chunk.Data != nil {
+		bufferPool.Put(chunk.Data)
+		chunk.Data = nil
+	}
+}
 
 // Chunker is responsible for splitting a stream into Chunks.
 type Chunker struct {
@@ -20,7 +42,7 @@ func NewChunker(config core.EngineConfig) *Chunker {
 // Split reads from r and emits chunks on the returned channel.
 // It closes the channel and returns any read error (other than EOF).
 func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
-	chunkCh := make(chan *core.Chunk)
+	chunkCh := make(chan *core.Chunk, 16)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -31,7 +53,13 @@ func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
 		var offset int64
 
 		for {
-			buf := make([]byte, c.config.ChunkSize)
+			var buf []byte
+			if b, ok := bufferPool.Get().([]byte); ok && cap(b) >= int(c.config.ChunkSize) {
+				buf = b[:c.config.ChunkSize]
+			} else {
+				buf = make([]byte, c.config.ChunkSize)
+			}
+
 			n, err := io.ReadFull(r, buf)
 
 			if n > 0 {
@@ -48,6 +76,8 @@ func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
 
 				index++
 				offset += int64(n)
+			} else {
+				bufferPool.Put(buf)
 			}
 
 			if err != nil {
