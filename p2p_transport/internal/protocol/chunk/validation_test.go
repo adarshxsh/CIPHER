@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +128,47 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_DigestValidation(t *testing.T) {
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 500,
+		},
+		Crypto: manifest.CryptoDescriptor{
+			Algorithm: "ChaCha20-Poly1305",
+		},
+	}
+
+	contentID, err := m.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest failed: %v", err)
+	}
+	m.Descriptor.ID = contentID
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	manifestMsg := chunk.BuildManifest(contentID, mBytes)
+
+	// Valid manifest response should pass validation
+	if err := chunk.ValidateManifestForRequest(contentID, manifestMsg.Payload); err != nil {
+		t.Fatalf("expected valid manifest to pass validation: %v", err)
+	}
+
+	// Tampered manifest payload with matching header CID should fail digest validation
+	tamperedM := *m
+	tamperedM.Descriptor.Size = 9999
+	tamperedBytes, _ := tamperedM.Serialize()
+	tamperedMsg := chunk.BuildManifest(contentID, tamperedBytes)
+
+	err = chunk.ValidateManifestForRequest(contentID, tamperedMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected ErrContentMismatch for tampered manifest digest, got %v", err)
 	}
 }
