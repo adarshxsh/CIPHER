@@ -4,23 +4,26 @@ import (
 	"context"
 	"io"
 	"log"
-	"math/rand"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
-	"cipher/internal/content/engine"
+	"cipher/internal/content/core"
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+// ChunkEngine defines the interface required by StreamHandler to retrieve manifests and chunks.
+type ChunkEngine interface {
+	GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error)
+	GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk, error)
+}
 
 type StreamHandler struct {
 	host   host.Host
-	engine *engine.ContentEngine
+	engine ChunkEngine
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng ChunkEngine) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
@@ -96,12 +99,6 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	if err != nil {
 		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
 		return
-	}
-
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
-		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
 	}
 
 	resp, err := BuildChunk(chunkData)
