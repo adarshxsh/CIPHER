@@ -2,6 +2,8 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"strings"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -105,3 +107,83 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestReadMessage_FrameSizeTooSmall(t *testing.T) {
+	for size := uint32(0); size < 3; size++ {
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.LittleEndian, size)
+
+		_, err := chunk.ReadMessage(&buf)
+		if err == nil {
+			t.Fatalf("expected error for frame size %d < 3, got nil", size)
+		}
+	}
+}
+
+func TestReadMessage_FrameSizeExceedsMax(t *testing.T) {
+	var buf bytes.Buffer
+	oversized := uint32(chunk.MaxFrameSize + 1)
+	binary.Write(&buf, binary.LittleEndian, oversized)
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for frame size %d > MaxFrameSize, got nil", oversized)
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum frame size") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestReadMessage_RejectsInflatedControlMessage(t *testing.T) {
+	testCases := []struct {
+		name        string
+		msgType     chunk.MessageType
+		inflatedLen uint32 // payload length = inflatedLen - 3
+	}{
+		{
+			name:        "MsgRequestManifest inflated to 1MB",
+			msgType:     chunk.MsgRequestManifest,
+			inflatedLen: 1024 * 1024,
+		},
+		{
+			name:        "MsgAck inflated to 2MB",
+			msgType:     chunk.MsgAck,
+			inflatedLen: 2 * 1024 * 1024,
+		},
+		{
+			name:        "MsgRequestChunk inflated to 64KB",
+			msgType:     chunk.MsgRequestChunk,
+			inflatedLen: 64 * 1024,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			// Write 4-byte size header
+			binary.Write(&buf, binary.LittleEndian, tc.inflatedLen)
+			// Write 2-byte Version header
+			binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+			// Write 1-byte Type header
+			binary.Write(&buf, binary.LittleEndian, tc.msgType)
+
+			// Notice we do NOT write any payload bytes to buf.
+			// ReadMessage should validate payloadSize against MaxPayloadSizeForMessage
+			// and return an error before trying to read payload bytes or make []byte.
+
+			_, err := chunk.ReadMessage(&buf)
+			if err == nil {
+				t.Fatalf("expected error for inflated message %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), "exceeds limit") {
+				t.Fatalf("expected 'exceeds limit' error, got %v", err)
+			}
+			// Verify that no bytes were read beyond the 7-byte header (4 size + 2 version + 1 type = 7 bytes total in buf)
+			// Since buf had 7 bytes, after reading size (4) and header (3), buf is empty (Len() == 0).
+			if buf.Len() != 0 {
+				t.Fatalf("expected buffer to be completely read up to header, remaining len=%d", buf.Len())
+			}
+		})
+	}
+}
+
