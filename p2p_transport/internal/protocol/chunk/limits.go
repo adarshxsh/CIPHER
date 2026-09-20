@@ -1,8 +1,15 @@
 package chunk
 
+import "time"
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
+)
+
+var (
+	// Default stream read deadline duration.
+	StreamReadDeadline = 15 * time.Second
 )
 
 const (
