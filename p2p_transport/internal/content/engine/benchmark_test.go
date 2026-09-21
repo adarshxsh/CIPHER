@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"io"
 	"os"
 	"testing"
 
@@ -84,8 +85,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		var outBuf bytes.Buffer
-		if err := eng.Reassemble(ctx, m, &outBuf); err != nil {
+		if err := eng.Reassemble(ctx, m, io.Discard); err != nil {
 			b.Fatalf("Reassemble failed: %v", err)
 		}
 	}
