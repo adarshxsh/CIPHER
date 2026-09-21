@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"cipher/internal/content/engine"
@@ -17,8 +18,22 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
+func SetTestThrottle(d time.Duration) {
+	atomic.StoreInt64((*int64)(&TestThrottle), int64(d))
+}
+
+func getTestThrottle() time.Duration {
+	return time.Duration(atomic.LoadInt64((*int64)(&TestThrottle)))
+}
+
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		task, ok := queue.Next()
 		if !ok {
 			return // Queue empty
@@ -37,19 +52,36 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
-		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+		throttle := getTestThrottle()
+		if throttle > 0 {
+			select {
+			case <-time.After(throttle):
+			case <-ctx.Done():
+				return
+			}
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }

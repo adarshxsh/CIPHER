@@ -48,7 +48,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
 			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			select {
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}: // Special signal
+			case <-ctx.Done():
+			}
 		}(source, client)
 	}
 	
@@ -92,8 +95,12 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res
-				pendingTasks--
+				select {
+				case completions <- res:
+					pendingTasks--
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}
