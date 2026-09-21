@@ -211,4 +211,6 @@ func TestScheduler_UnblockedChannelSendsOnCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("sched.Run blocked indefinitely on channel send during context cancellation")
 	}
+
+	time.Sleep(50 * time.Millisecond)
 }
