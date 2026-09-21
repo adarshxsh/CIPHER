@@ -33,13 +33,16 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
+		client, err := chunk.NewClient(workerCtx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
@@ -47,8 +50,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			runWorker(workerCtx, src, c, s.Engine, queue, results)
+			select {
+			case <-workerCtx.Done():
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			}
 		}(source, client)
 	}
 	
