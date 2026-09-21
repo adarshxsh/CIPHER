@@ -25,9 +25,15 @@ type AuthPolicy string
 const (
 	AuthPolicyOpen      AuthPolicy = "open"
 	AuthPolicyAllowlist AuthPolicy = "allowlist"
+
+	MaxPendingSessions        = 1000
+	MaxPendingSessionsPerPeer = 10
+	DefaultSessionTTL         = 15 * time.Minute
+	DefaultJanitorInterval    = 1 * time.Minute
 )
 
 type PendingSession struct {
+	PeerID          peer.ID
 	ContentID       core.ContentID
 	Manifest        *manifest.Manifest
 	ManifestBytes   []byte
@@ -46,8 +52,33 @@ type StreamHandler struct {
 	authPolicy        AuthPolicy
 	allowedPublishers map[peer.ID]struct{}
 
+	MaxPendingSessions        int
+	MaxPendingSessionsPerPeer int
+	SessionTTL                time.Duration
+	JanitorInterval           time.Duration
+
 	sessionsMu sync.RWMutex
 	sessions   map[core.ContentID]*PendingSession
+
+	stopJanitor chan struct{}
+	closeOnce   sync.Once
+	janitorWg   sync.WaitGroup
+}
+
+type Option func(*StreamHandler)
+
+func WithLimits(maxTotal, maxPerPeer int) Option {
+	return func(h *StreamHandler) {
+		h.MaxPendingSessions = maxTotal
+		h.MaxPendingSessionsPerPeer = maxPerPeer
+	}
+}
+
+func WithTTL(ttl, janitorInterval time.Duration) Option {
+	return func(h *StreamHandler) {
+		h.SessionTTL = ttl
+		h.JanitorInterval = janitorInterval
+	}
 }
 
 func NewStreamHandler(
@@ -57,6 +88,7 @@ func NewStreamHandler(
 	allowPush bool,
 	authPolicy AuthPolicy,
 	allowedPublishers []peer.ID,
+	opts ...Option,
 ) *StreamHandler {
 	allowedMap := make(map[peer.ID]struct{})
 	for _, pid := range allowedPublishers {
@@ -64,17 +96,29 @@ func NewStreamHandler(
 	}
 
 	handler := &StreamHandler{
-		host:              h,
-		engine:            eng,
-		kdht:              kdht,
-		digest:            verifier.NewSHA256Digest(),
-		allowPush:         allowPush,
-		authPolicy:        authPolicy,
-		allowedPublishers: allowedMap,
-		sessions:          make(map[core.ContentID]*PendingSession),
+		host:                      h,
+		engine:                    eng,
+		kdht:                      kdht,
+		digest:                    verifier.NewSHA256Digest(),
+		allowPush:                 allowPush,
+		authPolicy:                authPolicy,
+		allowedPublishers:         allowedMap,
+		sessions:                  make(map[core.ContentID]*PendingSession),
+		MaxPendingSessions:        MaxPendingSessions,
+		MaxPendingSessionsPerPeer: MaxPendingSessionsPerPeer,
+		SessionTTL:                DefaultSessionTTL,
+		JanitorInterval:           DefaultJanitorInterval,
+		stopJanitor:               make(chan struct{}),
 	}
 
-	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	for _, opt := range opts {
+		opt(handler)
+	}
+
+	if h != nil {
+		h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	}
+	handler.startJanitor()
 	return handler
 }
 
@@ -134,6 +178,8 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 }
 
 func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
+	remotePeer := s.Conn().RemotePeer()
+
 	contentID, assignedChunkIDs, manifestData, err := ParsePushManifest(msg.Payload)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to parse PUSH_MANIFEST: %v", err)
@@ -160,7 +206,31 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 	}
 
 	h.sessionsMu.Lock()
+	_, exists := h.sessions[contentID]
+	if !exists {
+		if h.MaxPendingSessions > 0 && len(h.sessions) >= h.MaxPendingSessions {
+			h.sessionsMu.Unlock()
+			log.Printf("[Push Protocol] Ingestion rejected from %s: global pending session capacity reached (%d)", remotePeer, h.MaxPendingSessions)
+			_ = WritePushMessage(s, BuildPushError(PushStatusUnauthorized, "global pending session capacity reached"))
+			return
+		}
+
+		peerCount := 0
+		for _, sess := range h.sessions {
+			if sess.PeerID == remotePeer {
+				peerCount++
+			}
+		}
+		if h.MaxPendingSessionsPerPeer > 0 && peerCount >= h.MaxPendingSessionsPerPeer {
+			h.sessionsMu.Unlock()
+			log.Printf("[Push Protocol] Ingestion rejected from %s: per-peer pending session limit reached (%d)", remotePeer, h.MaxPendingSessionsPerPeer)
+			_ = WritePushMessage(s, BuildPushError(PushStatusUnauthorized, "per-peer pending session limit reached"))
+			return
+		}
+	}
+
 	h.sessions[contentID] = &PendingSession{
+		PeerID:          remotePeer,
 		ContentID:       contentID,
 		Manifest:        m,
 		ManifestBytes:   manifestData,
@@ -171,7 +241,7 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 	}
 	h.sessionsMu.Unlock()
 
-	log.Printf("[Push Protocol] Initialized push session for ContentID %x (expecting %d chunks)", contentID, len(expectedMap))
+	log.Printf("[Push Protocol] Initialized push session for ContentID %x from peer %s (expecting %d chunks)", contentID, remotePeer, len(expectedMap))
 
 	ack := BuildPushManifestAck(contentID, PushStatusOK)
 	if err := WritePushMessage(s, ack); err != nil {
@@ -317,4 +387,55 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	if err := WritePushMessage(s, ack); err != nil {
 		log.Printf("[Push Protocol] Failed to write PUSH_BATCH_COMPLETE_ACK: %v", err)
 	}
+}
+
+func (h *StreamHandler) startJanitor() {
+	h.sessionsMu.RLock()
+	interval := h.JanitorInterval
+	h.sessionsMu.RUnlock()
+
+	if interval <= 0 {
+		return
+	}
+	h.janitorWg.Add(1)
+	go h.janitorLoop(interval)
+}
+
+func (h *StreamHandler) janitorLoop(interval time.Duration) {
+	defer h.janitorWg.Done()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			h.CleanupStaleSessions()
+		case <-h.stopJanitor:
+			return
+		}
+	}
+}
+
+func (h *StreamHandler) CleanupStaleSessions() {
+	if h.SessionTTL <= 0 {
+		return
+	}
+	now := time.Now()
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+
+	for id, session := range h.sessions {
+		if now.Sub(session.UpdatedAt) > h.SessionTTL {
+			log.Printf("[Push Protocol] Janitor evicting stale session for ContentID %x (inactive for %v, peer %s)", id, now.Sub(session.UpdatedAt), session.PeerID)
+			delete(h.sessions, id)
+		}
+	}
+}
+
+func (h *StreamHandler) Close() error {
+	h.closeOnce.Do(func() {
+		close(h.stopJanitor)
+	})
+	h.janitorWg.Wait()
+	return nil
 }
