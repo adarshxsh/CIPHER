@@ -60,6 +60,8 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	keyOut := flag.String("key-out", "", "Path to export the 32-byte raw decryption key file")
+	showKey := flag.Bool("show-key", false, "Display raw hex decryption key on stdout")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +125,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -247,9 +249,25 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+
+		if *keyOut != "" {
+			if err := os.WriteFile(*keyOut, key, 0600); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+			if err := os.Chmod(*keyOut, 0600); err != nil {
+				log.Fatalf("Failed to set permissions on key file %s: %v", *keyOut, err)
+			}
+		}
+
+		keyDisplay := "[REDACTED - Saved to store]"
+		if *showKey {
+			fmt.Fprintln(os.Stderr, "SECURITY WARNING: --show-key flag enabled. Raw decryption key material printed to stdout!")
+			keyDisplay = fmt.Sprintf("%x", key)
+		}
+
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Decryption Key: %s", keyDisplay)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +281,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyDisplay)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -374,6 +392,14 @@ func main() {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
 			keys.Put(ctx, contentID, kBytes)
+			if *keyOut != "" {
+				if err := os.WriteFile(*keyOut, kBytes, 0600); err != nil {
+					log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+				}
+				if err := os.Chmod(*keyOut, 0600); err != nil {
+					log.Fatalf("Failed to set permissions on key file %s: %v", *keyOut, err)
+				}
+			}
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.

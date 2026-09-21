@@ -46,6 +46,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	keyOut := flag.String("key-out", "", "Path to export the 32-byte raw decryption key file")
+	showKey := flag.Bool("show-key", false, "Display raw hex decryption key on stdout")
 
 	flag.Parse()
 
@@ -110,7 +112,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -236,10 +238,25 @@ func main() {
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
 
+	if *keyOut != "" {
+		if err := os.WriteFile(*keyOut, key, 0600); err != nil {
+			log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+		}
+		if err := os.Chmod(*keyOut, 0600); err != nil {
+			log.Fatalf("Failed to set permissions on key file %s: %v", *keyOut, err)
+		}
+	}
+
+	keyDisplay := "[REDACTED - Saved to store]"
+	if *showKey {
+		fmt.Fprintln(os.Stderr, "SECURITY WARNING: --show-key flag enabled. Raw decryption key material printed to stdout!")
+		keyDisplay = fmt.Sprintf("%x", key)
+	}
+
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: %s\n", keyDisplay)
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
