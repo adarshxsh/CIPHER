@@ -1,8 +1,9 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+
 	"cipher/internal/content/core"
 )
 
@@ -43,7 +44,9 @@ type UserMetadata struct {
 }
 
 func (m *Manifest) Serialize() ([]byte, error) {
-	return json.Marshal(m)
+	canonical := *m
+	canonical.Descriptor.ID = core.ContentID{}
+	return json.Marshal(canonical)
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
@@ -51,5 +54,10 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+	hash := sha256.Sum256(data)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	m.Descriptor.ID = id
 	return &m, nil
 }
+

@@ -1,6 +1,7 @@
 package chunk_test
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -127,5 +128,31 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_ValidAndTamperedPayloads(t *testing.T) {
+	manifestBytes := []byte(`{"version":1,"descriptor":{"id":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"type":"file","size":100},"chunk_ids":[],"merkle_root":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"whole_hash":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"crypto":{"algorithm":"ChaCha20-Poly1305","version":1,"chunk_nonce_size":12,"key_id":"embedded"}}`)
+	hash := sha256.Sum256(manifestBytes)
+	var contentID core.ContentID
+	copy(contentID[:], hash[:])
+
+	// 1. Valid manifest message
+	validMsg := chunk.BuildManifest(contentID, manifestBytes)
+	if err := chunk.ValidateManifestForRequest(contentID, validMsg.Payload); err != nil {
+		t.Fatalf("valid manifest payload should pass validation: %v", err)
+	}
+
+	// 2. Tampered manifest payload with matching 32-byte header prefix
+	tamperedBytes := append([]byte(nil), manifestBytes...)
+	tamperedBytes[len(tamperedBytes)-2] ^= 0xFF // alter byte inside json
+	tamperedMsg := chunk.BuildManifest(contentID, tamperedBytes)
+
+	err := chunk.ValidateManifestForRequest(contentID, tamperedMsg.Payload)
+	if err == nil {
+		t.Fatalf("expected validation failure for tampered manifest payload")
+	}
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected error wrapping ErrContentMismatch, got %v", err)
 	}
 }
