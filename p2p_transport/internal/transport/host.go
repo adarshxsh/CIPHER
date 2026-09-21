@@ -9,17 +9,154 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/connmgr"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
 
-// NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+type nodeConfig struct {
+	rm              network.ResourceManager
+	resCfg          *ResourceConfig
+	role            NodeRole
+	connManager     connmgr.ConnManager
+	connLimits      *connLimits
+	memoryLimit     int64
+	peerStreamLimit int
+	partialLimits   *rcmgr.PartialLimitConfig
+	rcmgrLimiter    rcmgr.Limiter
+}
+
+type connLimits struct {
+	low  int
+	high int
+}
+
+// NodeOption configures options for libp2p node creation.
+type NodeOption func(*nodeConfig)
+
+// WithResourceManager sets an explicit network.ResourceManager.
+func WithResourceManager(rm network.ResourceManager) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.rm = rm
+	}
+}
+
+// WithResourceConfig configures the node with a ResourceConfig struct.
+func WithResourceConfig(resCfg ResourceConfig) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.resCfg = &resCfg
+	}
+}
+
+// WithRole specifies the NodeRole operational profile for resource limits.
+func WithRole(role NodeRole) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.role = role
+	}
+}
+
+// WithMemoryLimit sets a system memory limit override in bytes.
+func WithMemoryLimit(limit int64) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.memoryLimit = limit
+	}
+}
+
+// WithConnLimits sets connection watermarks.
+func WithConnLimits(low, high int) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.connLimits = &connLimits{low: low, high: high}
+	}
+}
+
+// WithPeerStreamLimit sets maximum per-peer stream limits.
+func WithPeerStreamLimit(limit int) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.peerStreamLimit = limit
+	}
+}
+
+// WithPartialLimits provides a PartialLimitConfig override.
+func WithPartialLimits(p rcmgr.PartialLimitConfig) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.partialLimits = &p
+	}
+}
+
+// WithRcmgrLimiter sets a custom rcmgr.Limiter.
+func WithRcmgrLimiter(limiter rcmgr.Limiter) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.rcmgrLimiter = limiter
+	}
+}
+
+// WithConnManager sets a custom connection manager.
+func WithConnManager(cm connmgr.ConnManager) NodeOption {
+	return func(cfg *nodeConfig) {
+		cfg.connManager = cm
+	}
+}
+
+// NewHost creates a new libp2p host (alias for NewNode).
+func NewHost(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, nodeOpts ...NodeOption) (host.Host, *dht.IpfsDHT, error) {
+	return NewNode(ctx, listenPort, wsPort, priv, relayAddr, forceRelay, nodeOpts...)
+}
+
+// NewNode creates a new libp2p host with configurable resource management.
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, nodeOpts ...NodeOption) (host.Host, *dht.IpfsDHT, error) {
+	nc := &nodeConfig{}
+	for _, opt := range nodeOpts {
+		opt(nc)
+	}
+
+	var rm network.ResourceManager
+	var err error
+
+	if nc.rm != nil {
+		rm = nc.rm
+	} else if nc.rcmgrLimiter != nil {
+		rm, err = rcmgr.NewResourceManager(nc.rcmgrLimiter)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create resource manager from limiter: %w", err)
+		}
+	} else {
+		var resCfg ResourceConfig
+		if nc.resCfg != nil {
+			resCfg = *nc.resCfg
+		} else {
+			resCfg, err = LoadResourceConfigFromEnv()
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to load resource config from environment: %w", err)
+			}
+		}
+
+		if nc.role != "" {
+			resCfg.Role = nc.role
+		}
+		if nc.memoryLimit > 0 {
+			resCfg.MaxMemory = nc.memoryLimit
+		}
+		if nc.peerStreamLimit > 0 {
+			resCfg.PeerStreamLimit = nc.peerStreamLimit
+		}
+		if nc.connLimits != nil {
+			resCfg.MaxConns = nc.connLimits.high
+			resCfg.InboundConns = nc.connLimits.high
+			resCfg.OutboundConns = nc.connLimits.low
+		}
+
+		rm, err = resCfg.BuildResourceManager()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to build resource manager: %w", err)
+		}
+	}
+
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
 	listenAddrs := []string{addr}
@@ -31,6 +168,11 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ResourceManager(rm),
+	}
+
+	if nc.connManager != nil {
+		opts = append(opts, libp2p.ConnectionManager(nc.connManager))
 	}
 
 	if priv != nil {
