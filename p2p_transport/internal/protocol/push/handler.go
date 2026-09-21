@@ -2,6 +2,8 @@ package push
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"io"
 	"log"
 	"sync"
@@ -148,11 +150,13 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
-	if m.Descriptor.ID != contentID {
-		log.Printf("[Push Protocol] Manifest contentID mismatch: %x vs %x", m.Descriptor.ID, contentID)
+	computedHash := sha256.Sum256(manifestData)
+	if subtle.ConstantTimeCompare(contentID[:], computedHash[:]) != 1 {
+		log.Printf("[Push Protocol] Manifest contentID multihash mismatch: %x vs %x", computedHash, contentID)
 		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "contentID mismatch"))
 		return
 	}
+	m.Descriptor.ID = contentID
 
 	expectedMap := make(map[core.ChunkID]struct{})
 	for _, cid := range assignedChunkIDs {
