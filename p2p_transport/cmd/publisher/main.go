@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
@@ -16,6 +18,7 @@ import (
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
 	"cipher/internal/discovery"
+	"cipher/internal/distribution"
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
@@ -39,6 +42,10 @@ func main() {
 	seed := flag.Bool("seed", true, "Keep publisher running to seed chunks over /cipher/chunk/1.0.0")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	chunkSizeKB := flag.Int("chunk-size", 32, "Chunk size in KB (default: 32)")
+	providersList := flag.String("providers", "", "Comma-separated multiaddresses of target providers to push content to")
+	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
+	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
+	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
 
 	flag.Parse()
 
@@ -132,12 +139,61 @@ func main() {
 		log.Fatalf("Failed to store manifest: %v", err)
 	}
 
-	// 6. Advertise on DHT (Control Plane)
-	log.Printf("[DHT] Announcing ContentID %x on DHT...", m.Descriptor.ID)
-	if err := discovery.Provide(ctx, kdht, m.Descriptor.ID); err != nil {
-		log.Printf("[DHT] Warning: Could not advertise on DHT: %v (ensure bootstrap node is active)", err)
+	// 6. Execute Remote Push if requested
+	if *push {
+		if *providersList == "" {
+			log.Fatalf("Error: -push requires -providers <comma-separated provider multiaddresses>")
+		}
+
+		t := transport.NewTransport(h)
+		var targetPeers []peer.ID
+
+		for _, pAddrStr := range strings.Split(*providersList, ",") {
+			pAddrStr = strings.TrimSpace(pAddrStr)
+			if pAddrStr == "" {
+				continue
+			}
+			addrInfo, err := t.Connect(ctx, pAddrStr)
+			if err != nil {
+				log.Printf("[Publisher] Warning: Failed to connect to provider %s: %v", pAddrStr, err)
+				continue
+			}
+			targetPeers = append(targetPeers, addrInfo.ID)
+		}
+
+		if len(targetPeers) == 0 {
+			log.Fatalf("Fatal: Could not connect to any specified target providers")
+		}
+
+		effectiveReplication := *replication
+		if effectiveReplication > len(targetPeers) {
+			effectiveReplication = len(targetPeers)
+			log.Printf("[Publisher] Notice: Reduced replication to %d to match available provider count", effectiveReplication)
+		}
+
+		plan, err := distribution.PlanPlacement(m, targetPeers, effectiveReplication)
+		if err != nil {
+			log.Fatalf("Failed to plan chunk placement: %v", err)
+		}
+
+		tracker := distribution.NewGlobalReplicaTracker(effectiveReplication)
+		pushCtx, pushCancel := context.WithTimeout(ctx, *pushTimeout)
+		defer pushCancel()
+
+		if err := distribution.Distribute(pushCtx, t, eng, plan, tracker, distribution.DefaultUploaderConfig); err != nil {
+			log.Fatalf("Push distribution failed to satisfy replication invariant: %v", err)
+		}
+
+		log.Printf("[Publisher] [✓] All chunks successfully committed with >= %d replicas across %d remote providers!",
+			effectiveReplication, len(targetPeers))
 	} else {
-		log.Printf("[DHT] Successfully announced ContentID on DHT")
+		// Traditional direct publisher DHT announcement
+		log.Printf("[DHT] Announcing ContentID %x on DHT...", m.Descriptor.ID)
+		if err := discovery.Provide(ctx, kdht, m.Descriptor.ID); err != nil {
+			log.Printf("[DHT] Warning: Could not advertise on DHT: %v (ensure bootstrap node is active)", err)
+		} else {
+			log.Printf("[DHT] Successfully announced ContentID on DHT")
+		}
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
