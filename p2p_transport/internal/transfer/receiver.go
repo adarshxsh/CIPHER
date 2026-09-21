@@ -17,35 +17,67 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
-	defer s.Close()
+func Receive(s network.Stream) (err error) {
+	var outPath string
+	var outFile *os.File
+
+	defer func() {
+		if outFile != nil {
+			if closeErr := outFile.Close(); closeErr != nil {
+				log.Printf("[WARNING] Failed to close output file %s: %v", outPath, closeErr)
+			}
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] Transfer failed: %v. Resetting stream.", err)
+			if resetErr := s.Reset(); resetErr != nil {
+				log.Printf("[DEBUG] Failed to reset stream (may already be closed/reset): %v", resetErr)
+			}
+
+			if outPath != "" {
+				if _, statErr := os.Stat(outPath); statErr == nil {
+					log.Printf("[INFO] Removing incomplete or corrupted file: %s", outPath)
+					if rmErr := os.Remove(outPath); rmErr != nil {
+						log.Printf("[ERROR] Failed to remove partial file %s: %v", outPath, rmErr)
+					}
+				}
+			}
+		} else {
+			if closeErr := s.Close(); closeErr != nil {
+				log.Printf("[WARNING] Failed to close stream gracefully: %v", closeErr)
+			}
+		}
+	}()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
-		return fmt.Errorf("failed to read header: %w", err)
+	if err = header.ReadFrom(s); err != nil {
+		err = fmt.Errorf("failed to read header: %w", err)
+		return err
 	}
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
-		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
+		err = fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
+		return err
 	}
 
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
-	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create downloads directory: %w", err)
+	if err = os.MkdirAll(downloadsDir, 0755); err != nil {
+		err = fmt.Errorf("failed to create downloads directory: %w", err)
+		return err
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	outPath = filepath.Join(downloadsDir, header.Filename)
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
-	outFile, err := os.Create(outPath)
+	outFile, err = os.Create(outPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		err = fmt.Errorf("failed to create output file: %w", err)
+		return err
 	}
-	defer outFile.Close()
 
 	startTime := time.Now()
 
@@ -59,13 +91,16 @@ func Receive(s network.Stream) error {
 		last:  0,
 	}
 
-	received, err := io.Copy(multiWriter, pr)
+	var received int64
+	received, err = io.Copy(multiWriter, pr)
 	if err != nil {
-		return fmt.Errorf("failed to receive file data: %w", err)
+		err = fmt.Errorf("failed to receive file data: %w", err)
+		return err
 	}
 
 	if uint64(received) != header.FileSize {
-		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		err = fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		return err
 	}
 
 	duration := time.Since(startTime)
@@ -75,10 +110,9 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		err = fmt.Errorf("checksum mismatch: expected %x, got %x", header.Checksum, computedChecksum)
+		return err
 	}
 
 	// Determine Connection Type
@@ -89,7 +123,7 @@ func Receive(s network.Stream) error {
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
