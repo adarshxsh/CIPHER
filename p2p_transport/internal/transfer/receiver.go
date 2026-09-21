@@ -17,8 +17,14 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
-	defer s.Close()
+func Receive(s network.Stream) (err error) {
+	defer func() {
+		if err != nil {
+			s.Reset()
+		} else {
+			s.Close()
+		}
+	}()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
@@ -41,11 +47,18 @@ func Receive(s network.Stream) error {
 	outPath := filepath.Join(downloadsDir, header.Filename)
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
-	outFile, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	outFile, createErr := os.Create(outPath)
+	if createErr != nil {
+		return fmt.Errorf("failed to create output file: %w", createErr)
 	}
-	defer outFile.Close()
+	defer func() {
+		outFile.Close()
+		if err != nil {
+			if removeErr := os.Remove(outPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				log.Printf("failed to remove incomplete output file %s: %v", outPath, removeErr)
+			}
+		}
+	}()
 
 	startTime := time.Now()
 
@@ -75,11 +88,12 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
 		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", header.Checksum, computedChecksum)
 	}
+
+	integrityStr := "VERIFIED"
 
 	// Determine Connection Type
 	connType := "Direct"
