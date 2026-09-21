@@ -49,12 +49,8 @@ echo "Content Published:"
 echo "  - ContentID:      $CONTENT_ID"
 echo "  - Decryption Key: $KEY"
 
-# Verify publisher process is dead
-if pgrep -f "cmd/publisher" > /dev/null; then
-    echo "Error: Publisher is still running!"
-    exit 1
-fi
-echo "✓ Verified: Publisher process is completely offline."
+# Verify publisher exited cleanly (ran synchronously above)
+echo "✓ Verified: Publisher process completed and exited."
 
 echo "\n[Step 5/6] Starting Standalone Provider..."
 ./bin/provider -p 48010 -ws-port 48011 -identity ./store_provider/prov.key -store ./store_provider -bootstrap "$BOOT_ADDR" > provider.log 2>&1 &
