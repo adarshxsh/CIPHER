@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,10 +11,11 @@ import (
 	"time"
 
 	"cipher/internal/identity"
+	"cipher/internal/transport"
 
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
@@ -20,45 +23,63 @@ func main() {
 	golog.SetLogLevel("relay", "debug")
 	golog.SetLogLevel("p2p-circuit", "debug")
 
+	maxDataKB := flag.Int64("max-data-kb", 128, "Maximum data limit per relayed connection in KB")
+	maxDurationMin := flag.Int("max-duration-min", 2, "Maximum connection duration limit in minutes")
+	maxReservations := flag.Int("max-reservations", 128, "Maximum active relay reservations")
+	maxReservationsPerPeer := flag.Int("max-reservations-per-peer", 4, "Maximum reservations per peer")
+	port := flag.Int("p", 4001, "Port for the relay to listen on (TCP)")
+	wsPort := flag.Int("ws-port", 4004, "Port for the relay to listen on (WebSocket)")
+	flag.Parse()
+
 	// Load persistent identity for the relay
 	priv, err := identity.LoadOrCreate()
 	if err != nil {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	// Listen on TCP 4001, UDP 4002 (QUIC), and TCP 4004 (WebSocket)
-	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(
-			"/ip4/0.0.0.0/tcp/4001",
-			"/ip4/0.0.0.0/udp/4002/quic-v1",
-			"/ip4/0.0.0.0/tcp/4004/ws",
-		),
-		libp2p.Identity(priv),
-		libp2p.EnableNATService(),
+	// Default circuit v2 resources with operator flags support.
+	rc := relay.DefaultResources()
+	if rc.Limit == nil {
+		rc.Limit = relay.DefaultLimit()
+	}
+	if *maxDataKB > 0 {
+		rc.Limit.Data = *maxDataKB * 1024
+	}
+	if *maxDurationMin > 0 {
+		rc.Limit.Duration = time.Duration(*maxDurationMin) * time.Minute
+	}
+	if *maxReservations > 0 {
+		rc.MaxReservations = *maxReservations
+	}
+	if *maxReservationsPerPeer > 0 {
+		rc.MaxReservationsPerPeer = *maxReservationsPerPeer
 	}
 
-	h, err := libp2p.New(opts...)
+	ctx := context.Background()
+	h, _, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		"",
+		false,
+		transport.WithRelayResources(rc),
+		transport.WithLibp2pOptions(
+			libp2p.ListenAddrStrings(
+				fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", *port+1),
+			),
+			libp2p.EnableNATService(),
+		),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p relay node: %v", err)
 	}
 
-	// Configure custom relay resources for development/testing.
-	// Production or public relays should stick to relay.DefaultResources() to prevent bandwidth abuse,
-	// as relay fallback connections are typically only intended for lightweight protocol coordination.
-	rc := relay.DefaultResources()
-	rc.Limit.Data = 512 * 1024 * 1024 // 512 MB data limit per connection
-	rc.Limit.Duration = 15 * time.Minute // 15 minute duration limit
-	rc.MaxReservations = 100
-
-	// Instantiate the circuit v2 relay service
-	_, err = relay.New(h, relay.WithResources(rc))
-	if err != nil {
-		log.Fatalf("Failed to instantiate relay service: %v", err)
-	}
-
 	log.Printf("Relay Service Started!")
 	log.Printf("Relay Peer ID: %s", h.ID().String())
-	
+	log.Printf("Relay Resources: Data Cap=%d KB, Max Duration=%v, Max Reservations=%d, Max Reservations/Peer=%d",
+		rc.Limit.Data/1024, rc.Limit.Duration, rc.MaxReservations, rc.MaxReservationsPerPeer)
+
 	fmt.Println("\nRelay Multiaddresses (for other peers to connect):")
 	for _, addr := range h.Addrs() {
 		fmt.Printf("%s/p2p/%s\n", addr.String(), h.ID().String())
