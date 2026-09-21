@@ -129,3 +129,35 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_MaxManifestSize(t *testing.T) {
+	// Too small payload
+	smallPayload := make([]byte, chunk.ContentIDSize-1)
+	if err := chunk.ValidateManifestPayload(smallPayload); !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for payload smaller than ContentIDSize, got %v", err)
+	}
+
+	// Valid size payload
+	validPayload := make([]byte, chunk.MaxManifestSize)
+	if err := chunk.ValidateManifestPayload(validPayload); err != nil {
+		t.Fatalf("expected nil error for valid payload size MaxManifestSize, got %v", err)
+	}
+
+	// Oversized payload
+	oversizedPayload := make([]byte, chunk.MaxManifestSize+1)
+	err := chunk.ValidateManifestPayload(oversizedPayload)
+	if !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidPayloadLength for payload exceeding MaxManifestSize, got %v", err)
+	}
+
+	// ValidateMessage wrapper check
+	msg := &chunk.Message{
+		Version: chunk.CurrentMessageVersion,
+		Type:    chunk.MsgManifest,
+		Payload: oversizedPayload,
+	}
+	err = chunk.ValidateMessage(msg)
+	if !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidPayloadLength from ValidateMessage, got %v", err)
+	}
+}
