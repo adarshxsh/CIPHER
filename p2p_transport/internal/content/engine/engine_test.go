@@ -71,3 +71,65 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+type chunkCountingWriter struct {
+	writes [][]byte
+}
+
+func (w *chunkCountingWriter) Write(p []byte) (int, error) {
+	buf := make([]byte, len(p))
+	copy(buf, p)
+	w.writes = append(w.writes, buf)
+	return len(p), nil
+}
+
+func TestContentEngine_StreamingReassemble(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-stream-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 10 * 1024, // 10KB chunks
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create 50KB data (5 chunks)
+	originalData := make([]byte, 50*1024)
+	rand.Seed(time.Now().UnixNano())
+	rand.Read(originalData)
+
+	ctx := context.Background()
+	m, err := eng.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	writer := &chunkCountingWriter{}
+	if err := eng.Reassemble(ctx, m, writer); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	if len(writer.writes) != len(m.ChunkIDs) {
+		t.Errorf("expected %d chunk write calls, got %d", len(m.ChunkIDs), len(writer.writes))
+	}
+
+	var reassembled []byte
+	for _, chunk := range writer.writes {
+		reassembled = append(reassembled, chunk...)
+	}
+
+	if !bytes.Equal(originalData, reassembled) {
+		t.Errorf("reassembled data mismatch")
+	}
+}
