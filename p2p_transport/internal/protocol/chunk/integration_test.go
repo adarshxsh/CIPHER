@@ -131,3 +131,38 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 		t.Errorf("Unexpected error msg: %v", err)
 	}
 }
+
+func TestChunkProtocol_TamperedManifestRejection(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	eng2 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	data := []byte("content to ingest and tamper with manifest")
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	// Store tampered manifest bytes under original ContentID in eng1
+	tamperedBytes := append([]byte(nil), mBytes...)
+	tamperedBytes[len(tamperedBytes)-1] ^= 0xFF
+	eng1.PutManifestBytes(ctx, m.Descriptor.ID, tamperedBytes)
+
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Resolve(ctx, m.Descriptor.ID)
+	if err == nil {
+		t.Fatalf("Expected client.Resolve to reject tampered manifest payload")
+	}
+}
