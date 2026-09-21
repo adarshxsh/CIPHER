@@ -51,7 +51,7 @@ func TestPeerKeyRedaction(t *testing.T) {
 		go func() {
 			for {
 				output := outBuf.String()
-				if strings.Contains(output, "To download this file on another peer") {
+				if strings.Contains(output, "downloaded_file") {
 					break
 				}
 				if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
@@ -102,7 +102,7 @@ func TestPeerKeyRedaction(t *testing.T) {
 		go func() {
 			for {
 				output := outBuf.String()
-				if strings.Contains(output, "To download this file on another peer") {
+				if strings.Contains(output, "downloaded_file") {
 					break
 				}
 				if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
