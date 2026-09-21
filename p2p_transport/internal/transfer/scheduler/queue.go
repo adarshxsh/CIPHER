@@ -1,8 +1,15 @@
 package scheduler
 
 import (
+	"context"
 	"sync"
+
 	"cipher/internal/content/core"
+)
+
+const (
+	DefaultMaxQueueCapacity = 1000
+	WorkerBufferMultiplier  = 2
 )
 
 type ChunkTask struct {
@@ -13,35 +20,113 @@ type ChunkTask struct {
 }
 
 type ChunkQueue struct {
-	tasks []ChunkTask
-	mu    sync.Mutex
+	ch       chan ChunkTask
+	capacity int
+	closed   bool
+	mu       sync.RWMutex
+	once     sync.Once
 }
 
 func NewChunkQueue(tasks []ChunkTask) *ChunkQueue {
-	return &ChunkQueue{
-		tasks: tasks,
+	return NewChunkQueueWithBounds(tasks, 1, DefaultMaxQueueCapacity)
+}
+
+func NewChunkQueueWithBounds(tasks []ChunkTask, workerCount int, maxLimit int) *ChunkQueue {
+	if maxLimit <= 0 {
+		maxLimit = DefaultMaxQueueCapacity
 	}
+	cap := len(tasks)
+	minCap := workerCount * WorkerBufferMultiplier
+	if minCap < 1 {
+		minCap = 1
+	}
+	if cap < minCap {
+		cap = minCap
+	}
+	if cap > maxLimit {
+		cap = maxLimit
+	}
+
+	q := &ChunkQueue{
+		ch:       make(chan ChunkTask, cap),
+		capacity: cap,
+	}
+
+	for _, task := range tasks {
+		select {
+		case q.ch <- task:
+		default:
+			break
+		}
+	}
+
+	return q
 }
 
 func (q *ChunkQueue) Next() (ChunkTask, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.tasks) == 0 {
+	select {
+	case task, ok := <-q.ch:
+		return task, ok
+	default:
 		return ChunkTask{}, false
 	}
-	task := q.tasks[0]
-	q.tasks = q.tasks[1:]
-	return task, true
 }
 
-func (q *ChunkQueue) Push(task ChunkTask) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.tasks = append(q.tasks, task)
+func (q *ChunkQueue) Pop(ctx context.Context) (ChunkTask, bool) {
+	select {
+	case <-ctx.Done():
+		return ChunkTask{}, false
+	case task, ok := <-q.ch:
+		return task, ok
+	}
+}
+
+func (q *ChunkQueue) Push(task ChunkTask) bool {
+	q.mu.RLock()
+	if q.closed {
+		q.mu.RUnlock()
+		return false
+	}
+	q.mu.RUnlock()
+
+	select {
+	case q.ch <- task:
+		return true
+	default:
+		return false
+	}
+}
+
+func (q *ChunkQueue) PushCtx(ctx context.Context, task ChunkTask) bool {
+	q.mu.RLock()
+	if q.closed {
+		q.mu.RUnlock()
+		return false
+	}
+	q.mu.RUnlock()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case q.ch <- task:
+		return true
+	}
 }
 
 func (q *ChunkQueue) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.tasks)
+	return len(q.ch)
 }
+
+func (q *ChunkQueue) Cap() int {
+	return q.capacity
+}
+
+func (q *ChunkQueue) Close() {
+	q.once.Do(func() {
+		q.mu.Lock()
+		q.closed = true
+		close(q.ch)
+		q.mu.Unlock()
+	})
+}
+
