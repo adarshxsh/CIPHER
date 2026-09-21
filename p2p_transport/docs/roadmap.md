@@ -20,7 +20,7 @@
 - [x] Milestone 11: Decentralized Discovery (Kademlia DHT server mode, CID generation, periodic Provider Republisher daemon)
 - [x] Milestone 12: Remote Ingestion & Multi-Provider Replication Protocol (`/cipher/push/1.0.0`, circular placement planner, global replica invariant tracker)
 - [ ] Milestone 13: Provider Selection & Dynamic Scoring Engine (RTT/bandwidth-based scheduler prioritization)
-- [ ] Milestone 14: Provider Reputation & Byzantine Fault Hardening (Corrupt chunk quarantine & peer blacklisting)
+- [x] Milestone 14: Provider Reputation & Byzantine Fault Hardening (Corrupt chunk quarantine & peer blacklisting)
 - [ ] Milestone 15: Tiered Caching & Dynamic Edge Replication (LRU RAM cache + demand-driven CDN replication)
 - [ ] Milestone 16: Observability, Metrics & Telemetry Suite (Prometheus metrics & CLI dashboard)
 
