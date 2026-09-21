@@ -32,11 +32,15 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			return nil // Queue empty
 		}
 		
-		if source.Available != nil {
-			if _, has := source.Available[task.ChunkID]; !has {
-				// We don't think this source has the chunk.
-				// For now, we still try since discovery isn't fully robust.
+		// If this source already returned candidate miss for this task, requeue and yield
+		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
+			queue.Push(task)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Millisecond):
 			}
+			continue
 		}
 		
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
