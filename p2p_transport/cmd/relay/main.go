@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,10 +10,11 @@ import (
 	"time"
 
 	"cipher/internal/identity"
+	"cipher/internal/transport"
 
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
@@ -26,20 +28,27 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	// Listen on TCP 4001, UDP 4002 (QUIC), and TCP 4004 (WebSocket)
-	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings(
-			"/ip4/0.0.0.0/tcp/4001",
-			"/ip4/0.0.0.0/udp/4002/quic-v1",
-			"/ip4/0.0.0.0/tcp/4004/ws",
-		),
-		libp2p.Identity(priv),
-		libp2p.EnableNATService(),
-	}
+	ctx := context.Background()
 
-	h, err := libp2p.New(opts...)
+	// Instantiate relay host via transport.NewNode with connection and resource manager limits configured
+	h, kdht, err := transport.NewNode(
+		ctx,
+		4001,
+		4004,
+		priv,
+		"",
+		false,
+		transport.WithConnectionLimits(100, 400, 1*time.Minute),
+		transport.WithLibp2pOptions(
+			libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4002/quic-v1"),
+			libp2p.EnableNATService(),
+		),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p relay node: %v", err)
+	}
+	if kdht != nil {
+		defer kdht.Close()
 	}
 
 	// Configure custom relay resources for development/testing.
