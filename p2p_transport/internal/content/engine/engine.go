@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -123,19 +122,13 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, fetches chunks sequentially, verifies integrity, decrypts them, and writes directly to w.
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
 	// Retrieve key
 	key, err := e.keys.Get(ctx, m.Descriptor.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
-
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
-
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
 
 	for _, chunkID := range m.ChunkIDs {
 		chunk, err := e.source.GetChunk(ctx, chunkID)
@@ -154,16 +147,7 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
-	}
-
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
-
-	// Write out
-	for _, chunk := range chunks {
+		// Write decrypted chunk immediately to destination writer
 		if _, err := w.Write(chunk.Data); err != nil {
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
 		}
