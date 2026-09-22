@@ -13,9 +13,77 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+const (
+	DefaultTransferReadTimeout  = 30 * time.Second
+	DefaultTransferWriteTimeout = 15 * time.Second
+)
+
+type transferConfig struct {
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+}
+
+type TransferOption func(*transferConfig)
+
+func WithTransferReadTimeout(d time.Duration) TransferOption {
+	return func(c *transferConfig) {
+		c.readTimeout = d
+	}
+}
+
+func WithTransferWriteTimeout(d time.Duration) TransferOption {
+	return func(c *transferConfig) {
+		c.writeTimeout = d
+	}
+}
+
+type deadlineWriter struct {
+	stream  network.Stream
+	timeout time.Duration
+}
+
+func newDeadlineWriter(s network.Stream, timeout time.Duration) *deadlineWriter {
+	return &deadlineWriter{stream: s, timeout: timeout}
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	if w.timeout > 0 {
+		if err := w.stream.SetWriteDeadline(time.Now().Add(w.timeout)); err != nil {
+			return 0, err
+		}
+	}
+	return w.stream.Write(p)
+}
+
+type deadlineReader struct {
+	stream  network.Stream
+	timeout time.Duration
+}
+
+func newDeadlineReader(s network.Stream, timeout time.Duration) *deadlineReader {
+	return &deadlineReader{stream: s, timeout: timeout}
+}
+
+func (r *deadlineReader) Read(p []byte) (int, error) {
+	if r.timeout > 0 {
+		if err := r.stream.SetReadDeadline(time.Now().Add(r.timeout)); err != nil {
+			return 0, err
+		}
+	}
+	return r.stream.Read(p)
+}
+
 // Send transfers a file to the remote peer over the provided stream.
-func Send(s network.Stream, filePath string) error {
+func Send(s network.Stream, filePath string, opts ...TransferOption) error {
 	defer s.Close()
+
+	cfg := transferConfig{
+		readTimeout:  DefaultTransferReadTimeout,
+		writeTimeout: DefaultTransferWriteTimeout,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	log.Printf("Preparing to send %s...", filePath)
 
@@ -54,7 +122,8 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
-	if err := header.WriteTo(s); err != nil {
+	dw := newDeadlineWriter(s, cfg.writeTimeout)
+	if err := header.WriteTo(dw); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
@@ -70,7 +139,7 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	written, err := io.Copy(dw, pr)
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
