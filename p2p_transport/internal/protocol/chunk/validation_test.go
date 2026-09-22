@@ -105,6 +105,13 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrContentMismatch, got %v", err)
 	}
 
+	// Case where received matches requested, but raw manifest payload does not hash to requested ID
+	manifestMsgSameID := chunk.BuildManifest(requested, []byte("tampered manifest payload"))
+	errIntegrity := chunk.ValidateManifestForRequest(requested, manifestMsgSameID.Payload)
+	if !errors.Is(errIntegrity, chunk.ErrManifestIntegrity) {
+		t.Fatalf("expected ErrManifestIntegrity for tampered manifest, got %v", errIntegrity)
+	}
+
 	var requestedChunk core.ChunkID
 	requestedChunk[0] = 0x03
 
