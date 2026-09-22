@@ -46,6 +46,7 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	showKey := flag.Bool("show-key", false, "Show raw decryption key in logs (warning: secret key exposure)")
 
 	flag.Parse()
 
@@ -239,7 +240,11 @@ func main() {
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	if *showKey {
+		fmt.Printf("Decryption Key: %x\n", key)
+	} else {
+		fmt.Printf("Decryption Key: [REDACTED]\n")
+	}
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
