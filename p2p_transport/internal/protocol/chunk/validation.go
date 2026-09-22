@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -26,6 +27,7 @@ var (
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
 	ErrInvalidManifestPayload = errors.New("invalid manifest payload")
+	ErrUnauthenticatedManifest = errors.New("manifest missing or invalid cryptographic signature")
 )
 
 type ContentInfo struct {
@@ -225,13 +227,22 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, manifestBytes, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	m, err := manifest.Deserialize(manifestBytes)
+	if err != nil {
+		return fmt.Errorf("manifest: %w", ErrInvalidManifestPayload)
+	}
+
+	if err := m.VerifySignature(); err != nil {
+		return fmt.Errorf("manifest signature: %w", ErrUnauthenticatedManifest)
 	}
 
 	return nil

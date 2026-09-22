@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
 	"cipher/internal/discovery"
@@ -44,6 +46,7 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	publisherIdentityPath := flag.String("publisher-identity", "", "Path to publisher identity key file to generate attestations for hosted manifests (optional)")
 
 	flag.Parse()
 
@@ -138,6 +141,49 @@ func main() {
 	discovery.StartRepublisher(ctx, kdht, store, interval)
 
 	manifests, _ := store.ListManifests(ctx)
+	for _, id := range manifests {
+		mBytes, err := eng.GetManifestBytes(ctx, id)
+		if err != nil {
+			continue
+		}
+		m, err := manifest.Deserialize(mBytes)
+		if err != nil {
+			continue
+		}
+		pubPeerID, err := m.PublisherPeerID()
+		if err != nil {
+			continue
+		}
+		if h.ID() != pubPeerID && m.Attestation == nil {
+			// Find publisher key to sign attestation for this provider
+			var pubPriv libp2pcrypto.PrivKey
+			if *publisherIdentityPath != "" {
+				pubPriv, _ = identity.LoadOrCreateFromPath(*publisherIdentityPath)
+			} else {
+				for _, name := range []string{"identity.key", "pub.key", "publisher.key"} {
+					pubKeyPath := filepath.Join(*storePath, name)
+					if _, err := os.Stat(pubKeyPath); err == nil {
+						pubPriv, _ = identity.LoadOrCreateFromPath(pubKeyPath)
+						if pubPriv != nil {
+							break
+						}
+					}
+				}
+			}
+			if pubPriv != nil {
+				pubPrivID, _ := peer.IDFromPrivateKey(pubPriv)
+				if pubPrivID == pubPeerID {
+					att, err := discovery.CreateAttestation(pubPriv, id, h.ID())
+					if err == nil {
+						m.Attestation = att
+						updatedBytes, _ := m.Serialize()
+						eng.PutManifestBytes(ctx, id, updatedBytes)
+						log.Printf("[Provider] Attached ownership attestation for content %x", id)
+					}
+				}
+			}
+		}
+	}
 
 	fmt.Println("\n================= CIPHER PROVIDER =================")
 	fmt.Printf("Provider Peer ID: %s\n", h.ID().String())

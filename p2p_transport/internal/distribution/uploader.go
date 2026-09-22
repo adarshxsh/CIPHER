@@ -11,6 +11,8 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
+	"cipher/internal/discovery"
 	"cipher/internal/protocol/push"
 	"cipher/internal/transport"
 )
@@ -164,8 +166,21 @@ func uploadToProvider(
 	}
 	defer client.Close()
 
+	// Attach provider ownership attestation if publisher key is available
+	targetManifestBytes := manifestBytes
+	if pubKey := eng.GetPublisherKey(); pubKey != nil {
+		if m, err := manifest.Deserialize(manifestBytes); err == nil {
+			if att, err := discovery.CreateAttestation(pubKey, contentID, targetPeer); err == nil {
+				m.Attestation = att
+				if serialized, err := m.Serialize(); err == nil {
+					targetManifestBytes = serialized
+				}
+			}
+		}
+	}
+
 	// 1. Send manifest with assigned chunk list
-	if err := client.SendManifest(ctx, contentID, chunks, manifestBytes); err != nil {
+	if err := client.SendManifest(ctx, contentID, chunks, targetManifestBytes); err != nil {
 		log.Printf("[Distribution] Provider %s rejected manifest: %v", targetPeer, err)
 		for _, cid := range chunks {
 			tracker.SetStatus(cid, targetPeer, ReplicaFailed)

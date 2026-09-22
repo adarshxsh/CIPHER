@@ -127,6 +127,7 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+	eng.SetPublisherKey(priv)
 
 	// Apply testing flags
 	if *corruptProb > 0 {
@@ -402,6 +403,7 @@ func main() {
 				log.Fatalf("Reassemble failed: %v", err)
 			}
 			log.Printf("[✓] Reassembled to: %s", *reassembleOut)
+			return
 		}
 	}
 
