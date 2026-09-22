@@ -44,6 +44,8 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	profileFlag := flag.String("profile", string(transport.ProfileBootstrap), "Node resource profile (bootstrap, relay, client, default)")
+	limitConfigPath := flag.String("limits-config", "", "Path to custom resource limits JSON config file")
 
 	flag.Parse()
 
@@ -63,7 +65,16 @@ func main() {
 	}
 
 	// 2. Start libp2p host & DHT
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		*relayAddr,
+		*forceRelay,
+		transport.WithNodeProfile(transport.NodeProfile(*profileFlag)),
+		transport.WithLimitConfigFile(*limitConfigPath),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create provider node: %v", err)
 	}
