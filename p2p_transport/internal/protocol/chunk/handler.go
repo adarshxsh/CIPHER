@@ -33,6 +33,8 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	txCount := 0
+
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
@@ -51,6 +53,14 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 
+		if msg.Type == MsgRequestManifest || msg.Type == MsgRequestChunk {
+			txCount++
+			if txCount > MaxTransactionsPerStream {
+				log.Printf("[Chunk Protocol] Stream transaction limit exceeded (%d > %d) from %s", txCount, MaxTransactionsPerStream, s.Conn().RemotePeer())
+				return
+			}
+		}
+
 		switch msg.Type {
 		case MsgRequestManifest:
 			h.handleRequestManifest(s, msg)
@@ -59,6 +69,11 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+		}
+
+		if txCount >= MaxTransactionsPerStream {
+			log.Printf("[Chunk Protocol] Reached max transactions per stream (%d), closing stream from %s", txCount, s.Conn().RemotePeer())
+			return
 		}
 	}
 }
