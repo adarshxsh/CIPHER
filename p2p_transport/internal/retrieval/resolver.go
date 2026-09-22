@@ -1,14 +1,17 @@
 package retrieval
 
 import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"fmt"
+	"log"
+
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
-	"context"
-	"fmt"
-	"log"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -52,6 +55,18 @@ func ResolveManifest(
 			continue
 		}
 
+		computedHash := sha256.Sum256(manifestData)
+		if subtle.ConstantTimeCompare(id[:], computedHash[:]) != 1 {
+			err := fmt.Errorf("manifest multihash mismatch for target CID %x", id)
+			log.Printf(
+				"[DHT] Provider %s returned spoofed/tampered manifest: %v",
+				provider,
+				err,
+			)
+			lastErr = err
+			continue
+		}
+
 		m, err := manifest.Deserialize(manifestData)
 		if err != nil {
 			log.Printf(
@@ -62,6 +77,8 @@ func ResolveManifest(
 			lastErr = err
 			continue
 		}
+
+		m.Descriptor.ID = id
 
 		log.Printf(
 			"[DHT] Successfully resolved manifest from provider %s",
