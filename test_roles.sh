@@ -25,7 +25,7 @@ ORIGINAL_HASH=$(shasum -a 256 test_input.dat | awk '{print $1}')
 echo "Payload SHA-256: $ORIGINAL_HASH (1 MB)"
 
 echo "[3/5] Starting Publisher to ingest and seed content..."
-./bin/publisher -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat > publisher.log 2>&1 &
+./bin/publisher -show-key -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat > publisher.log 2>&1 &
 PUB_PID=$!
 
 cleanup() {
