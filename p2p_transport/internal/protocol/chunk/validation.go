@@ -26,6 +26,7 @@ var (
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
 	ErrInvalidManifestPayload = errors.New("invalid manifest payload")
+	ErrChunkIntegrityMismatch = errors.New("chunk integrity verification failed: hash mismatch")
 )
 
 type ContentInfo struct {

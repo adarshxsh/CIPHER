@@ -16,8 +16,13 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host        host.Host
+	engine      *engine.ContentEngine
+	corruptProb float64
+}
+
+func (h *StreamHandler) SetCorruptProbability(prob float64) {
+	h.corruptProb = prob
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
@@ -98,7 +103,11 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
+	prob := h.corruptProb
+	if prob == 0 && TestCorruptProb > 0 {
+		prob = TestCorruptProb
+	}
+	if prob > 0 && rand.Float64() < prob && len(chunkData.Data) > 0 {
 		// Corrupt the chunk for testing
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
 		chunkData.Data[0] ^= 0xFF
