@@ -1,5 +1,21 @@
 package chunk
 
+import "time"
+
+var (
+	// DefaultReadDeadline is the maximum sliding window for stream reads.
+	DefaultReadDeadline = 30 * time.Second
+
+	// DefaultWriteDeadline is the maximum deadline for message writes.
+	DefaultWriteDeadline = 10 * time.Second
+
+	// DefaultACKDeadline is the dedicated timeout for chunk ACKs.
+	DefaultACKDeadline = 10 * time.Second
+
+	// DefaultStreamDeadline is the initial timeout for newly opened streams.
+	DefaultStreamDeadline = 30 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1

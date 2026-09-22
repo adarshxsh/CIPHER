@@ -86,5 +86,11 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
 
+	// Enforce initial stream deadline to prevent unauthenticated stream retention
+	if err := s.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("failed to set initial stream deadline: %w", err)
+	}
+
 	return s, nil
 }
