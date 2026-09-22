@@ -2,8 +2,10 @@ package transfer
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"unicode"
 )
 
 const (
@@ -99,5 +101,22 @@ func (h *Header) ReadFrom(r io.Reader) error {
 		return fmt.Errorf("failed to read checksum: %w", err)
 	}
 
+	if err := h.Validate(); err != nil {
+		return fmt.Errorf("invalid header: %w", err)
+	}
+
+	return nil
+}
+
+// Validate checks that the header metadata is valid.
+func (h *Header) Validate() error {
+	if len(h.Filename) == 0 {
+		return errors.New("empty filename in header")
+	}
+	for _, r := range h.Filename {
+		if r == '\x00' || unicode.IsControl(r) {
+			return fmt.Errorf("filename contains invalid character: %q", r)
+		}
+	}
 	return nil
 }
