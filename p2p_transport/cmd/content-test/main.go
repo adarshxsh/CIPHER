@@ -21,6 +21,7 @@ func main() {
 	ingestFile := flag.String("ingest", "", "File to ingest and chunk")
 	reassembleOut := flag.String("out", "", "Output file for reassembled data (requires -manifest)")
 	manifestFile := flag.String("manifest", "test_files/manifest.json", "Manifest JSON file (output for ingest, input for reassemble)")
+	_ = flag.Bool("show-key", false, "Display unmasked decryption key in output")
 	flag.Parse()
 
 	if *ingestFile == "" && *reassembleOut == "" {

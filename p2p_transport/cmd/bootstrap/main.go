@@ -28,6 +28,7 @@ func main() {
 	)
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	_ = flag.Bool("show-key", false, "Display unmasked decryption key in output")
 
 	// parse the cmd line args passed
 	flag.Parse()

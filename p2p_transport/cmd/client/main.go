@@ -49,6 +49,7 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+	_ = flag.Bool("show-key", false, "Display unmasked decryption key in output")
 
 	flag.Parse()
 
