@@ -6,6 +6,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/reputation"
 )
 
 // WorkerResult is the result of a worker attempting a chunk
@@ -17,27 +18,62 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, tracker *reputation.Tracker, results chan<- WorkerResult) {
+	peerIDStr := source.PeerID.String()
+
 	for {
-		task, ok := queue.Next()
-		if !ok {
-			return // Queue empty
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
-		
-		// If this source already returned candidate miss for this task, requeue and yield
-		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
+
+		if tracker != nil && tracker.IsQuarantined(source.PeerID) {
+			if client != nil {
+				client.Close()
+			}
+			return
+		}
+
+		task, ok, shouldExit := queue.PopForPeer(source.PeerID, tracker)
+		if shouldExit {
+			if client != nil && tracker != nil && tracker.IsQuarantined(source.PeerID) {
+				client.Close()
+			}
+			return
+		}
+
+		if !ok {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Millisecond):
+			case <-time.After(5 * time.Millisecond):
 			}
 			continue
 		}
-		
+
+		// Double check quarantine before requesting chunk
+		if tracker != nil && tracker.IsQuarantined(source.PeerID) {
+			if client != nil {
+				client.Close()
+			}
+			queue.Push(task)
+			queue.FinishTask(task)
+			return
+		}
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			queue.FinishTask(task)
+			if tracker != nil && tracker.IsQuarantined(source.PeerID) {
+				if client != nil {
+					client.Close()
+				}
+			}
+			results <- WorkerResult{Task: task, Error: err, PeerID: peerIDStr}
+			if tracker != nil && tracker.IsQuarantined(source.PeerID) {
+				return
+			}
 			continue
 		}
 
@@ -46,10 +82,12 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			queue.FinishTask(task)
+			results <- WorkerResult{Task: task, Error: err, PeerID: peerIDStr}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		queue.FinishTask(task)
+		results <- WorkerResult{Task: task, Error: nil, PeerID: peerIDStr}
 	}
 }
