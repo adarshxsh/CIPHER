@@ -2,6 +2,7 @@ package transport
 
 import (
 	"cipher/internal/discovery"
+	"cipher/internal/protocol"
 	"context"
 
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -28,9 +30,32 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	scaledLimits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&scaledLimits)
+
+	scaledLimits.AddProtocolLimit(protocol.ChunkTransportProtocolID, rcmgr.BaseLimit{
+		StreamsInbound:  1024,
+		StreamsOutbound: 1024,
+		Streams:         2048,
+		Memory:          64 << 20,
+	}, rcmgr.BaseLimitIncrease{})
+
+	scaledLimits.AddProtocolLimit(protocol.FileTransferProtocolID, rcmgr.BaseLimit{
+		StreamsInbound:  1024,
+		StreamsOutbound: 1024,
+		Streams:         2048,
+		Memory:          64 << 20,
+	}, rcmgr.BaseLimitIncrease{})
+
+	rm, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(scaledLimits.AutoScale()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
