@@ -23,8 +23,8 @@ func Receive(s network.Stream) error {
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
-	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	header, err := ReadHeader(s)
+	if err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 

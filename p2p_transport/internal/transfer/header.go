@@ -2,13 +2,19 @@ package transfer
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
 
 const (
-	ProtocolVersion1 byte = 1
-	MsgTypeFileTransfer byte = 1
+	ProtocolVersion1      byte = 1
+	MsgTypeFileTransfer   byte = 1
+	MaxHeaderStringLength      = 1024
+)
+
+var (
+	ErrHeaderStringTooLong = errors.New("header string length exceeds maximum limit")
 )
 
 // Header represents the binary metadata sent before the file contents.
@@ -29,6 +35,11 @@ type Header struct {
 
 // WriteTo encodes and writes the header to the given writer.
 func (h *Header) WriteTo(w io.Writer) error {
+	filenameBytes := []byte(h.Filename)
+	if len(filenameBytes) > MaxHeaderStringLength {
+		return fmt.Errorf("%w: length %d exceeds maximum limit of %d", ErrHeaderStringTooLong, len(filenameBytes), MaxHeaderStringLength)
+	}
+
 	// 1. Write Protocol Version
 	if err := binary.Write(w, binary.BigEndian, h.Version); err != nil {
 		return fmt.Errorf("failed to write version: %w", err)
@@ -40,7 +51,6 @@ func (h *Header) WriteTo(w io.Writer) error {
 	}
 
 	// 3. Write Filename Length
-	filenameBytes := []byte(h.Filename)
 	filenameLen := uint16(len(filenameBytes))
 	if err := binary.Write(w, binary.BigEndian, filenameLen); err != nil {
 		return fmt.Errorf("failed to write filename length: %w", err)
@@ -64,6 +74,15 @@ func (h *Header) WriteTo(w io.Writer) error {
 	return nil
 }
 
+// ReadHeader decodes and reads a Header from the given reader.
+func ReadHeader(r io.Reader) (*Header, error) {
+	var h Header
+	if err := h.ReadFrom(r); err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
 // ReadFrom decodes and reads the header from the given reader.
 func (h *Header) ReadFrom(r io.Reader) error {
 	// 1. Read Protocol Version
@@ -80,6 +99,10 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	var filenameLen uint16
 	if err := binary.Read(r, binary.BigEndian, &filenameLen); err != nil {
 		return fmt.Errorf("failed to read filename length: %w", err)
+	}
+
+	if filenameLen > MaxHeaderStringLength {
+		return fmt.Errorf("%w: length %d exceeds maximum limit of %d", ErrHeaderStringTooLong, filenameLen, MaxHeaderStringLength)
 	}
 
 	// 4. Read Filename
