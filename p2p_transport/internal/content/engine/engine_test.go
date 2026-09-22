@@ -71,3 +71,51 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+type failingWriter struct {
+	failAfterBytes int
+	written        int
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.written+len(p) > w.failAfterBytes {
+		return 0, os.ErrPermission
+	}
+	w.written += len(p)
+	return len(p), nil
+}
+
+func TestContentEngine_Reassemble_WriteError(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-writer-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 10 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	data := make([]byte, 50*1024)
+	rand.Read(data)
+
+	ctx := context.Background()
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	fw := &failingWriter{failAfterBytes: 15 * 1024}
+	err = eng.Reassemble(ctx, m, fw)
+	if err == nil {
+		t.Fatal("expected write error during reassembly, got nil")
+	}
+}
+
