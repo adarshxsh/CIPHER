@@ -40,7 +40,7 @@ echo "Bootstrap Multiaddr: $BOOT_ADDR"
 
 echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 # Seed is set to false so the publisher explicitly terminates after ingestion
-./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
+./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat -show-key > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
 KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')

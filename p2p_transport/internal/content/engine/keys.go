@@ -6,7 +6,13 @@ import (
 	"sync"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/storage"
 )
+
+// NewFSKeyProvider creates a file-backed key provider storing keys under <baseDir>/keys.
+func NewFSKeyProvider(baseDir string) core.KeyProvider {
+	return storage.NewFSKeyProvider(baseDir)
+}
 
 // LocalKeyProvider is an in-memory implementation of core.KeyProvider.
 type LocalKeyProvider struct {
