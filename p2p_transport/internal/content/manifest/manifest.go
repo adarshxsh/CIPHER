@@ -1,8 +1,12 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+	"io"
+
 	"cipher/internal/content/core"
 )
 
@@ -10,6 +14,18 @@ type ContentType string
 
 const (
 	TypeFile ContentType = "file"
+
+	// MaxManifestSize limits manifest JSON byte size before deserialization (512 KiB).
+	MaxManifestSize = 512 * 1024
+
+	// MaxSupportedChunkCount caps the maximum allowed slice length for chunk IDs.
+	MaxSupportedChunkCount uint64 = 1 << 32
+)
+
+var (
+	ErrEmptyManifest     = errors.New("manifest data is empty")
+	ErrManifestTooLarge  = errors.New("manifest data exceeds maximum allowed size")
+	ErrInvalidChunkCount = errors.New("manifest chunk count exceeds maximum allowed count")
 )
 
 type ContentDescriptor struct {
@@ -47,9 +63,24 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if len(data) == 0 {
+		return nil, ErrEmptyManifest
+	}
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("%w: %d > %d", ErrManifestTooLarge, len(data), MaxManifestSize)
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(data), MaxManifestSize))
+	decoder.DisallowUnknownFields()
+
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := decoder.Decode(&m); err != nil {
 		return nil, err
 	}
+
+	if uint64(len(m.ChunkIDs)) > MaxSupportedChunkCount {
+		return nil, fmt.Errorf("%w: %d > %d", ErrInvalidChunkCount, len(m.ChunkIDs), MaxSupportedChunkCount)
+	}
+
 	return &m, nil
 }
