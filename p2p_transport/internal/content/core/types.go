@@ -36,9 +36,14 @@ type Digest interface {
 	Algorithm() string
 }
 
+type BufferPool interface {
+	Get() []byte
+	Put(buf []byte)
+}
+
 type Encryptor interface {
-	EncryptChunk(key []byte, chunk *Chunk) error
-	DecryptChunk(key []byte, chunk *Chunk) error
+	EncryptChunk(key []byte, chunk *Chunk, dst []byte) error
+	DecryptChunk(key []byte, chunk *Chunk, dst []byte) error
 }
 
 type KeyProvider interface {
