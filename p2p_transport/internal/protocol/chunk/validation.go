@@ -59,6 +59,15 @@ func ValidateMessagePayload(messageType MessageType, payload []byte) error {
 	}
 
 	if len(payload) > maxPayloadSize {
+		if messageType == MsgManifest {
+			return fmt.Errorf(
+				"manifest: %w: type=%d received=%d maximum=%d",
+				ErrInvalidManifestPayload,
+				messageType,
+				len(payload),
+				maxPayloadSize,
+			)
+		}
 		return fmt.Errorf(
 			"message: %w: type=%d received=%d maximum=%d",
 			ErrInvalidPayloadLength,
@@ -105,6 +114,14 @@ func ValidateManifestPayload(payload []byte) error {
 			ErrInvalidManifestPayload,
 			len(payload),
 			ContentIDSize,
+		)
+	}
+	if len(payload) > MaxManifestSize {
+		return fmt.Errorf(
+			"manifest: %w: received=%d maximum=%d",
+			ErrInvalidManifestPayload,
+			len(payload),
+			MaxManifestSize,
 		)
 	}
 	return nil
