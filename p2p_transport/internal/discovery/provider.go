@@ -87,7 +87,16 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 	var providers []peer.AddrInfo
 
 	for p := range providerCh {
-		providers = append(providers, p)
+		if p.ID == "" {
+			continue
+		}
+
+		pCleaned := FilterAddrInfo(p, DefaultFilterOptions)
+		if len(pCleaned.Addrs) == 0 {
+			continue
+		}
+
+		providers = append(providers, pCleaned)
 
 		if len(providers) >= PROVIDER_LIMIT {
 			break
