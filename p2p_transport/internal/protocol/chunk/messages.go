@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"unicode"
+	"unicode/utf8"
 
 	"cipher/internal/content/core"
 )
@@ -196,8 +199,46 @@ func ParseAck(payload []byte) (core.ChunkID, uint8, error) {
 	return id, payload[32], nil
 }
 
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// SanitizeErrorMessage filters control and non-printable characters from error messages,
+// converts newlines and tabs to spaces, strips ANSI escape sequences, and limits length.
+func SanitizeErrorMessage(msg string) string {
+	if len(msg) == 0 {
+		return ""
+	}
+
+	// 1. Strip ANSI escape sequences
+	cleaned := ansiRegexp.ReplaceAllString(msg, "")
+
+	// 2. Filter control characters & non-printable runes
+	var buf bytes.Buffer
+	for _, r := range cleaned {
+		if r == '\n' || r == '\r' || r == '\t' {
+			buf.WriteRune(' ')
+		} else if r == utf8.RuneError {
+			continue
+		} else if unicode.IsPrint(r) && !unicode.IsControl(r) {
+			buf.WriteRune(r)
+		}
+	}
+
+	res := buf.String()
+
+	// 3. Cap length at MaxErrorMessageSize
+	if len(res) > MaxErrorMessageSize {
+		res = res[:MaxErrorMessageSize]
+		for !utf8.ValidString(res) && len(res) > 0 {
+			res = res[:len(res)-1]
+		}
+	}
+
+	return res
+}
+
 func BuildError(code ErrorCode, msg string) *Message {
-	payload := append([]byte{byte(code)}, []byte(msg)...)
+	sanitizedMsg := SanitizeErrorMessage(msg)
+	payload := append([]byte{byte(code)}, []byte(sanitizedMsg)...)
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgError,
@@ -209,5 +250,5 @@ func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	return ErrorCode(payload[0]), SanitizeErrorMessage(string(payload[1:])), nil
 }
