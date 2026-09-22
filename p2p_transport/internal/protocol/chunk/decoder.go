@@ -42,76 +42,14 @@ type Frame struct {
 // message type and declared payload size, and only then allocates memory for
 // the payload.
 func DecodeFrame(r io.Reader) (*Frame, error) {
-	if r == nil {
-		return nil, errors.New("chunk decoder: nil reader")
+	version, messageType, payloadSize, err := DecodeFrameHeader(r)
+	if err != nil {
+		return nil, err
 	}
 
-	header := make([]byte, frameHeaderSize)
-
-	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, fmt.Errorf("%w: failed to read frame header: %v", ErrTruncatedFrame, err)
-	}
-
-	frameSize := binary.LittleEndian.Uint32(header[:frameLengthSize])
-	if frameSize < messageHeaderSize {
-		return nil, fmt.Errorf(
-			"%w: frame size %d is smaller than message header",
-			ErrInvalidPayloadSize,
-			frameSize,
-		)
-	}
-
-	version := binary.LittleEndian.Uint16(header[frameLengthSize : frameLengthSize+2])
-	if version != CurrentMessageVersion {
-		return nil, fmt.Errorf(
-			"%w: received=%d supported=%d",
-			ErrInvalidProtocolVersion,
-			version,
-			CurrentMessageVersion,
-		)
-	}
-
-	messageType := MessageType(header[frameLengthSize+2])
-
-	maxPayloadSize := MaxPayloadSizeForMessage(messageType)
-	if maxPayloadSize <= 0 {
-		return nil, fmt.Errorf(
-			"%w: %d",
-			ErrUnknownMessageType,
-			messageType,
-		)
-	}
-
-	declaredSize := frameSize - messageHeaderSize
-
-	if declaredSize == 0 {
-		return nil, fmt.Errorf(
-			"%w: message type %d declared an empty payload",
-			ErrInvalidPayloadSize,
-			messageType,
-		)
-	}
-
-	if uint64(declaredSize) > uint64(maxPayloadSize) {
-		return nil, fmt.Errorf(
-			"%w: message type=%d declared=%d maximum=%d",
-			ErrPayloadTooLarge,
-			messageType,
-			declaredSize,
-			maxPayloadSize,
-		)
-	}
-
-	// Allocation happens only after all size checks pass.
-	payload := make([]byte, int(declaredSize))
-
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, fmt.Errorf(
-			"%w: expected=%d bytes: %v",
-			ErrTruncatedFrame,
-			declaredSize,
-			err,
-		)
+	payload, err := ReadFramePayload(r, messageType, payloadSize)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Frame{
@@ -158,9 +96,13 @@ func DecodeFrameHeader(r io.Reader) (
 		return
 	}
 
-	header := make([]byte, frameHeaderSize)
+	var header [frameHeaderSize]byte
 
-	if _, readErr := io.ReadFull(r, header); readErr != nil {
+	if _, readErr := io.ReadFull(r, header[:]); readErr != nil {
+		if errors.Is(readErr, io.EOF) {
+			err = io.EOF
+			return
+		}
 		err = fmt.Errorf(
 			"%w: failed to read frame header: %v",
 			ErrTruncatedFrame,
