@@ -9,7 +9,7 @@ echo "         CIPHER Role-Based Architecture Test             "
 echo "=========================================================="
 
 rm -rf store_publisher store_provider store_client test_input.dat test_output.dat test_output_dht.dat
-rm -f publisher.log provider.log client.log bootstrap.log
+rm -f publisher.log provider.log client.log bootstrap.log publisher.key
 
 export CGO_ENABLED=0
 
@@ -25,7 +25,7 @@ ORIGINAL_HASH=$(shasum -a 256 test_input.dat | awk '{print $1}')
 echo "Payload SHA-256: $ORIGINAL_HASH (1 MB)"
 
 echo "[3/5] Starting Publisher to ingest and seed content..."
-./bin/publisher -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat > publisher.log 2>&1 &
+./bin/publisher --key-out publisher.key -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat > publisher.log 2>&1 &
 PUB_PID=$!
 
 cleanup() {
@@ -36,7 +36,7 @@ trap cleanup EXIT
 sleep 2
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY=$(cat publisher.key | tr -d '\r\n')
 PUB_ADDR=$(grep "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
 
 if [ -z "$CONTENT_ID" ] || [ -z "$KEY" ] || [ -z "$PUB_ADDR" ]; then
