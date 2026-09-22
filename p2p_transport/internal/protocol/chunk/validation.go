@@ -99,12 +99,13 @@ func ValidateRequestManifestPayload(payload []byte) error {
 }
 
 func ValidateManifestPayload(payload []byte) error {
-	if len(payload) < ContentIDSize {
+	minHeaderLen := 32 + 8 + 2 + 2 // 44 bytes
+	if len(payload) < minHeaderLen {
 		return fmt.Errorf(
 			"manifest: %w: received=%d minimum=%d",
 			ErrInvalidManifestPayload,
 			len(payload),
-			ContentIDSize,
+			minHeaderLen,
 		)
 	}
 	return nil
@@ -225,12 +226,12 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	manifestResp, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
-	if received != requested {
+	if manifestResp.ContentID != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
 	}
 
