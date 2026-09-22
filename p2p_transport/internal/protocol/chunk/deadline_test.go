@@ -87,7 +87,9 @@ func TestStream_ReadDeadline_TimesOutOnInactivePeer(t *testing.T) {
 }
 
 func TestStream_WriteDeadline_TimesOutOnExpiredDeadline(t *testing.T) {
-	h1, h2 := setupMockNetwork(t)
+	h1, h2 := setupRealTCPNetwork(t)
+	defer h1.Close()
+	defer h2.Close()
 
 	h1.SetStreamHandler(protocol.ChunkTransportProtocolID, func(s network.Stream) {
 		defer s.Close()
