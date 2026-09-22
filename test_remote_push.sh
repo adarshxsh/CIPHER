@@ -9,7 +9,7 @@ echo "      CIPHER Phase 4: Remote Ingestion & Multi-Provider Replication   "
 echo "======================================================================"
 
 rm -rf store_p1 store_p2 store_p3 store_pub store_client1 store_client2
-rm -f test_orig.dat test_recovered.dat test_recovered_fault.dat
+rm -f test_orig.dat test_recovered.dat test_recovered_fault.dat push.key
 rm -f bootstrap.log provider1.log provider2.log provider3.log publisher.log client1.log client2.log
 
 export CGO_ENABLED=0
@@ -62,10 +62,10 @@ echo "Provider 3: $P3_ADDR"
 echo "\n[Step 5/6] Publisher pushes 2 MB file across Providers with Replication R=2..."
 ./bin/publisher -p 48040 -ws-port 0 -file test_orig.dat -store ./store_pub \
     -push -providers "$P1_ADDR,$P2_ADDR,$P3_ADDR" -replication 2 \
-    -bootstrap "$BOOT_ADDR" -seed=false > publisher.log 2>&1
+    -bootstrap "$BOOT_ADDR" -seed=false -key-out push.key > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY="push.key"
 
 echo "Publisher Push Completed Successfully:"
 echo "  - ContentID:      $CONTENT_ID"
