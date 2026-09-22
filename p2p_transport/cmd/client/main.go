@@ -49,6 +49,8 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+	keyOut := flag.String("key-out", "", "Path to export the 32-byte raw decryption key file")
+	showKey := flag.Bool("show-key", false, "Display raw hex decryption key on stdout")
 
 	flag.Parse()
 
@@ -151,7 +153,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -211,6 +213,18 @@ func main() {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
 		keys.Put(ctx, contentID, kBytes)
+		if *keyOut != "" {
+			if err := os.WriteFile(*keyOut, kBytes, 0600); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+			if err := os.Chmod(*keyOut, 0600); err != nil {
+				log.Fatalf("Failed to set permissions on key file %s: %v", *keyOut, err)
+			}
+		}
+		if *showKey {
+			fmt.Fprintln(os.Stderr, "SECURITY WARNING: --show-key flag enabled. Raw decryption key material printed to stdout!")
+			fmt.Printf("Decryption Key: %x\n", kBytes)
+		}
 	}
 
 	// 6. Data Plane: Resolve Manifest
