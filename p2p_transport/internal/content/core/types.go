@@ -1,6 +1,55 @@
 package core
 
-import "context"
+import (
+	"context"
+	"runtime"
+)
+
+// Zeroize overwrites the provided byte slice with zero bytes to clear key material from memory.
+func Zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+
+// KeyWrapper provides a zeroizing wrapper for sensitive key byte slices.
+type KeyWrapper struct {
+	key []byte
+}
+
+func NewKeyWrapper(key []byte) *KeyWrapper {
+	return &KeyWrapper{key: key}
+}
+
+func (w *KeyWrapper) Bytes() []byte {
+	if w == nil {
+		return nil
+	}
+	return w.key
+}
+
+func (w *KeyWrapper) Release() {
+	if w != nil && w.key != nil {
+		Zeroize(w.key)
+		w.key = nil
+	}
+}
+
+func (w *KeyWrapper) Delete() {
+	w.Release()
+}
+
+func (w *KeyWrapper) Zeroize() {
+	w.Release()
+}
+
+// KeyHandle is an alias to KeyWrapper for convenience.
+type KeyHandle = KeyWrapper
+
+func NewKeyHandle(key []byte) *KeyHandle {
+	return NewKeyWrapper(key)
+}
 
 type ChunkID [32]byte
 type ContentID [32]byte
