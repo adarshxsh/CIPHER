@@ -227,7 +227,7 @@ func main() {
 	} else {
 		// Traditional direct publisher DHT announcement
 		log.Printf("[DHT] Announcing ContentID %x on DHT...", m.Descriptor.ID)
-		if err := discovery.Provide(ctx, kdht, m.Descriptor.ID); err != nil {
+		if err := discovery.Provide(ctx, kdht, h, priv, m.Descriptor.ID); err != nil {
 			log.Printf("[DHT] Warning: Could not advertise on DHT: %v (ensure bootstrap node is active)", err)
 		} else {
 			log.Printf("[DHT] Successfully announced ContentID on DHT")
