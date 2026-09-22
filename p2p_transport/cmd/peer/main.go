@@ -60,6 +60,7 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	showKey := flag.Bool("show-key", false, "Display full unmasked decryption key")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,7 +250,7 @@ func main() {
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: %s", engine.FormatMaskedKey(key, *showKey))
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +264,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, engine.FormatMaskedKey(key, *showKey))
 		log.Printf("-----------------------------------------------------------\n")
 	}
 

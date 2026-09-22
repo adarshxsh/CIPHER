@@ -2,11 +2,26 @@ package engine
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"sync"
 
 	"cipher/internal/content/core"
 )
+
+// FormatMaskedKey formats a key byte slice as a string. If showKey is false,
+// it returns a masked string showing only the first 4 and last 4 hex characters
+// (e.g., "a1b2...c3d4"). If showKey is true, it returns the full hexadecimal string.
+func FormatMaskedKey(key []byte, showKey bool) string {
+	hexStr := hex.EncodeToString(key)
+	if showKey {
+		return hexStr
+	}
+	if len(hexStr) <= 8 {
+		return hexStr
+	}
+	return hexStr[:4] + "..." + hexStr[len(hexStr)-4:]
+}
 
 // LocalKeyProvider is an in-memory implementation of core.KeyProvider.
 type LocalKeyProvider struct {
