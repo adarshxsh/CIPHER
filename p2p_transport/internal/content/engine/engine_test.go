@@ -71,3 +71,55 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_ContentIDDerivationAndTamperDetection(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-digest-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	ctx := context.Background()
+	originalData := []byte("hello content engine SHA256 test")
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	expectedID := dig.Sum(mBytes)
+	if m.Descriptor.ID != core.ContentID(expectedID) {
+		t.Fatalf("ContentID mismatch: got %x, expected %x", m.Descriptor.ID, expectedID)
+	}
+
+	// Tamper test: modify serialized manifest bytes
+	tamperedBytes := append([]byte(nil), mBytes...)
+	tamperedBytes[len(tamperedBytes)-1] ^= 0xFF
+
+	tamperedID := dig.Sum(tamperedBytes)
+	if tamperedID == expectedID {
+		t.Fatalf("expected tampered bytes digest to differ from original digest")
+	}
+
+	mTampered, err := manifest.Deserialize(tamperedBytes)
+	if err == nil && mTampered.Descriptor.ID == m.Descriptor.ID {
+		t.Fatalf("expected tampered manifest deserialization ID to not match original ContentID")
+	}
+}
