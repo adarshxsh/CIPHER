@@ -109,13 +109,14 @@ func main() {
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
+	var handlerOpts []chunk.HandlerOption
 	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
+		handlerOpts = append(handlerOpts, chunk.WithCorruptProbability(*corruptProb))
 		log.Printf("[TESTING] Corrupt probability set to %.2f", *corruptProb)
 	}
 
 	// 5. Register Data-Plane Stream Handler (/cipher/chunk/1.0.0)
-	chunk.NewStreamHandler(h, eng)
+	chunk.NewStreamHandler(h, eng, handlerOpts...)
 
 	// 6. Register Ingestion Stream Handler (/cipher/push/1.0.0)
 	var allowedPublishersList []peer.ID

@@ -1,29 +1,80 @@
 package chunk
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
+	"math"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+// FaultHook is an optional function that can transform/corrupt a chunk payload for testing.
+type FaultHook func(chunk *core.Chunk) *core.Chunk
+
+// HandlerOption configures a StreamHandler instance.
+type HandlerOption func(*StreamHandler)
+
+// WithCorruptProbability sets the probability (0.0 to 1.0) of corrupting chunk responses for testing.
+func WithCorruptProbability(prob float64) HandlerOption {
+	return func(h *StreamHandler) {
+		h.SetCorruptProbability(prob)
+	}
+}
+
+// WithFaultHook sets a custom fault injection hook for testing.
+func WithFaultHook(hook FaultHook) HandlerOption {
+	return func(h *StreamHandler) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.faultHook = hook
+	}
+}
 
 type StreamHandler struct {
 	host   host.Host
 	engine *engine.ContentEngine
+
+	corruptProbBits uint64
+
+	mu        sync.RWMutex
+	faultHook FaultHook
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+// SetCorruptProbability sets the corruption probability in a thread-safe manner.
+func (h *StreamHandler) SetCorruptProbability(prob float64) {
+	if prob < 0 {
+		prob = 0
+	} else if prob > 1 {
+		prob = 1
+	}
+	atomic.StoreUint64(&h.corruptProbBits, math.Float64bits(prob))
+}
+
+// CorruptProbability returns the current corruption probability in a thread-safe manner.
+func (h *StreamHandler) CorruptProbability() float64 {
+	bits := atomic.LoadUint64(&h.corruptProbBits)
+	return math.Float64frombits(bits)
+}
+
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...HandlerOption) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,13 +149,28 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	sendChunk := chunkData
+
+	prob := h.CorruptProbability()
+
+	h.mu.RLock()
+	hook := h.faultHook
+	h.mu.RUnlock()
+
+	if hook != nil {
+		sendChunk = hook(chunkData)
+	} else if prob > 0 && rand.Float64() < prob && len(chunkData.Data) > 0 {
+		// Corrupt the chunk for testing while cloning the byte buffer to prevent process memory corruption
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+		clonedData := bytes.Clone(chunkData.Data)
+		clonedData[0] ^= 0xFF
+		sendChunk = &core.Chunk{
+			Header: chunkData.Header,
+			Data:   clonedData,
+		}
 	}
 
-	resp, err := BuildChunk(chunkData)
+	resp, err := BuildChunk(sendChunk)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrInternal, "failed to build chunk message"))
 		return
