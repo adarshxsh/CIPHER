@@ -85,8 +85,8 @@ func main() {
 			log.Fatalf("Failed to read manifest: %v", err)
 		}
 
-		var m manifest.Manifest
-		if err := json.Unmarshal(manifestData, &m); err != nil {
+		m, err := manifest.Deserialize(manifestData)
+		if err != nil {
 			log.Fatalf("Failed to parse manifest: %v", err)
 		}
 
@@ -105,7 +105,7 @@ func main() {
 		}
 		defer out.Close()
 
-		if err := eng.Reassemble(ctx, &m, out); err != nil {
+		if err := eng.Reassemble(ctx, m, out); err != nil {
 			log.Fatalf("Failed to reassemble: %v", err)
 		}
 
