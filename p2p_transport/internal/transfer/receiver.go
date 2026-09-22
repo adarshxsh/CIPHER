@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -15,6 +16,54 @@ import (
 )
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+
+// SanitizeAndValidatePath sanitizes the wire header filename and validates that the resolved output path
+// stays strictly within the canonical path of the designated downloads directory.
+func SanitizeAndValidatePath(downloadsDir, rawFilename string) (string, error) {
+	// 1. Convert backslashes to forward slashes for cross-platform consistency
+	normalized := strings.ReplaceAll(rawFilename, "\\", "/")
+
+	// 2. Extract single base filename component
+	cleaned := filepath.Clean(normalized)
+	base := filepath.Base(cleaned)
+
+	// 3. Assign safe fallback filename if sanitization yields an empty, dot, or separator string
+	if base == "" || base == "." || base == ".." || base == "/" || base == "\\" || base == string(filepath.Separator) || strings.TrimSpace(base) == "" {
+		base = "downloaded_file"
+	}
+
+	// 4. Resolve absolute path of downloads directory
+	absDownloads, err := filepath.Abs(downloadsDir)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get absolute path for downloads directory %s: %v", downloadsDir, err)
+		return "", fmt.Errorf("failed to resolve downloads directory: %w", err)
+	}
+	absDownloads = filepath.Clean(absDownloads)
+
+	// 5. Construct target path and resolve absolute target path
+	targetPath := filepath.Join(downloadsDir, base)
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed to resolve target output path %s: %v", targetPath, err)
+		return "", fmt.Errorf("failed to resolve target path: %w", err)
+	}
+	absTarget = filepath.Clean(absTarget)
+
+	// 6. Confirm directory containment using filepath.Rel
+	rel, err := filepath.Rel(absDownloads, absTarget)
+	if err != nil {
+		log.Printf("[ERROR] Path containment check failed for %s against downloads directory %s: %v", absTarget, absDownloads, err)
+		return "", fmt.Errorf("path containment check failed: %w", err)
+	}
+
+	relClean := filepath.Clean(rel)
+	if relClean == "." || relClean == ".." || strings.HasPrefix(relClean, ".."+string(filepath.Separator)) || strings.HasPrefix(relClean, "../") || strings.HasPrefix(relClean, "..\\") || filepath.IsAbs(relClean) {
+		log.Printf("[ERROR] Path containment violation: filename %q resolved outside downloads directory (%s)", rawFilename, absTarget)
+		return "", fmt.Errorf("path containment violation: output file %q is outside downloads directory", absTarget)
+	}
+
+	return targetPath, nil
+}
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
@@ -38,7 +87,12 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	outPath, err := SanitizeAndValidatePath(downloadsDir, header.Filename)
+	if err != nil {
+		log.Printf("[ERROR] Failed to validate output path for filename %q: %v", header.Filename, err)
+		return fmt.Errorf("failed to validate output path: %w", err)
+	}
+
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
