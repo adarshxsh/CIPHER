@@ -105,3 +105,77 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_SanitizationAndTruncation(t *testing.T) {
+	t.Run("valid message remains unchanged", func(t *testing.T) {
+		msgBytes := []byte("chunk not found")
+		payload := append([]byte{byte(chunk.ErrChunkNotFound)}, msgBytes...)
+		code, msg, err := chunk.ParseError(payload)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if code != chunk.ErrChunkNotFound {
+			t.Errorf("expected code %v, got %v", chunk.ErrChunkNotFound, code)
+		}
+		if msg != "chunk not found" {
+			t.Errorf("expected 'chunk not found', got '%s'", msg)
+		}
+	})
+
+	t.Run("truncates payload exceeding 256 bytes", func(t *testing.T) {
+		largeMsg := make([]byte, 500)
+		for i := range largeMsg {
+			largeMsg[i] = 'A'
+		}
+		payload := append([]byte{byte(chunk.ErrInternal)}, largeMsg...)
+		code, msg, err := chunk.ParseError(payload)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if code != chunk.ErrInternal {
+			t.Errorf("expected code %v, got %v", chunk.ErrInternal, code)
+		}
+		if len(msg) > 256 {
+			t.Errorf("expected msg length <= 256, got %d", len(msg))
+		}
+		if len(msg) != 256 {
+			t.Errorf("expected msg length 256, got %d", len(msg))
+		}
+	})
+
+	t.Run("escapes control characters and ANSI sequences", func(t *testing.T) {
+		input := "line1\nline2\rline3\ttab\x1b[31mRed\x1b[0m\x00null\xffend"
+		payload := append([]byte{byte(chunk.ErrBadRequest)}, []byte(input)...)
+		_, msg, err := chunk.ParseError(payload)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if bytes.Contains([]byte(msg), []byte{'\n'}) {
+			t.Errorf("sanitized msg contains unescaped newline: %q", msg)
+		}
+		if bytes.Contains([]byte(msg), []byte{'\r'}) {
+			t.Errorf("sanitized msg contains unescaped carriage return: %q", msg)
+		}
+		if bytes.Contains([]byte(msg), []byte{0x1b}) {
+			t.Errorf("sanitized msg contains unescaped ESC byte: %q", msg)
+		}
+		if bytes.Contains([]byte(msg), []byte{0x00}) {
+			t.Errorf("sanitized msg contains unescaped NUL byte: %q", msg)
+		}
+
+		expectedSubstrings := []string{`line1\nline2\rline3\ttab`, `\x1b[31mRed\x1b[0m`, `\x00null`, `\xffend`}
+		for _, sub := range expectedSubstrings {
+			if !bytes.Contains([]byte(msg), []byte(sub)) {
+				t.Errorf("expected sanitized msg to contain %q, got %q", sub, msg)
+			}
+		}
+	})
+
+	t.Run("rejects empty error payload", func(t *testing.T) {
+		_, _, err := chunk.ParseError([]byte{})
+		if err == nil {
+			t.Error("expected error for empty payload, got nil")
+		}
+	})
+}
