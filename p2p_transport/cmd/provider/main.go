@@ -45,7 +45,17 @@ func main() {
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
 
+	republishRate := flag.Float64("republish-rate", 5.0, "Rate limit for DHT republish/provide announcements (ops/sec)")
+	republishWorkers := flag.Int("republish-workers", 4, "Number of worker goroutines for DHT republishing")
+	lookupRate := flag.Float64("lookup-rate", 10.0, "Rate limit for DHT provider lookup queries (ops/sec)")
+
 	flag.Parse()
+
+	discovery.Configure(discovery.Config{
+		RepublishRate:    *republishRate,
+		RepublishWorkers: *republishWorkers,
+		LookupRate:       *lookupRate,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

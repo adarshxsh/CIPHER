@@ -60,7 +60,18 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+
+	republishRate := flag.Float64("republish-rate", 5.0, "Rate limit for DHT republish/provide announcements (ops/sec)")
+	republishWorkers := flag.Int("republish-workers", 4, "Number of worker goroutines for DHT republishing")
+	lookupRate := flag.Float64("lookup-rate", 10.0, "Rate limit for DHT provider lookup queries (ops/sec)")
+
 	flag.Parse()
+
+	discovery.Configure(discovery.Config{
+		RepublishRate:    *republishRate,
+		RepublishWorkers: *republishWorkers,
+		LookupRate:       *lookupRate,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
