@@ -8,8 +8,8 @@ import (
 	"cipher/internal/content/core"
 )
 
-func TestChaCha20Encryptor(t *testing.T) {
-	enc := NewChaCha20Encryptor()
+func TestXChaCha20Encryptor(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
 
 	key := make([]byte, 32)
 	rand.Read(key)
@@ -49,8 +49,8 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 }
 
-func TestChaCha20Encryptor_Corruption(t *testing.T) {
-	enc := NewChaCha20Encryptor()
+func TestXChaCha20Encryptor_Corruption(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
 	key := make([]byte, 32)
 	rand.Read(key)
 
@@ -69,5 +69,31 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 	err := enc.DecryptChunk(key, chunk)
 	if err == nil {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
+	}
+}
+
+func TestXChaCha20Encryptor_RandomNonces(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{Index: 0, PlainSize: 5},
+		Data:   []byte("hello"),
+	}
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{Index: 0, PlainSize: 5},
+		Data:   []byte("hello"),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk1: %v", err)
+	}
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk2: %v", err)
+	}
+
+	if bytes.Equal(chunk1.Header.Nonce[:], chunk2.Header.Nonce[:]) {
+		t.Errorf("expected distinct random nonces, but got identical nonces: %x", chunk1.Header.Nonce)
 	}
 }
