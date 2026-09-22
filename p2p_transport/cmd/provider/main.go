@@ -135,7 +135,7 @@ func main() {
 	}
 
 	interval := time.Duration(*republishHours) * time.Hour
-	discovery.StartRepublisher(ctx, kdht, store, interval)
+	discovery.StartRepublisher(ctx, kdht, store, interval, priv)
 
 	manifests, _ := store.ListManifests(ctx)
 
