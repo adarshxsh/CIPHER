@@ -8,11 +8,30 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
 )
+
+const defaultFilename = "download"
+
+// sanitizeFilename extracts the base filename component and cleans relative path indicators.
+// It falls back to defaultFilename if the result is empty or invalid (e.g. ".", "..", or path separators).
+func sanitizeFilename(name string) string {
+	trimmed := strings.TrimSpace(name)
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	cleaned := filepath.Clean(normalized)
+	base := filepath.Base(cleaned)
+	base = filepath.Clean(base)
+
+	if base == "" || base == "." || base == ".." || base == "/" || base == string(filepath.Separator) || strings.ContainsAny(base, "/\\") {
+		return defaultFilename
+	}
+
+	return base
+}
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
@@ -37,6 +56,8 @@ func Receive(s network.Stream) error {
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
+
+	header.Filename = sanitizeFilename(header.Filename)
 
 	outPath := filepath.Join(downloadsDir, header.Filename)
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
