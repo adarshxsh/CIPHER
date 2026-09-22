@@ -45,6 +45,10 @@ func main() {
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
 
+	minConns := flag.Int("min-conns", 100, "Minimum connection watermark for ConnectionManager")
+	maxConns := flag.Int("max-conns", 400, "Maximum connection watermark for ConnectionManager")
+	memLimitMB := flag.Int("memory-limit-mb", 0, "Memory limit in MB for ResourceManager (0 for autoconfigured caps)")
+
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -63,7 +67,11 @@ func main() {
 	}
 
 	// 2. Start libp2p host & DHT
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay,
+		transport.WithMinConns(*minConns),
+		transport.WithMaxConns(*maxConns),
+		transport.WithMemoryLimitMB(*memLimitMB),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create provider node: %v", err)
 	}
