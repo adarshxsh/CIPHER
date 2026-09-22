@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"cipher/internal/content/engine"
@@ -17,13 +18,32 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult, tracker *PeerReputationTracker) {
 	for {
-		task, ok := queue.Next()
-		if !ok {
-			return // Queue empty
+		if tracker != nil && tracker.IsBlacklisted(source.PeerID) {
+			return
 		}
-		
+
+		if tracker != nil {
+			backoff := tracker.GetBackoff(source.PeerID)
+			if backoff > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+			}
+		}
+
+		if tracker != nil && tracker.IsBlacklisted(source.PeerID) {
+			return
+		}
+
+		task, ok := queue.Next(ctx)
+		if !ok {
+			return // Queue empty, closed, or context canceled
+		}
+
 		// If this source already returned candidate miss for this task, requeue and yield
 		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
 			queue.Push(task)
@@ -34,9 +54,19 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			}
 			continue
 		}
-		
+
+		if source.Available != nil {
+			if _, has := source.Available[task.ChunkID]; !has {
+				// We don't think this source has the chunk.
+				// For now, we still try since discovery isn't fully robust.
+			}
+		}
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
+			if tracker != nil && !errors.Is(err, chunk.ErrRemoteChunkNotFound) {
+				tracker.RecordFailure(source.PeerID)
+			}
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
 			continue
 		}
@@ -46,10 +76,16 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
+			if tracker != nil {
+				tracker.RecordFailure(source.PeerID)
+			}
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
 			continue
 		}
 
+		if tracker != nil {
+			tracker.RecordSuccess(source.PeerID)
+		}
 		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
 	}
 }
