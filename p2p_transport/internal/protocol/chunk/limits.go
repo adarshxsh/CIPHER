@@ -1,5 +1,12 @@
 package chunk
 
+import "time"
+
+var (
+	// StreamTimeout defines the default per-read timeout for stream operations.
+	StreamTimeout = 10 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1

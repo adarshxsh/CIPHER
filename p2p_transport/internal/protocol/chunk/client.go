@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -18,36 +19,67 @@ import (
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	transport *transport.Transport
+	peerID    peer.ID
+	stream    network.Stream
+	engine    *engine.ContentEngine
+	digest    core.Digest
+	closed    bool
+	mu        sync.Mutex
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
 func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
-	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
-	if err != nil {
-		return nil, err
-	}
 	return &Client{
-		stream: stream,
-		engine: eng,
-		digest: verifier.NewSHA256Digest(),
+		transport: t,
+		peerID:    peerID,
+		engine:    eng,
+		digest:    verifier.NewSHA256Digest(),
 	}, nil
 }
 
+func (c *Client) openStream(ctx context.Context) (network.Stream, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client closed")
+	}
+	c.mu.Unlock()
+
+	if c.transport != nil {
+		return c.transport.OpenStream(ctx, c.peerID, protocol.ChunkTransportProtocolID)
+	}
+	if c.stream != nil {
+		return c.stream, nil
+	}
+	return nil, fmt.Errorf("no transport or stream available")
+}
+
 func (c *Client) Close() error {
-	return c.stream.Close()
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
+	if c.stream != nil {
+		return c.stream.Close()
+	}
+	return nil
 }
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	s, err := c.openStream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stream: %w", err)
+	}
+	defer s.Close()
+
 	req := BuildRequestManifest(id)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(s, req); err != nil {
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(s)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -89,12 +121,18 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	s, err := c.openStream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stream: %w", err)
+	}
+	defer s.Close()
+
 	req := BuildRequestChunk(chunkID)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(s, req); err != nil {
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(s)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -120,7 +158,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
+		WriteMessage(s, errMsg)
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
@@ -129,7 +167,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	// Send ACK (optional fire-and-forget)
 	ack := BuildAck(chunkID, 0)
-	if err := WriteMessage(c.stream, ack); err != nil {
+	if err := WriteMessage(s, ack); err != nil {
 		log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
 	}
 
