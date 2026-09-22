@@ -19,19 +19,22 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
-		task, ok := queue.Next()
+		task, ok := queue.Pop(ctx)
 		if !ok {
-			return // Queue empty
+			return // Context done or queue closed
 		}
 		
-		// If this source already returned candidate miss for this task, requeue and yield
+		// If this source already returned candidate miss for this task, defer re-push using backoff delay
 		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Millisecond):
-			}
+			delay := CalculateBackoff(len(task.MissedPeers), 0, 0)
+			go func(t ChunkTask, d time.Duration) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(d):
+					queue.PushCtx(ctx, t)
+				}
+			}(task, delay)
 			continue
 		}
 		
