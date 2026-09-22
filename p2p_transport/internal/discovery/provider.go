@@ -83,10 +83,12 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 	}
 
 	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+	allowPrivate := IsAllowPrivateDHT()
+	sanitizedCh := SanitizeProviderChannel(ctx, providerCh, allowPrivate)
 
 	var providers []peer.AddrInfo
 
-	for p := range providerCh {
+	for p := range sanitizedCh {
 		providers = append(providers, p)
 
 		if len(providers) >= PROVIDER_LIMIT {

@@ -11,6 +11,8 @@ import (
 )
 
 func TestStorageProviderDHTRegistration(t *testing.T) {
+	t.Setenv("CIPHER_ALLOW_PRIVATE_DHT", "1")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
