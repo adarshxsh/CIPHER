@@ -9,7 +9,7 @@ echo "    CIPHER Lifecycle Test: Provider Independence & Persistence       "
 echo "======================================================================"
 
 rm -rf store_provider store_client1 store_client2
-rm -f test_orig.dat test_recov1.dat test_recov2.dat
+rm -f test_orig.dat test_recov1.dat test_recov2.dat pub.key
 rm -f bootstrap.log publisher.log provider.log client1.log client2.log
 
 export CGO_ENABLED=0
@@ -40,10 +40,10 @@ echo "Bootstrap Multiaddr: $BOOT_ADDR"
 
 echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 # Seed is set to false so the publisher explicitly terminates after ingestion
-./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
+./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat -key-out pub.key > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY="pub.key"
 
 echo "Content Published:"
 echo "  - ContentID:      $CONTENT_ID"

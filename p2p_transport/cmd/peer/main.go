@@ -60,6 +60,7 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	keyOut := flag.String("key-out", "", "Path to export raw key material to (optional)")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -247,9 +248,14 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		if *keyOut != "" {
+			if err := engine.ExportKey(*keyOut, key); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+		}
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: %s", engine.FormatKeyFingerprint(key))
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -257,14 +263,19 @@ func main() {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
 		
+		keyArg := "<keyfile>"
+		if *keyOut != "" {
+			keyArg = *keyOut
+		}
+
 		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
 			"  -p 5001 \\\n" +
 			"  -ws-port 5002 \\\n" +
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyArg)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -369,9 +380,9 @@ func main() {
 		}
 
 		if *keyHex != "" {
-			kBytes, err := hex.DecodeString(*keyHex)
-			if err != nil || len(kBytes) != 32 {
-				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
+			kBytes, err := engine.ParseKey(*keyHex)
+			if err != nil {
+				log.Fatalf("Invalid key format or path: %v", err)
 			}
 			keys.Put(ctx, contentID, kBytes)
 		}
