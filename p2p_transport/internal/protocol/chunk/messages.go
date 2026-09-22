@@ -3,16 +3,131 @@ package chunk
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"time"
+
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 const (
 	CurrentMessageVersion uint16 = 1
+	MaxAttestationAgeSeconds int64 = 3600 // 1 hour max attestation age
 )
+
+type ProviderAttestation struct {
+	ContentID      core.ContentID `json:"content_id"`
+	ProviderID     string         `json:"provider_id"`
+	ProviderPubKey []byte         `json:"provider_pub_key,omitempty"`
+	Timestamp      int64          `json:"timestamp"`
+	Signature      []byte         `json:"signature"`
+}
+
+func NewProviderAttestation(contentID core.ContentID, providerID peer.ID, timestamp int64, privKey crypto.PrivKey) (*ProviderAttestation, error) {
+	att := &ProviderAttestation{
+		ContentID:  contentID,
+		ProviderID: providerID.String(),
+		Timestamp:  timestamp,
+	}
+	if privKey != nil {
+		pubKey := privKey.GetPublic()
+		if pubBytes, err := crypto.MarshalPublicKey(pubKey); err == nil {
+			att.ProviderPubKey = pubBytes
+		}
+		if err := att.Sign(privKey); err != nil {
+			return nil, fmt.Errorf("failed to sign provider attestation: %w", err)
+		}
+	}
+	return att, nil
+}
+
+func (a *ProviderAttestation) SignableBytes() ([]byte, error) {
+	aCopy := *a
+	aCopy.Signature = nil
+	return json.Marshal(&aCopy)
+}
+
+func (a *ProviderAttestation) Sign(privKey crypto.PrivKey) error {
+	if privKey == nil {
+		return errors.New("private key cannot be nil")
+	}
+	a.Signature = nil
+	bytesToSign, err := a.SignableBytes()
+	if err != nil {
+		return err
+	}
+	sig, err := privKey.Sign(bytesToSign)
+	if err != nil {
+		return err
+	}
+	a.Signature = sig
+	return nil
+}
+
+func (a *ProviderAttestation) Verify(expectedContentID core.ContentID, expectedProvider peer.ID) error {
+	if a == nil {
+		return errors.New("provider attestation is nil")
+	}
+	if a.ContentID != expectedContentID {
+		return fmt.Errorf("attestation content ID mismatch: expected %x, got %x", expectedContentID, a.ContentID)
+	}
+	if a.ProviderID == "" || len(a.Signature) == 0 {
+		return errors.New("missing provider ID or signature in attestation")
+	}
+
+	providerPeerID, err := peer.Decode(a.ProviderID)
+	if err != nil {
+		return fmt.Errorf("invalid provider peer ID in attestation: %w", err)
+	}
+
+	if expectedProvider != "" && providerPeerID != expectedProvider {
+		return fmt.Errorf("provider peer ID mismatch: expected %s, got %s", expectedProvider, providerPeerID)
+	}
+
+	// Verify timestamp freshness
+	now := time.Now().Unix()
+	diff := now - a.Timestamp
+	if diff > MaxAttestationAgeSeconds || diff < -300 { // allow 5m clock skew
+		return fmt.Errorf("provider attestation timestamp expired or invalid: age=%ds", diff)
+	}
+
+	// Extract public key or derive from ProviderPubKey
+	var pubKey crypto.PubKey
+	var keyErr error
+	pubKey, keyErr = providerPeerID.ExtractPublicKey()
+	if keyErr != nil || pubKey == nil {
+		if len(a.ProviderPubKey) > 0 {
+			pubKey, keyErr = manifest.GetCachedPubKey(a.ProviderPubKey)
+			if keyErr != nil {
+				return fmt.Errorf("failed to parse provider public key: %w", keyErr)
+			}
+			derivedID, err := peer.IDFromPublicKey(pubKey)
+			if err != nil || derivedID != providerPeerID {
+				return fmt.Errorf("provider public key does not match peer ID")
+			}
+		} else {
+			return fmt.Errorf("failed to extract public key from provider peer ID: %w", keyErr)
+		}
+	}
+
+	signableBytes, err := a.SignableBytes()
+	if err != nil {
+		return fmt.Errorf("failed to compute signable bytes for attestation: %w", err)
+	}
+
+	ok, err := pubKey.Verify(signableBytes, a.Signature)
+	if err != nil || !ok {
+		return fmt.Errorf("provider attestation signature verification failed")
+	}
+
+	return nil
+}
 
 type MessageType uint8
 
@@ -28,14 +143,18 @@ const (
 type ErrorCode uint8
 
 const (
-	ErrContentNotFound  ErrorCode = 0x01
-	ErrChunkNotFound    ErrorCode = 0x02
-	ErrInvalidManifest  ErrorCode = 0x03
-	ErrPermissionDenied ErrorCode = 0x04
-	ErrInternal         ErrorCode = 0x05
-	ErrIntegrityMismatch ErrorCode = 0x06
-	ErrBadRequest       ErrorCode = 0x07
+	ErrContentNotFound    ErrorCode = 0x01
+	ErrChunkNotFound      ErrorCode = 0x02
+	ErrInvalidManifest    ErrorCode = 0x03
+	ErrCodePermissionDenied ErrorCode = 0x04
+	ErrInternal           ErrorCode = 0x05
+	ErrIntegrityMismatch  ErrorCode = 0x06
+	ErrBadRequest         ErrorCode = 0x07
 	ErrUnsupportedMessage ErrorCode = 0x08
+)
+
+var (
+	ErrPermissionDenied = errors.New("permission denied")
 )
 
 // Message is the symmetric envelope for all protocol communications.
@@ -117,22 +236,55 @@ func ParseRequestManifest(payload []byte) (core.ContentID, error) {
 	return id, nil
 }
 
-func BuildManifest(id core.ContentID, data []byte) *Message {
-	payload := append(id[:], data...)
+func BuildManifest(id core.ContentID, att *ProviderAttestation, data []byte) *Message {
+	var attBytes []byte
+	if att != nil {
+		attBytes, _ = json.Marshal(att)
+	}
+	attLen := uint32(len(attBytes))
+
+	buf := new(bytes.Buffer)
+	buf.Write(id[:])
+	binary.Write(buf, binary.LittleEndian, attLen)
+	if attLen > 0 {
+		buf.Write(attBytes)
+	}
+	buf.Write(data)
+
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgManifest,
-		Payload: payload,
+		Payload: buf.Bytes(),
 	}
 }
 
-func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
+func ParseManifest(payload []byte) (core.ContentID, *ProviderAttestation, []byte, error) {
 	var id core.ContentID
 	if len(payload) < 32 {
-		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+		return id, nil, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
 	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+
+	if len(payload) < 36 {
+		return id, nil, payload[32:], nil
+	}
+
+	attLen := binary.LittleEndian.Uint32(payload[32:36])
+	if attLen == 0 {
+		return id, nil, payload[36:], nil
+	}
+
+	if int(36+attLen) > len(payload) {
+		return id, nil, payload[32:], nil
+	}
+
+	var att ProviderAttestation
+	attBytes := payload[36 : 36+attLen]
+	if err := json.Unmarshal(attBytes, &att); err != nil {
+		return id, nil, nil, fmt.Errorf("invalid provider attestation in MANIFEST: %w", err)
+	}
+
+	return id, &att, payload[36+attLen:], nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
