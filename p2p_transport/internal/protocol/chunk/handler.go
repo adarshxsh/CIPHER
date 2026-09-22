@@ -11,6 +11,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 var TestCorruptProb float64
@@ -48,6 +49,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			pool.Put(msg.Payload)
 			return
 		}
 
@@ -60,6 +62,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
+		pool.Put(msg.Payload)
 	}
 }
 
@@ -121,6 +124,7 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
+	defer pool.Put(ackMsg.Payload)
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)

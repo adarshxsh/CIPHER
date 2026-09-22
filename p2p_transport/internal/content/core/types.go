@@ -56,5 +56,6 @@ type ManifestStore interface {
 }
 
 type EngineConfig struct {
-	ChunkSize uint32
+	ChunkSize         uint32
+	ChannelBufferSize int
 }

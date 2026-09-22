@@ -4,6 +4,7 @@ import (
 	"io"
 
 	"cipher/internal/content/core"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 // Chunker is responsible for splitting a stream into Chunks.
@@ -20,7 +21,11 @@ func NewChunker(config core.EngineConfig) *Chunker {
 // Split reads from r and emits chunks on the returned channel.
 // It closes the channel and returns any read error (other than EOF).
 func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
-	chunkCh := make(chan *core.Chunk)
+	bufSize := c.config.ChannelBufferSize
+	if bufSize <= 0 {
+		bufSize = 16
+	}
+	chunkCh := make(chan *core.Chunk, bufSize)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -31,7 +36,7 @@ func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
 		var offset int64
 
 		for {
-			buf := make([]byte, c.config.ChunkSize)
+			buf := pool.Get(int(c.config.ChunkSize))
 			n, err := io.ReadFull(r, buf)
 
 			if n > 0 {
@@ -48,6 +53,8 @@ func (c *Chunker) Split(r io.Reader) (<-chan *core.Chunk, <-chan error) {
 
 				index++
 				offset += int64(n)
+			} else {
+				pool.Put(buf)
 			}
 
 			if err != nil {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 const (
@@ -103,9 +105,10 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 	}
 
 	// Allocation happens only after all size checks pass.
-	payload := make([]byte, int(declaredSize))
+	payload := pool.Get(int(declaredSize))
 
 	if _, err := io.ReadFull(r, payload); err != nil {
+		pool.Put(payload)
 		return nil, fmt.Errorf(
 			"%w: expected=%d bytes: %v",
 			ErrTruncatedFrame,
@@ -262,9 +265,10 @@ func ReadFramePayload(
 		)
 	}
 
-	payload := make([]byte, int(payloadSize))
+	payload := pool.Get(int(payloadSize))
 
 	if _, err := io.ReadFull(r, payload); err != nil {
+		pool.Put(payload)
 		return nil, fmt.Errorf(
 			"%w: expected=%d bytes: %v",
 			ErrTruncatedFrame,

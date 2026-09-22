@@ -23,7 +23,8 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	config := core.EngineConfig{
-		ChunkSize: 32 * 1024, // 32KB
+		ChunkSize:         32 * 1024, // 32KB
+		ChannelBufferSize: 16,
 	}
 
 	enc := crypto.NewChaCha20Encryptor()
