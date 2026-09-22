@@ -129,3 +129,38 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_Boundaries(t *testing.T) {
+	var contentID core.ContentID
+	contentID[0] = 0x01
+
+	// 1. Undersized payload (< ContentIDSize)
+	undersized := make([]byte, chunk.ContentIDSize-1)
+	err := chunk.ValidateManifestPayload(undersized)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for undersized payload, got %v", err)
+	}
+
+	// 2. Exactly ContentIDSize (0 bytes of JSON payload)
+	headerOnly := make([]byte, chunk.ContentIDSize)
+	copy(headerOnly, contentID[:])
+	err = chunk.ValidateManifestPayload(headerOnly)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for missing JSON payload, got %v", err)
+	}
+
+	// 3. Oversized payload (> MaxManifestSize)
+	oversized := make([]byte, chunk.MaxManifestSize+1)
+	copy(oversized, contentID[:])
+	err = chunk.ValidateManifestPayload(oversized)
+	if !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidPayloadLength for oversized payload, got %v", err)
+	}
+
+	// 4. Valid manifest payload
+	msg := chunk.BuildManifest(contentID, []byte(`{"version":1}`))
+	err = chunk.ValidateManifestPayload(msg.Payload)
+	if err != nil {
+		t.Fatalf("expected valid manifest payload to pass validation, got %v", err)
+	}
+}
