@@ -13,17 +13,27 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
-
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host        host.Host
+	engine      *engine.ContentEngine
+	corruptProb float64
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+type Option func(*StreamHandler)
+
+func WithCorruptionProbability(prob float64) Option {
+	return func(h *StreamHandler) {
+		h.corruptProb = prob
+	}
+}
+
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...Option) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+	}
+	for _, opt := range opts {
+		opt(handler)
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,9 +108,10 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
+	if h.corruptProb > 0 && rand.Float64() < h.corruptProb && len(chunkData.Data) > 0 {
 		// Corrupt the chunk for testing
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
+		chunkData.Data = append([]byte(nil), chunkData.Data...)
 		chunkData.Data[0] ^= 0xFF
 	}
 
