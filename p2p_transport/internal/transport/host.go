@@ -2,6 +2,7 @@ package transport
 
 import (
 	"cipher/internal/discovery"
+	"cipher/internal/protocol"
 	"context"
 
 	"fmt"
@@ -14,12 +15,69 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	p2pconnmgr "github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
 
 // NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, options ...NodeOption) (host.Host, *dht.IpfsDHT, error) {
+	nodeCfg := defaultConfig()
+	for _, opt := range options {
+		if err := opt(nodeCfg); err != nil {
+			return nil, nil, fmt.Errorf("failed to apply node option: %w", err)
+		}
+	}
+
+	cm := nodeCfg.connMgr
+	if cm == nil {
+		var err error
+		cm, err = p2pconnmgr.NewConnManager(nodeCfg.connLow, nodeCfg.connHigh, p2pconnmgr.WithGracePeriod(nodeCfg.connGrace))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create conn manager: %w", err)
+		}
+	}
+
+	rm := nodeCfg.resourceMgr
+	if rm == nil {
+		scalingLimits := rcmgr.DefaultLimits
+		libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+		cipherBaseLimit := rcmgr.BaseLimit{
+			Streams:         1024,
+			StreamsInbound:  512,
+			StreamsOutbound: 512,
+			Memory:          128 << 20,
+		}
+		cipherLimitIncrease := rcmgr.BaseLimitIncrease{
+			Streams:         256,
+			StreamsInbound:  128,
+			StreamsOutbound: 128,
+			Memory:          64 << 20,
+		}
+
+		scalingLimits.AddProtocolLimit(protocol.FileTransferProtocolID, cipherBaseLimit, cipherLimitIncrease)
+		scalingLimits.AddProtocolLimit(protocol.ChunkTransportProtocolID, cipherBaseLimit, cipherLimitIncrease)
+		scalingLimits.AddProtocolLimit(protocol.PushTransportProtocolID, cipherBaseLimit, cipherLimitIncrease)
+
+		if nodeCfg.memoryLimit > 0 && nodeCfg.memoryLimit < scalingLimits.SystemBaseLimit.Memory {
+			scalingLimits.SystemBaseLimit.Memory = nodeCfg.memoryLimit
+		}
+		if nodeCfg.memoryLimit > 0 && nodeCfg.memoryLimit < scalingLimits.TransientBaseLimit.Memory {
+			scalingLimits.TransientBaseLimit.Memory = nodeCfg.memoryLimit
+		}
+
+		concreteLimits := scalingLimits.Scale(nodeCfg.memoryLimit, 1024)
+		limiter := rcmgr.NewFixedLimiter(concreteLimits)
+
+		var err error
+		rm, err = rcmgr.NewResourceManager(limiter)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+		}
+	}
+
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
 	listenAddrs := []string{addr}
@@ -31,6 +89,8 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(cm),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
