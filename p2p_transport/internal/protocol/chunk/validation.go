@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -105,6 +106,14 @@ func ValidateManifestPayload(payload []byte) error {
 			ErrInvalidManifestPayload,
 			len(payload),
 			ContentIDSize,
+		)
+	}
+	if len(payload) > MaxManifestSize {
+		return fmt.Errorf(
+			"manifest: %w: received=%d maximum=%d",
+			ErrInvalidPayloadLength,
+			len(payload),
+			MaxManifestSize,
 		)
 	}
 	return nil
@@ -225,13 +234,17 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, manifestBytes, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	if len(manifestBytes) > manifest.MaxManifestSizeBytes {
+		return fmt.Errorf("manifest: %w", manifest.ErrManifestTooLarge)
 	}
 
 	return nil
