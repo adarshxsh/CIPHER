@@ -1,34 +1,91 @@
 package crypto
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"cipher/internal/content/core"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
-// ChaCha20Encryptor implements core.Encryptor using standard ChaCha20-Poly1305.
-// It uses a deterministic 12-byte nonce derived from the chunk index:
-// nonce = first_12_bytes(SHA-256("cipher-nonce" || uint64(index)))
-type ChaCha20Encryptor struct{}
+// SessionIVSize defines the size of the session IV in bytes (12 bytes for ChaCha20-Poly1305).
+const SessionIVSize = 12
 
+// ChaCha20Encryptor implements core.Encryptor using standard ChaCha20-Poly1305.
+// It mixes a cryptographically random 12-byte session IV with the chunk index
+// via SHA-256 HKDF to ensure unique nonces across transfer sessions.
+type ChaCha20Encryptor struct {
+	sessionIV []byte
+}
+
+// NewChaCha20Encryptor initializes a ChaCha20Encryptor with a fresh random 12-byte session IV.
 func NewChaCha20Encryptor() *ChaCha20Encryptor {
-	return &ChaCha20Encryptor{}
+	iv := make([]byte, SessionIVSize)
+	if _, err := rand.Read(iv); err != nil {
+		panic(fmt.Sprintf("failed to generate random session IV: %v", err))
+	}
+	return &ChaCha20Encryptor{
+		sessionIV: iv,
+	}
+}
+
+// NewChaCha20EncryptorWithIV initializes a ChaCha20Encryptor with a specific 12-byte session IV.
+func NewChaCha20EncryptorWithIV(sessionIV []byte) *ChaCha20Encryptor {
+	iv := make([]byte, SessionIVSize)
+	copy(iv, sessionIV)
+	return &ChaCha20Encryptor{
+		sessionIV: iv,
+	}
+}
+
+// SessionIV returns a copy of the encryptor's current session IV.
+func (e *ChaCha20Encryptor) SessionIV() []byte {
+	iv := make([]byte, len(e.sessionIV))
+	copy(iv, e.sessionIV)
+	return iv
+}
+
+// SetSessionIV sets a new session IV for the encryptor.
+func (e *ChaCha20Encryptor) SetSessionIV(iv []byte) {
+	e.sessionIV = make([]byte, SessionIVSize)
+	copy(e.sessionIV, iv)
+}
+
+// ResetSessionIV generates and sets a new random 12-byte session IV.
+func (e *ChaCha20Encryptor) ResetSessionIV() error {
+	iv := make([]byte, SessionIVSize)
+	if _, err := rand.Read(iv); err != nil {
+		return fmt.Errorf("failed to generate random session IV: %w", err)
+	}
+	e.sessionIV = iv
+	return nil
+}
+
+// GenerateNonce mixes a 12-byte session IV with a chunk index using SHA-256 HKDF
+// to produce a unique 12-byte ChaCha20 nonce.
+func GenerateNonce(sessionIV []byte, index uint32) []byte {
+	indexBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(indexBytes, uint64(index))
+
+	// HKDF-SHA256: secret = sessionIV, salt = "cipher-nonce", info = uint64(index)
+	kdf := hkdf.New(sha256.New, sessionIV, []byte("cipher-nonce"), indexBytes)
+	nonce := make([]byte, 12)
+	_, _ = io.ReadFull(kdf, nonce)
+	return nonce
+}
+
+// GenerateNonce derives a 12-byte nonce using the encryptor's session IV and chunk index.
+func (e *ChaCha20Encryptor) GenerateNonce(index uint32) []byte {
+	return GenerateNonce(e.sessionIV, index)
 }
 
 func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
-	h := sha256.New()
-	h.Write([]byte("cipher-nonce"))
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(index))
-	h.Write(b)
-	sum := h.Sum(nil)
-	nonce := make([]byte, 12)
-	copy(nonce, sum[:12])
-	return nonce
+	return e.GenerateNonce(index)
 }
 
 func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
@@ -37,7 +94,7 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	nonce := e.generateNonce(chunk.Header.Index)
+	nonce := e.GenerateNonce(chunk.Header.Index)
 	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
