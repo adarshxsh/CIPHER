@@ -14,8 +14,19 @@ import (
 )
 
 // Send transfers a file to the remote peer over the provided stream.
-func Send(s network.Stream, filePath string) error {
-	defer s.Close()
+func Send(s network.Stream, filePath string) (err error) {
+	if s == nil {
+		return fmt.Errorf("stream is nil")
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			_ = s.Reset()
+		} else {
+			_ = s.Close()
+		}
+	}()
 
 	log.Printf("Preparing to send %s...", filePath)
 
@@ -80,8 +91,10 @@ func Send(s network.Stream, filePath string) error {
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil && s.Conn().RemoteMultiaddr() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Sender)")
@@ -89,6 +102,7 @@ func Send(s network.Stream, filePath string) error {
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
+	success = true
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 const (
 	ProtocolVersion1 byte = 1
 	MsgTypeFileTransfer byte = 1
+	MaxFilenameSize     = 255
 )
 
 // Header represents the binary metadata sent before the file contents.
@@ -80,6 +81,10 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	var filenameLen uint16
 	if err := binary.Read(r, binary.BigEndian, &filenameLen); err != nil {
 		return fmt.Errorf("failed to read filename length: %w", err)
+	}
+
+	if filenameLen == 0 || filenameLen > MaxFilenameSize {
+		return fmt.Errorf("invalid filename length: %d", filenameLen)
 	}
 
 	// 4. Read Filename
