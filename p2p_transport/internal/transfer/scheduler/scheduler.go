@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -33,35 +34,50 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	cancelCtx, cancelFunc := context.WithCancel(ctx)
+	defer cancelFunc()
+
+	var wg sync.WaitGroup
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
+		client, err := chunk.NewClient(cancelCtx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
 		}
 		activeWorkers++
+		wg.Add(1)
 		go func(src Source, c *chunk.Client) {
+			defer wg.Done()
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			runWorker(cancelCtx, src, c, s.Engine, queue, results)
+			select {
+			case <-cancelCtx.Done():
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			}
 		}(source, client)
 	}
 	
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
+
+	defer func() {
+		cancelFunc()
+		wg.Wait()
+	}()
 	
 	pendingTasks := len(tasks)
 	
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-cancelCtx.Done():
+			return cancelCtx.Err()
 		case res := <-results:
 			if res.Error != nil {
 				if res.Error.Error() == "worker_done" {
@@ -92,8 +108,12 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res
-				pendingTasks--
+				select {
+				case <-cancelCtx.Done():
+					return cancelCtx.Err()
+				case completions <- res:
+					pendingTasks--
+				}
 			}
 		}
 	}
