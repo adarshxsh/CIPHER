@@ -77,7 +77,8 @@ const (
 
 	// Manifest responses can be larger than request payloads but remain bound
 	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	MaxManifestSize     = MaxMessagePayloadSize
+	MaxManifestJSONSize = MaxManifestSize - ContentIDSize
 )
 
 const (
