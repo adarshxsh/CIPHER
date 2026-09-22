@@ -19,7 +19,7 @@ import (
 )
 
 // NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, dhtOpts ...discovery.DHTOption) (host.Host, *dht.IpfsDHT, error) {
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
 	listenAddrs := []string{addr}
@@ -62,7 +62,7 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 
 	setupNetworkMonitor(h)
 
-	kdht, err := discovery.NewDHT(h, dht.ModeServer) // Start DHT in server mode
+	kdht, err := discovery.NewDHT(h, dht.ModeServer, dhtOpts...) // Start DHT in server mode
 
 	if err != nil {
 		h.Close()
