@@ -60,14 +60,14 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		return nil, nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
 
-	setupNetworkMonitor(h)
-
 	kdht, err := discovery.NewDHT(h, dht.ModeServer) // Start DHT in server mode
 
 	if err != nil {
 		h.Close()
 		return nil, nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
+
+	setupNetworkMonitor(h, kdht)
 
 	return h, kdht, nil
 }
@@ -78,7 +78,7 @@ func (t *holePunchTracer) Trace(evt *holepunch.Event) {
 	log.Printf("[DCUtR] Hole Punch Event: %s (Remote: %s)", evt.Type, evt.Remote)
 }
 
-func setupNetworkMonitor(h host.Host) {
+func setupNetworkMonitor(h host.Host, kdht *dht.IpfsDHT) {
 	// Subscribe to reachability changes
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
 	if err == nil {
@@ -94,6 +94,9 @@ func setupNetworkMonitor(h host.Host) {
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, c network.Conn) {
 			log.Printf("[Network] Connected to %s", c.RemotePeer())
+			if kdht != nil {
+				kdht.RoutingTable().TryAddPeer(c.RemotePeer(), true, true)
+			}
 			logActiveConnections(n, c.RemotePeer())
 		},
 		DisconnectedF: func(n network.Network, c network.Conn) {

@@ -48,7 +48,8 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	}
 
 	// 3. Register h2 as Storage Provider
-	if err := RegisterStorageProvider(ctx, dht2); err != nil {
+	h2Priv := h2.Peerstore().PrivKey(h2.ID())
+	if err := RegisterStorageProvider(ctx, dht2, h2Priv); err != nil {
 		t.Fatalf("RegisterStorageProvider failed: %v", err)
 	}
 
