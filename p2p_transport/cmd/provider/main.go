@@ -129,7 +129,11 @@ func main() {
 	}
 	push.NewStreamHandler(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList)
 
-	// 7. Start Control-Plane DHT Republisher for all local manifests
+	// 7. Start Control-Plane DHT Announcements
+	if *allowPush {
+		discovery.StartStorageProviderHeartbeat(ctx, kdht, 10*time.Minute, priv)
+	}
+
 	interval := time.Duration(*republishHours) * time.Hour
 	discovery.StartRepublisher(ctx, kdht, store, interval, priv)
 
