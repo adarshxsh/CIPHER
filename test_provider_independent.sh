@@ -35,15 +35,15 @@ echo "\n[Step 3/6] Starting DHT Bootstrap Node..."
 BOOT_PID=$!
 sleep 1
 
-BOOT_ADDR=$(grep "127.0.0.1/tcp/48001/p2p/" bootstrap.log | head -n 1 | awk '{print $NF}')
+BOOT_ADDR=$(grep -a "127.0.0.1/tcp/48001/p2p/" bootstrap.log | head -n 1 | awk '{print $NF}')
 echo "Bootstrap Multiaddr: $BOOT_ADDR"
 
-echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
+echo -e "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 # Seed is set to false so the publisher explicitly terminates after ingestion
 ./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
 
-CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+CONTENT_ID=$(grep -a "^ContentID" publisher.log | awk '{print $NF}')
+KEY=$(grep -a "^Decryption Key" publisher.log | awk '{print $NF}')
 
 echo "Content Published:"
 echo "  - ContentID:      $CONTENT_ID"
@@ -57,7 +57,7 @@ echo "\n[Step 5/6] Starting Standalone Provider..."
 PROV_PID=$!
 sleep 2
 
-PROV_ID=$(grep "Provider Peer ID:" provider.log | awk '{print $NF}')
+PROV_ID=$(grep -a "Provider Peer ID:" provider.log | awk '{print $NF}')
 echo "Provider running with Peer ID: $PROV_ID"
 
 echo "\nRunning Client 1 (DHT Discovery only — NO Publisher in network)..."
