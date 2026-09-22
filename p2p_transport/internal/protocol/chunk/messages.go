@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
 
 	"cipher/internal/content/core"
 )
@@ -209,5 +211,30 @@ func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	msgBytes := payload[1:]
+	if len(msgBytes) > MaxErrorMessageSize {
+		msgBytes = msgBytes[:MaxErrorMessageSize]
+	}
+	return ErrorCode(payload[0]), sanitizeString(string(msgBytes)), nil
+}
+
+func sanitizeString(s string) string {
+	var builder strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		default:
+			if unicode.IsControl(r) || !unicode.IsPrint(r) {
+				fmt.Fprintf(&builder, "\\u%04x", r)
+			} else {
+				builder.WriteRune(r)
+			}
+		}
+	}
+	return builder.String()
 }
