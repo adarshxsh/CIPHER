@@ -4,10 +4,13 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 )
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
@@ -16,7 +19,19 @@ var StorageProviderNamespace = core.ContentID{
 	0x43, 0x49, 0x50, 0x48, 0x45, 0x52, 0x5f, 0x53, // "CIPHER_S"
 	0x54, 0x4f, 0x52, 0x41, 0x47, 0x45, 0x5f, 0x50, // "TORAGE_P"
 	0x52, 0x4f, 0x56, 0x49, 0x44, 0x45, 0x52, 0x5f, // "ROVIDER_"
-	0x53, 0x45, 0x52, 0x56, 0x49, 0x43, 0x45, 0x01, // "SERVICE\x01"
+	0x53, 0x45, 0x52, 0x56, 0x49, 0x43, 0x45, 0x01, // "SERVICE"
+}
+
+// SanitizeAddrInfo removes unroutable multiaddresses (loopback, RFC1918 private, link-local) from a peer.AddrInfo.
+func SanitizeAddrInfo(info peer.AddrInfo) peer.AddrInfo {
+	var clean []ma.Multiaddr
+	for _, addr := range info.Addrs {
+		if manet.IsPublicAddr(addr) {
+			clean = append(clean, addr)
+		}
+	}
+	info.Addrs = clean
+	return info
 }
 
 // Provide announces to the DHT that this node can provide the content identified by the given ContentID.
@@ -71,6 +86,7 @@ func FindStorageProviders(ctx context.Context, kdht *dht.IpfsDHT, limit int) ([]
 }
 
 // FindProviders searches the DHT for peers that can provide the content identified by the given ContentID.
+// In public mode, returned peer.AddrInfo structures are sanitized to discard unroutable multiaddresses.
 func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PROVIDER_LIMIT int) ([]peer.AddrInfo, error) {
 
 	if PROVIDER_LIMIT <= 0 {
@@ -84,9 +100,18 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 
 	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
 
+	allowLocal := os.Getenv("CIPHER_ALLOW_LOCAL") == "1" || os.Getenv("CIPHER_LOCAL_DEV") == "1"
+
 	var providers []peer.AddrInfo
 
 	for p := range providerCh {
+		if !allowLocal {
+			p = SanitizeAddrInfo(p)
+			if len(p.Addrs) == 0 {
+				continue
+			}
+		}
+
 		providers = append(providers, p)
 
 		if len(providers) >= PROVIDER_LIMIT {

@@ -13,6 +13,7 @@ rm -f test_orig.dat test_recov1.dat test_recov2.dat
 rm -f bootstrap.log publisher.log provider.log client1.log client2.log
 
 export CGO_ENABLED=0
+export CIPHER_LOCAL_DEV=1
 
 cleanup() {
     kill $BOOT_PID $PUB_PID $PROV_PID 2>/dev/null || true

@@ -1,7 +1,9 @@
 #!/bin/bash
 cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+pkill -f bin/peer || true
+rm -rf store_a store_b test.mp4 out.mp4 peer_a.log
 export CGO_ENABLED=0
+export CIPHER_LOCAL_DEV=1
 go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
@@ -13,14 +15,17 @@ sleep 3
 
 CONTENT_ID=$(grep "ContentID:" peer_a.log | awk '{print $NF}')
 KEY=$(grep "Key:" peer_a.log | awk '{print $NF}')
-ADDR=$(grep "127.0.0.1/tcp/47891/p2p/" peer_a.log | head -n 1 | awk '{print $NF}')
+ADDR=$(grep "127.0.0.1/tcp/47891/p2p/" peer_a.log | head -n 1 | awk '{print $NF}' | tr -d '"')
 
 echo "Content ID: $CONTENT_ID"
 echo "Key:        $KEY"
 echo "Address:    $ADDR"
 
-./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4
+./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4 &
+PEER_B_PID=$!
 
-kill $PEER_A_PID 2>/dev/null || true
+sleep 5
+
+kill $PEER_A_PID $PEER_B_PID 2>/dev/null || true
 echo "--- out.mp4 ---"
 cat out.mp4
