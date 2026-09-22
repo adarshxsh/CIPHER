@@ -52,7 +52,7 @@ func ResolveManifest(
 			continue
 		}
 
-		m, err := manifest.Deserialize(manifestData)
+		m, err := manifest.DeserializeAndVerify(manifestData, id)
 		if err != nil {
 			log.Printf(
 				"[DHT] Provider %s returned invalid manifest: %v",

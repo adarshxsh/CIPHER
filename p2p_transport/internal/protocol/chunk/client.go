@@ -69,6 +69,11 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("content ID mismatch in response")
 	}
 
+	computedHash := c.digest.Sum(data)
+	if computedHash != core.Hash(id) {
+		return nil, fmt.Errorf("manifest payload digest mismatch: expected %x, got %x", id, computedHash)
+	}
+
 	return data, nil
 }
 
