@@ -144,28 +144,66 @@ func main() {
 
 	// 6. Execute Remote Push if requested
 	if *push {
-		if *providersList == "" {
-			log.Fatalf("Error: -push requires -providers <comma-separated provider multiaddresses>")
-		}
-
 		t := transport.NewTransport(h)
 		var targetPeers []peer.ID
 
-		for _, pAddrStr := range strings.Split(*providersList, ",") {
-			pAddrStr = strings.TrimSpace(pAddrStr)
-			if pAddrStr == "" {
-				continue
+		if *providersList != "" {
+			for _, pAddrStr := range strings.Split(*providersList, ",") {
+				pAddrStr = strings.TrimSpace(pAddrStr)
+				if pAddrStr == "" {
+					continue
+				}
+				addrInfo, err := t.Connect(ctx, pAddrStr)
+				if err != nil {
+					log.Printf("[Publisher] Warning: Failed to connect to provider %s: %v", pAddrStr, err)
+					continue
+				}
+				targetPeers = append(targetPeers, addrInfo.ID)
 			}
-			addrInfo, err := t.Connect(ctx, pAddrStr)
-			if err != nil {
-				log.Printf("[Publisher] Warning: Failed to connect to provider %s: %v", pAddrStr, err)
-				continue
+		} else {
+			// Automated Kademlia DHT Storage Provider Discovery
+			log.Printf("[Publisher] No -providers specified. Querying Kademlia DHT for active storage providers...")
+
+			for attempt := 1; attempt <= 3; attempt++ {
+				dhtCtx, dhtCancel := context.WithTimeout(ctx, 5*time.Second)
+				discovered, _ := discovery.FindStorageProviders(dhtCtx, kdht, 16)
+				dhtCancel()
+
+				for _, prov := range discovered {
+					if prov.ID == h.ID() {
+						continue // Skip self
+					}
+					alreadyAdded := false
+					for _, existing := range targetPeers {
+						if existing == prov.ID {
+							alreadyAdded = true
+							break
+						}
+					}
+					if alreadyAdded {
+						continue
+					}
+
+					if err := h.Connect(ctx, prov); err != nil {
+						log.Printf("[Publisher] Warning: Failed to connect to discovered provider %s: %v", prov.ID, err)
+						continue
+					}
+					log.Printf("[Publisher] [✓] Discovered active storage provider via DHT: %s", prov.ID)
+					targetPeers = append(targetPeers, prov.ID)
+				}
+
+				if len(targetPeers) > 0 {
+					break
+				}
+				if attempt < 3 {
+					log.Printf("[Publisher] Retrying DHT provider lookup (attempt %d/3)...", attempt+1)
+					time.Sleep(1 * time.Second)
+				}
 			}
-			targetPeers = append(targetPeers, addrInfo.ID)
 		}
 
 		if len(targetPeers) == 0 {
-			log.Fatalf("Fatal: Could not connect to any specified target providers")
+			log.Fatalf("Fatal: No storage providers available. Ensure at least one provider is running with -allow-push or specify -providers explicitly.")
 		}
 
 		effectiveReplication := *replication
