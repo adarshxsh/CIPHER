@@ -14,6 +14,8 @@ import (
 )
 
 // Send transfers a file to the remote peer over the provided stream.
+// It computes the SHA-256 checksum in a single pass while streaming data using io.TeeReader,
+// transmitting the header immediately and appending a 32-byte trailing checksum frame upon payload completion.
 func Send(s network.Stream, filePath string) error {
 	defer s.Close()
 
@@ -30,49 +32,50 @@ func Send(s network.Stream, filePath string) error {
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	// 1. Calculate Full SHA-256 Checksum
-	log.Printf("Calculating SHA-256 for %s...", info.Name())
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return fmt.Errorf("failed to hash file: %w", err)
-	}
-
-	var checksum [32]byte
-	copy(checksum[:], hasher.Sum(nil))
-
-	// Rewind file for sending
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to rewind file: %w", err)
-	}
-
-	// 2. Construct and Write Header
+	// 1. Construct and Write Header immediately without pre-reading file data or seeking.
+	// Checksum field is set to zero array [32]byte{} to signal trailing checksum frame mode.
 	header := &Header{
 		Version:  ProtocolVersion1,
 		Type:     MsgTypeFileTransfer,
 		Filename: filepath.Base(filePath),
 		FileSize: uint64(info.Size()),
-		Checksum: checksum,
+		Checksum: [32]byte{},
 	}
 
 	if err := header.WriteTo(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
-	// 3. Send Data with Progress Tracking
+	// 2. Stream Data with Progress Tracking and SHA-256 computation in a single pass using io.TeeReader
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
 
 	startTime := time.Now()
 
-	// Create a progress reader
+	hasher := sha256.New()
 	pr := &progressReader{
 		r:     file,
 		total: header.FileSize,
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	// io.TeeReader writes bytes read from pr to hasher as they are read during io.Copy to s
+	tee := io.TeeReader(pr, hasher)
+
+	written, err := io.Copy(s, tee)
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
+	}
+
+	if uint64(written) != header.FileSize {
+		return fmt.Errorf("sent size mismatch: expected %d, got %d", header.FileSize, written)
+	}
+
+	// 3. Write 32-byte trailing checksum frame immediately following final payload byte
+	var checksum [32]byte
+	copy(checksum[:], hasher.Sum(nil))
+
+	if _, err := s.Write(checksum[:]); err != nil {
+		return fmt.Errorf("failed to write trailing checksum frame: %w", err)
 	}
 
 	duration := time.Since(startTime)
@@ -80,8 +83,10 @@ func Send(s network.Stream, filePath string) error {
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Sender)")
