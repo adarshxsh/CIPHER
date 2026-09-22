@@ -29,7 +29,7 @@ echo "[3/5] Starting Publisher to ingest and seed content..."
 PUB_PID=$!
 
 cleanup() {
-    kill $PUB_PID $BOOT_PID $PROV_PID 2>/dev/null || true
+    kill -9 $PUB_PID $BOOT_PID $PROV_PID 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -87,7 +87,7 @@ if [ "$ORIGINAL_HASH" != "$DHT_DOWNLOADED_HASH" ]; then
     exit 1
 fi
 
-kill $BOOT_PID $PROV_PID 2>/dev/null || true
+kill -9 $BOOT_PID $PROV_PID 2>/dev/null || true
 
 echo "✅ SUCCESS: Payload downloaded, verified, and reassembled identically across roles (both direct & DHT)!"
 echo "=========================================================="
