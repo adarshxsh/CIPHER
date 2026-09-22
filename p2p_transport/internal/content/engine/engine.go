@@ -51,17 +51,26 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	// Generate a unique ContentID for this upload
 	var contentID core.ContentID
 	if _, err := rand.Read(contentID[:]); err != nil {
+		for chunk := range chunkCh {
+			e.chunker.PutBuffer(chunk.Data)
+		}
 		return nil, fmt.Errorf("failed to generate content id: %w", err)
 	}
 
 	// Generate a new encryption key
 	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
 	if _, err := rand.Read(key); err != nil {
+		for chunk := range chunkCh {
+			e.chunker.PutBuffer(chunk.Data)
+		}
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	// Store key
 	if err := e.keys.Put(ctx, contentID, key); err != nil {
+		for chunk := range chunkCh {
+			e.chunker.PutBuffer(chunk.Data)
+		}
 		return nil, fmt.Errorf("failed to store key: %w", err)
 	}
 
@@ -72,6 +81,10 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	for chunk := range chunkCh {
 		// Encrypt the chunk
 		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
+			for remaining := range chunkCh {
+				e.chunker.PutBuffer(remaining.Data)
+			}
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
 
@@ -83,11 +96,18 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 		// Store the chunk
 		if err := e.sink.PutChunk(ctx, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
+			for remaining := range chunkCh {
+				e.chunker.PutBuffer(remaining.Data)
+			}
 			return nil, fmt.Errorf("failed to store chunk: %w", err)
 		}
 
 		chunkIDs = append(chunkIDs, chunkID)
 		totalSize += uint64(chunk.Header.PlainSize)
+
+		// Recycle chunk buffer back to pool
+		e.chunker.PutBuffer(chunk.Data)
 	}
 
 	if err := <-errCh; err != nil {
