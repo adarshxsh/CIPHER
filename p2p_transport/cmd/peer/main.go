@@ -246,10 +246,15 @@ func main() {
 			)
 		}
 
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyHandle, kErr := keys.Get(ctx, m.Descriptor.ID)
+		var keyBytes []byte
+		if kErr == nil {
+			keyBytes = keyHandle.Bytes()
+			defer keyHandle.Release()
+		}
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: %x", keyBytes)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -264,7 +269,7 @@ func main() {
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
 			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyBytes)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
