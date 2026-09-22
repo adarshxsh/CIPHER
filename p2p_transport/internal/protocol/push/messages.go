@@ -78,11 +78,34 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	return err
 }
 
+// MaxPayloadSizeForPushMessage returns the maximum payload size accepted for a particular push message type.
+func MaxPayloadSizeForPushMessage(messageType PushMessageType) uint32 {
+	switch messageType {
+	case MsgPushManifest:
+		return MaxMessageSize - 3
+	case MsgPushManifestAck:
+		return 33
+	case MsgPushChunk:
+		return 32 + 66 + MaxChunkSize
+	case MsgPushChunkAck:
+		return 33
+	case MsgPushBatchComplete:
+		return 32
+	case MsgPushBatchCompleteAck:
+		return 33
+	case MsgPushError:
+		return 640
+	default:
+		return 0
+	}
+}
+
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
 		return nil, err
 	}
+	size := binary.LittleEndian.Uint32(sizeBuf[:])
 
 	if size > MaxMessageSize {
 		return nil, fmt.Errorf("message size %d exceeds maximum frame size %d", size, MaxMessageSize)
@@ -91,26 +114,35 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	var envBuf [3]byte
+	if _, err := io.ReadFull(r, envBuf[:]); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
+	version := binary.LittleEndian.Uint16(envBuf[0:2])
+	msgType := PushMessageType(envBuf[2])
+
+	payloadSize := size - 3
+	maxPayload := MaxPayloadSizeForPushMessage(msgType)
+	if maxPayload > 0 && payloadSize > maxPayload {
+		return nil, fmt.Errorf("payload size %d exceeds maximum limit %d for push message type %d", payloadSize, maxPayload, msgType)
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
+	if maxPayload == 0 && payloadSize > 0 {
+		return nil, fmt.Errorf("payload size %d for unknown push message type %d", payloadSize, msgType)
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
+	payload := make([]byte, payloadSize)
+	if payloadSize > 0 {
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
 	}
 
-	return msg, nil
+	return &PushMessage{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
