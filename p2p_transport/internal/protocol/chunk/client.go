@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -16,6 +17,7 @@ import (
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
+var ErrChunkIntegrity = errors.New("chunk hash mismatch")
 
 type Client struct {
 	stream network.Stream
@@ -44,11 +46,13 @@ func (c *Client) Close() error {
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -58,14 +62,17 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 
 	if resp.Type != MsgManifest {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
+		_ = c.stream.Reset()
 		return nil, err
 	}
 	if respID != id {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("content ID mismatch in response")
 	}
 
@@ -91,11 +98,13 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
 	req := BuildRequestChunk(chunkID)
 	if err := WriteMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -104,15 +113,21 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
+		if code == ErrIntegrityMismatch {
+			_ = c.stream.Reset()
+			return nil, fmt.Errorf("remote error (code %d): %s: %w", code, msg, ErrChunkIntegrity)
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
 	if resp.Type != MsgChunk {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("expected CHUNK, got %d", resp.Type)
 	}
 
 	chunk, err := ParseChunk(resp.Payload)
 	if err != nil {
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("failed to parse chunk: %w", err)
 	}
 
@@ -120,8 +135,9 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
-		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
+		_ = WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
+		return nil, fmt.Errorf("corrupted chunk %x received: %w", chunkID, ErrChunkIntegrity)
 	}
 
 	// Set the expected ChunkID
