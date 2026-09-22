@@ -69,33 +69,49 @@ func WriteMessage(w io.Writer, msg *Message) error {
 }
 
 func ReadMessage(r io.Reader) (*Message, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
+		return nil, err
+	}
+	size := binary.LittleEndian.Uint32(sizeBuf[:])
+
+	if size < 3 {
+		return nil, ErrInvalidPayloadSize
+	}
+
+	if size > MaxFrameSize { // 2MB max frame size
+		return nil, ErrPayloadTooLarge
+	}
+
+	// Read 3-byte envelope header directly on stack without allocating payload heap memory
+	var header [3]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
 
-	if size > 2*1024*1024 { // 2MB max frame size
-		return nil, errors.New("message exceeds maximum frame size")
+	version := binary.LittleEndian.Uint16(header[0:2])
+	msgType := MessageType(header[2])
+
+	maxPayloadSize := MaxPayloadSizeForMessage(msgType)
+	if maxPayloadSize <= 0 {
+		return nil, ErrUnknownMessageType
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	payloadSize := size - 3
+	if int(payloadSize) > maxPayloadSize {
+		return nil, ErrPayloadTooLarge
+	}
+
+	payload := make([]byte, payloadSize)
+	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &Message{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
-	}
-
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
-
-	return msg, nil
+	return &Message{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
