@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,13 +10,19 @@ import (
 	"time"
 
 	"cipher/internal/identity"
+	"cipher/internal/transport"
 
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
-	golog "github.com/ipfs/go-log/v2"
 )
 
 func main() {
+	maxReservations := flag.Int("max-reservations", 128, "Maximum number of active relay reservation slots")
+	durationLimit := flag.Duration("duration-limit", 2*time.Minute, "Max stream duration per relayed connection")
+	dataLimitKB := flag.Int64("data-limit-kb", 128, "Max transfer data limit in KB per relayed connection")
+	flag.Parse()
+
 	// Enable libp2p debug logging for circuit v2
 	golog.SetLogLevel("relay", "debug")
 	golog.SetLogLevel("p2p-circuit", "debug")
@@ -42,23 +49,25 @@ func main() {
 		log.Fatalf("Failed to create libp2p relay node: %v", err)
 	}
 
-	// Configure custom relay resources for development/testing.
-	// Production or public relays should stick to relay.DefaultResources() to prevent bandwidth abuse,
-	// as relay fallback connections are typically only intended for lightweight protocol coordination.
-	rc := relay.DefaultResources()
-	rc.Limit.Data = 512 * 1024 * 1024 // 512 MB data limit per connection
-	rc.Limit.Duration = 15 * time.Minute // 15 minute duration limit
-	rc.MaxReservations = 100
+	// Configure relay resources with bounded caps to prevent bandwidth abuse
+	rc := transport.DefaultRelayResources()
+	rc.MaxReservations = *maxReservations
+	if rc.Limit == nil {
+		rc.Limit = &relay.RelayLimit{}
+	}
+	rc.Limit.Duration = *durationLimit
+	rc.Limit.Data = *dataLimitKB * 1024
 
 	// Instantiate the circuit v2 relay service
-	_, err = relay.New(h, relay.WithResources(rc))
+	_, err = transport.NewRelayService(h, relay.WithResources(rc))
 	if err != nil {
 		log.Fatalf("Failed to instantiate relay service: %v", err)
 	}
 
-	log.Printf("Relay Service Started!")
+	log.Printf("Relay Service Started with resource limits (MaxReservations: %d, Duration: %v, DataQuota: %d KB)",
+		rc.MaxReservations, rc.Limit.Duration, rc.Limit.Data/1024)
 	log.Printf("Relay Peer ID: %s", h.ID().String())
-	
+
 	fmt.Println("\nRelay Multiaddresses (for other peers to connect):")
 	for _, addr := range h.Addrs() {
 		fmt.Printf("%s/p2p/%s\n", addr.String(), h.ID().String())
