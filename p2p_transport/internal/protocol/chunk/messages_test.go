@@ -105,3 +105,64 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_Sanitization(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      []byte
+		expectedCode chunk.ErrorCode
+		expectedMsg  string
+		expectErr    bool
+	}{
+		{
+			name:        "Empty payload",
+			payload:     []byte{},
+			expectErr:   true,
+		},
+		{
+			name:         "Clean error string",
+			payload:      append([]byte{1}, []byte("Simple error message")...),
+			expectedCode: 1,
+			expectedMsg:  "Simple error message",
+			expectErr:    false,
+		},
+		{
+			name:         "ANSI control codes and escape sequences",
+			payload:      append([]byte{2}, []byte("\x1b[31mColor Error\x1b[0m")...),
+			expectedCode: 2,
+			expectedMsg:  "[31mColor Error[0m",
+			expectErr:    false,
+		},
+		{
+			name:         "Newline injection",
+			payload:      append([]byte{3}, []byte("Line 1\nLine 2\r\nLine 3")...),
+			expectedCode: 3,
+			expectedMsg:  "Line 1Line 2Line 3",
+			expectErr:    false,
+		},
+		{
+			name:         "Control characters (NUL, BEL, BS, TAB)",
+			payload:      append([]byte{4}, []byte("Error\x00\x07\x08\tMessage")...),
+			expectedCode: 4,
+			expectedMsg:  "ErrorMessage",
+			expectErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, msg, err := chunk.ParseError(tt.payload)
+			if (err != nil) != tt.expectErr {
+				t.Fatalf("ParseError() error = %v, expectErr %v", err, tt.expectErr)
+			}
+			if !tt.expectErr {
+				if code != tt.expectedCode {
+					t.Errorf("ParseError() code = %v, expected %v", code, tt.expectedCode)
+				}
+				if msg != tt.expectedMsg {
+					t.Errorf("ParseError() msg = %q, expected %q", msg, tt.expectedMsg)
+				}
+			}
+		})
+	}
+}

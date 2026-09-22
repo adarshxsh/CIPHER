@@ -2,6 +2,7 @@ package transport
 
 import (
 	"cipher/internal/discovery"
+	"cipher/internal/ratelimit"
 	"context"
 
 	"fmt"
@@ -79,6 +80,13 @@ func (t *holePunchTracer) Trace(evt *holepunch.Event) {
 }
 
 func setupNetworkMonitor(h host.Host) {
+	setupNetworkMonitorWithLimiter(h, ratelimit.DefaultPeerRateLimiter())
+}
+
+func setupNetworkMonitorWithLimiter(h host.Host, limiter *ratelimit.PeerRateLimiter) {
+	if limiter == nil {
+		limiter = ratelimit.DefaultPeerRateLimiter()
+	}
 	// Subscribe to reachability changes
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
 	if err == nil {
@@ -93,12 +101,20 @@ func setupNetworkMonitor(h host.Host) {
 	// Subscribe to connection lifecycle events
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, c network.Conn) {
-			log.Printf("[Network] Connected to %s", c.RemotePeer())
-			logActiveConnections(n, c.RemotePeer())
+			p := c.RemotePeer()
+			if !limiter.Allow(p) {
+				return
+			}
+			log.Printf("[Network] Connected to %s", p)
+			logActiveConnections(n, p)
 		},
 		DisconnectedF: func(n network.Network, c network.Conn) {
-			log.Printf("[Network] Disconnected from %s", c.RemotePeer())
-			logActiveConnections(n, c.RemotePeer())
+			p := c.RemotePeer()
+			if !limiter.Allow(p) {
+				return
+			}
+			log.Printf("[Network] Disconnected from %s", p)
+			logActiveConnections(n, p)
 		},
 	})
 }
