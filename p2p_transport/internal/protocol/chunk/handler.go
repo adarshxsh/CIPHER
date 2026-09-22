@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -44,10 +45,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 
-		if msg.Version != CurrentMessageVersion {
-			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+		if err := ValidateMessage(msg); err != nil {
+			log.Printf("[Chunk Protocol] Invalid message from %s: %v", s.Conn().RemotePeer(), err)
+			if errors.Is(err, ErrInvalidMessageVersion) || errors.Is(err, ErrInvalidMessageType) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version or type"))
+			} else {
+				WriteMessage(s, BuildError(ErrBadRequest, "invalid payload"))
+			}
 			return
 		}
 
