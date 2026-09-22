@@ -4,12 +4,31 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
 	"cipher/internal/content/core"
+)
+
+const (
+	// MaxChunkResponseSize is the upper bound on chunk payload size (2 MiB frame minus 3 bytes frame header).
+	MaxChunkResponseSize = 2097149
+
+	// MaxCiphertextSize is the maximum payload size for a standard encrypted chunk.
+	MaxCiphertextSize = 32796
+
+	// MaxManifestSize is the maximum size allowed for manifest payloads.
+	MaxManifestSize = 2097149
+)
+
+var (
+	ErrInvalidChunkSize   = errors.New("invalid chunk payload size")
+	ErrChunkTooLarge      = errors.New("chunk payload size exceeds limit")
+	ErrHeaderSizeMismatch = errors.New("chunk header payload size mismatch")
+	ErrManifestTooLarge   = errors.New("manifest size exceeds protocol limit")
 )
 
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
@@ -94,22 +113,53 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+	fileSize := info.Size()
+
 	chunk := &core.Chunk{}
+	headerSize := int64(binary.Size(&chunk.Header))
+
+	if fileSize < headerSize {
+		return nil, fmt.Errorf("chunk file size %d smaller than header size %d: %w", fileSize, headerSize, ErrInvalidChunkSize)
+	}
+
+	payloadSize := fileSize - headerSize
+
+	// Pre-allocation validation against protocol bounds
+	if payloadSize > MaxChunkResponseSize {
+		return nil, fmt.Errorf("chunk payload size %d exceeds MaxChunkResponseSize (%d): %w", payloadSize, MaxChunkResponseSize, ErrChunkTooLarge)
+	}
+
+	// Read Header
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	// Validate payload size against chunk header metadata (CipherSize/PlainSize)
+	var expectedPayloadSize int64
+	if chunk.Header.CipherSize > 0 {
+		expectedPayloadSize = int64(chunk.Header.CipherSize)
+	} else if chunk.Header.PlainSize > 0 {
+		expectedPayloadSize = int64(chunk.Header.PlainSize)
+	}
+
+	if expectedPayloadSize > 0 && payloadSize != expectedPayloadSize {
+		return nil, fmt.Errorf("payload size %d does not match header metadata size %d: %w", payloadSize, expectedPayloadSize, ErrHeaderSizeMismatch)
+	}
+	if expectedPayloadSize == 0 && payloadSize > 0 {
+		return nil, fmt.Errorf("payload size is %d but header metadata specifies size 0: %w", payloadSize, ErrHeaderSizeMismatch)
+	}
+
+	// Exact single byte slice allocation
+	data := make([]byte, payloadSize)
+	limitReader := io.LimitReader(f, payloadSize)
+	if _, err := io.ReadFull(limitReader, data); err != nil {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
 	chunk.Data = data
 
 	return chunk, nil
@@ -122,10 +172,29 @@ func (s *FSStorage) manifestPath(id core.ContentID) string {
 
 func (s *FSStorage) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {
 	path := s.manifestPath(id)
-	data, err := os.ReadFile(path)
+
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("manifest not found: %w", err)
 	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat manifest file: %w", err)
+	}
+
+	fileSize := info.Size()
+	if fileSize > MaxManifestSize {
+		return nil, fmt.Errorf("manifest size %d exceeds MaxManifestSize (%d): %w", fileSize, MaxManifestSize, ErrManifestTooLarge)
+	}
+
+	data := make([]byte, fileSize)
+	limitReader := io.LimitReader(f, MaxManifestSize)
+	if _, err := io.ReadFull(limitReader, data); err != nil {
+		return nil, fmt.Errorf("failed to read manifest: %w", err)
+	}
+
 	return data, nil
 }
 
