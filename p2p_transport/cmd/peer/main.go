@@ -60,6 +60,11 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+
+	minConns := flag.Int("min-conns", 100, "Minimum connection watermark for ConnectionManager")
+	maxConns := flag.Int("max-conns", 400, "Maximum connection watermark for ConnectionManager")
+	memLimitMB := flag.Int("memory-limit-mb", 0, "Memory limit in MB for ResourceManager (0 for autoconfigured caps)")
+
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -77,7 +82,11 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay,
+		transport.WithMinConns(*minConns),
+		transport.WithMaxConns(*maxConns),
+		transport.WithMemoryLimitMB(*memLimitMB),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
