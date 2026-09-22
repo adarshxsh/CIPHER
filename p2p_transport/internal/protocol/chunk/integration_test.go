@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/p2p/net/mock"
@@ -129,5 +130,143 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	}
 	if err.Error() != "remote error (code 1): manifest not found" {
 		t.Errorf("Unexpected error msg: %v", err)
+	}
+}
+
+func TestChunkProtocol_ReadDeadlineTimeout(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+
+	// Set short read timeout of 50ms
+	chunk.NewStreamHandler(h1, eng1, chunk.WithReadTimeout(50*time.Millisecond))
+
+	t2 := transport.NewTransport(h2)
+	s, err := t2.OpenStream(context.Background(), h1.ID(), "/cipher/chunk/1.0.0")
+	if err != nil {
+		t.Fatalf("Failed to open stream: %v", err)
+	}
+	defer s.Close()
+
+	// Wait past the deadline
+	time.Sleep(100 * time.Millisecond)
+
+	// Attempting to read should fail because stream was closed by server after read deadline
+	_, err = chunk.ReadMessage(s)
+	if err == nil {
+		t.Fatalf("Expected error when reading from stream that timed out")
+	}
+}
+
+func TestChunkProtocol_TransactionLimitExceeded(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	ctx := context.Background()
+
+	data := []byte("test content")
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+	mBytes, _ := m.Serialize()
+	eng1.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
+
+	// Limit server to 1 transaction per stream
+	chunk.NewStreamHandler(h1, eng1, chunk.WithMaxTransactions(1))
+
+	t2 := transport.NewTransport(h2)
+	s, err := t2.OpenStream(ctx, h1.ID(), "/cipher/chunk/1.0.0")
+	if err != nil {
+		t.Fatalf("Failed to open stream: %v", err)
+	}
+	defer s.Close()
+
+	// Transaction 1: REQUEST_MANIFEST
+	req1 := chunk.BuildRequestManifest(m.Descriptor.ID)
+	if err := chunk.WriteMessage(s, req1); err != nil {
+		t.Fatalf("Failed to write first request: %v", err)
+	}
+
+	resp1, err := chunk.ReadMessage(s)
+	if err != nil {
+		t.Fatalf("Failed to read first response: %v", err)
+	}
+	if resp1.Type != chunk.MsgManifest {
+		t.Fatalf("Expected MsgManifest, got %d", resp1.Type)
+	}
+
+	// Transaction 2 on same stream should fail with limit error
+	req2 := chunk.BuildRequestManifest(m.Descriptor.ID)
+	if err := chunk.WriteMessage(s, req2); err != nil {
+		// Writing might fail if stream was already closed
+		return
+	}
+
+	resp2, err := chunk.ReadMessage(s)
+	if err != nil {
+		// Closed stream error is also valid enforcement
+		return
+	}
+	if resp2.Type == chunk.MsgError {
+		code, msgStr, _ := chunk.ParseError(resp2.Payload)
+		if code != chunk.ErrPermissionDenied {
+			t.Errorf("Expected ErrPermissionDenied (4), got %d (%s)", code, msgStr)
+		}
+	} else {
+		t.Errorf("Expected MsgError for transaction limit, got type %d", resp2.Type)
+	}
+}
+
+func TestChunkProtocol_MessageLimitExceeded(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	ctx := context.Background()
+
+	data := []byte("test content")
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+	mBytes, _ := m.Serialize()
+	eng1.PutManifestBytes(ctx, m.Descriptor.ID, mBytes)
+
+	// Allow unlimited transactions but max 1 message
+	chunk.NewStreamHandler(h1, eng1, chunk.WithMaxTransactions(100), chunk.WithMaxMessages(1))
+
+	t2 := transport.NewTransport(h2)
+	s, err := t2.OpenStream(ctx, h1.ID(), "/cipher/chunk/1.0.0")
+	if err != nil {
+		t.Fatalf("Failed to open stream: %v", err)
+	}
+	defer s.Close()
+
+	// Message 1: valid
+	req1 := chunk.BuildRequestManifest(m.Descriptor.ID)
+	if err := chunk.WriteMessage(s, req1); err != nil {
+		t.Fatalf("Failed to write first request: %v", err)
+	}
+	resp1, err := chunk.ReadMessage(s)
+	if err != nil {
+		t.Fatalf("Failed to read first response: %v", err)
+	}
+	if resp1.Type != chunk.MsgManifest {
+		t.Fatalf("Expected MsgManifest, got %d", resp1.Type)
+	}
+
+	// Message 2: exceeds max 1 message
+	req2 := chunk.BuildRequestManifest(m.Descriptor.ID)
+	if err := chunk.WriteMessage(s, req2); err != nil {
+		return
+	}
+	resp2, err := chunk.ReadMessage(s)
+	if err != nil {
+		return
+	}
+	if resp2.Type == chunk.MsgError {
+		code, msgStr, _ := chunk.ParseError(resp2.Payload)
+		if code != chunk.ErrPermissionDenied {
+			t.Errorf("Expected ErrPermissionDenied (4), got %d (%s)", code, msgStr)
+		}
+	} else {
+		t.Errorf("Expected MsgError for message limit, got type %d", resp2.Type)
 	}
 }
