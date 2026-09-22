@@ -1,5 +1,16 @@
 package chunk
 
+import (
+	"time"
+)
+
+const (
+	// Default protocol timeouts for chunk protocol streams.
+	ReadTimeout  = 15 * time.Second
+	WriteTimeout = 15 * time.Second
+	AckTimeout   = 30 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1

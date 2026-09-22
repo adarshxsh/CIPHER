@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -21,6 +22,16 @@ type Client struct {
 	stream network.Stream
 	engine *engine.ContentEngine
 	digest core.Digest
+}
+
+func getDeadline(ctx context.Context, defaultTimeout time.Duration) time.Time {
+	defaultDeadline := time.Now().Add(defaultTimeout)
+	if deadline, ok := ctx.Deadline(); ok {
+		if deadline.Before(defaultDeadline) {
+			return deadline
+		}
+	}
+	return defaultDeadline
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
@@ -42,13 +53,37 @@ func (c *Client) Close() error {
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	deadline := getDeadline(ctx, WriteTimeout+ReadTimeout)
+	if err := c.stream.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("failed to set stream deadline: %w", err)
+	}
+	defer c.stream.SetDeadline(time.Time{})
+
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, func() {
+			_ = c.stream.SetDeadline(time.Now())
+			_ = c.stream.Reset()
+		})
+		defer stop()
+	}
+
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -89,13 +124,37 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	deadline := getDeadline(ctx, WriteTimeout+ReadTimeout+WriteTimeout)
+	if err := c.stream.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("failed to set stream deadline: %w", err)
+	}
+	defer c.stream.SetDeadline(time.Time{})
+
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, func() {
+			_ = c.stream.SetDeadline(time.Now())
+			_ = c.stream.Reset()
+		})
+		defer stop()
+	}
+
 	req := BuildRequestChunk(chunkID)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
