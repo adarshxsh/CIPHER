@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +44,7 @@ func main() {
 	seed := flag.Bool("seed", true, "Keep publisher running to seed chunks over /cipher/chunk/1.0.0")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	chunkSizeKB := flag.Int("chunk-size", 32, "Chunk size in KB (default: 32)")
+	keyFile := flag.String("key-file", "", "Path to export the symmetric key file with 0600 permissions (optional)")
 	providersList := flag.String("providers", "", "Comma-separated multiaddresses of target providers to push content to")
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
@@ -110,7 +113,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -137,6 +140,20 @@ func main() {
 	}
 	if err := eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes); err != nil {
 		log.Fatalf("Failed to store manifest: %v", err)
+	}
+
+	if *keyFile != "" {
+		key, err := keys.Get(ctx, m.Descriptor.ID)
+		if err != nil {
+			log.Fatalf("Failed to retrieve key for export: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(*keyFile), 0755); err != nil {
+			log.Fatalf("Failed to create key file directory: %v", err)
+		}
+		if err := os.WriteFile(*keyFile, []byte(hex.EncodeToString(key)+"\n"), 0600); err != nil {
+			log.Fatalf("Failed to write key to file: %v", err)
+		}
+		log.Printf("[✓] Decryption key exported to %s with 0600 permissions", *keyFile)
 	}
 
 	// 6. Execute Remote Push if requested
@@ -234,12 +251,10 @@ func main() {
 		}
 	}
 
-	key, _ := keys.Get(ctx, m.Descriptor.ID)
-
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Println("Decryption Key: [STORED IN KEYSTORE]")
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
