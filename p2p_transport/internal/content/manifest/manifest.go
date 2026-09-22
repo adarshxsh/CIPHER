@@ -18,11 +18,16 @@ type ContentDescriptor struct {
 	Size uint64         `json:"size"`
 }
 
+const (
+	AlgorithmXChaCha20Poly1305 = "XChaCha20-Poly1305"
+	DefaultChunkNonceSize      = 24
+)
+
 type CryptoDescriptor struct {
-	Algorithm      string `json:"algorithm"`
+	Algorithm      string `json:"algorithm"`        // "XChaCha20-Poly1305"
 	Version        uint16 `json:"version"`
-	ChunkNonceSize uint16 `json:"chunk_nonce_size"`
-	KeyID          string `json:"key_id"` // Reference to the key
+	ChunkNonceSize uint16 `json:"chunk_nonce_size"` // 24
+	KeyID          string `json:"key_id"`           // Reference to the key
 }
 
 // Manifest represents the capability to understand the immutable content.

@@ -9,8 +9,8 @@ const (
 	// StandardChunkSize is the normal plaintext chunk size.
 	StandardChunkSize = 32 * 1024 // 32 KiB
 
-	// ChaCha20NonceSize is the nonce size used by standard ChaCha20-Poly1305.
-	ChaCha20NonceSize = 12
+	// ChaCha20NonceSize is the nonce size used by XChaCha20-Poly1305.
+	ChaCha20NonceSize = 24
 
 	// Poly1305TagSize is the authentication-tag size.
 	Poly1305TagSize = 16
