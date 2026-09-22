@@ -147,18 +147,19 @@ func TestChecksumMismatch(t *testing.T) {
 
 	defer os.RemoveAll("downloads")
 
-	errChan := make(chan error, 2)
+	sendErrChan := make(chan error, 1)
+	recvErrChan := make(chan error, 1)
 
 	go func() {
-		errChan <- Send(senderStream, srcPath)
+		sendErrChan <- Send(senderStream, srcPath)
 	}()
 
 	go func() {
-		errChan <- Receive(receiverStream)
+		recvErrChan <- Receive(receiverStream)
 	}()
 
-	sendErr := <-errChan
-	recvErr := <-errChan
+	sendErr := <-sendErrChan
+	recvErr := <-recvErrChan
 
 	if sendErr != nil {
 		t.Fatalf("Sender failed unexpectedly: %v", sendErr)
