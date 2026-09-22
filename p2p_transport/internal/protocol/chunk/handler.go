@@ -31,6 +31,9 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
+	if scope := s.Scope(); scope != nil {
+		_ = scope.SetService("cipher-chunk")
+	}
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
 	for {
