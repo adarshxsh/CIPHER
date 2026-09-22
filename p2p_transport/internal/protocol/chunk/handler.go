@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"math/rand"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -12,8 +11,6 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
-
-var TestCorruptProb float64
 
 type StreamHandler struct {
 	host   host.Host
@@ -25,11 +22,11 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 		host:   h,
 		engine: eng,
 	}
-	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.HandleStream)
 	return handler
 }
 
-func (h *StreamHandler) handleStream(s network.Stream) {
+func (h *StreamHandler) HandleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
@@ -96,12 +93,6 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	if err != nil {
 		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
 		return
-	}
-
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
-		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
 	}
 
 	resp, err := BuildChunk(chunkData)
