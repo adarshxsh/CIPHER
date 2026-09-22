@@ -131,11 +131,11 @@ func main() {
 
 	// 7. Start Control-Plane DHT Announcements
 	if *allowPush {
-		discovery.StartStorageProviderHeartbeat(ctx, kdht, 10*time.Minute)
+		discovery.StartStorageProviderHeartbeat(ctx, kdht, priv, 10*time.Minute)
 	}
 
 	interval := time.Duration(*republishHours) * time.Hour
-	discovery.StartRepublisher(ctx, kdht, store, interval)
+	discovery.StartRepublisher(ctx, kdht, priv, store, interval)
 
 	manifests, _ := store.ListManifests(ctx)
 
