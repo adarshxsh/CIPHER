@@ -1,8 +1,7 @@
 package crypto
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
+	"crypto/rand"
 	"errors"
 	"fmt"
 
@@ -10,34 +9,25 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// ChaCha20Encryptor implements core.Encryptor using standard ChaCha20-Poly1305.
-// It uses a deterministic 12-byte nonce derived from the chunk index:
-// nonce = first_12_bytes(SHA-256("cipher-nonce" || uint64(index)))
+// ChaCha20Encryptor implements core.Encryptor using XChaCha20-Poly1305.
+// It generates a 24-byte cryptographically secure random nonce via crypto/rand for every chunk encryption.
 type ChaCha20Encryptor struct{}
 
 func NewChaCha20Encryptor() *ChaCha20Encryptor {
 	return &ChaCha20Encryptor{}
 }
 
-func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
-	h := sha256.New()
-	h.Write([]byte("cipher-nonce"))
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(index))
-	h.Write(b)
-	sum := h.Sum(nil)
-	nonce := make([]byte, 12)
-	copy(nonce, sum[:12])
-	return nonce
-}
-
 func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.New(key)
+	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	nonce := e.generateNonce(chunk.Header.Index)
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
+	if _, err := rand.Read(nonce); err != nil {
+		return fmt.Errorf("failed to generate random nonce: %w", err)
+	}
+
 	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
@@ -48,7 +38,11 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 }
 
 func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
-	aead, err := chacha20poly1305.New(key)
+	if len(chunk.Header.Nonce[:]) != chacha20poly1305.NonceSizeX {
+		return errors.New("invalid nonce length for XChaCha20-Poly1305")
+	}
+
+	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
