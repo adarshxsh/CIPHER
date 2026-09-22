@@ -42,7 +42,7 @@ type Encryptor interface {
 }
 
 type KeyProvider interface {
-	Get(ctx context.Context, id ContentID) ([]byte, error)
+	Get(ctx context.Context, id ContentID) (*KeyHandle, error)
 	Put(ctx context.Context, id ContentID, key []byte) error
 	Delete(ctx context.Context, id ContentID) error
 }
