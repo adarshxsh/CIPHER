@@ -2,9 +2,15 @@ package manifest
 
 import (
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+
 	"cipher/internal/content/core"
 )
+
+var ErrInvalidManifest = errors.New("invalid manifest")
+
+const MaxManifestSize = 2*1024*1024 - 3
 
 type ContentType string
 
@@ -47,9 +53,12 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if len(data) == 0 || len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("%w: manifest data length %d violates bounds (max=%d)", ErrInvalidManifest, len(data), MaxManifestSize)
+	}
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
 	return &m, nil
 }
