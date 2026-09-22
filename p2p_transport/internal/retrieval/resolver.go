@@ -44,7 +44,7 @@ func ResolveManifest(
 
 		if err != nil {
 			log.Printf(
-				"[DHT] Failed to resolve manifest from provider %s: %v",
+				"[DHT] Rejected unauthenticated or invalid provider %s: %v",
 				provider,
 				err,
 			)
@@ -55,7 +55,7 @@ func ResolveManifest(
 		m, err := manifest.Deserialize(manifestData)
 		if err != nil {
 			log.Printf(
-				"[DHT] Provider %s returned invalid manifest: %v",
+				"[DHT] Provider %s returned invalid manifest or publisher signature: %v",
 				provider,
 				err,
 			)
