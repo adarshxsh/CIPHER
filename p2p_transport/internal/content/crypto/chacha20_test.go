@@ -23,7 +23,8 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 
 	// Encrypt
-	if err := enc.EncryptChunk(key, chunk); err != nil {
+	keyHandle := core.NewKeyHandle(key)
+	if err := enc.EncryptChunk(keyHandle, chunk); err != nil {
 		t.Fatalf("failed to encrypt: %v", err)
 	}
 
@@ -36,7 +37,7 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 
 	// Decrypt
-	if err := enc.DecryptChunk(key, chunk); err != nil {
+	if err := enc.DecryptChunk(keyHandle, chunk); err != nil {
 		t.Fatalf("failed to decrypt: %v", err)
 	}
 
@@ -61,12 +62,13 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 		Data: []byte("hello"),
 	}
 
-	enc.EncryptChunk(key, chunk)
+	keyHandle := core.NewKeyHandle(key)
+	enc.EncryptChunk(keyHandle, chunk)
 
 	// Corrupt
 	chunk.Data[0] ^= 0xFF
 
-	err := enc.DecryptChunk(key, chunk)
+	err := enc.DecryptChunk(keyHandle, chunk)
 	if err == nil {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
 	}
