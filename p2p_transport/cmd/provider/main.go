@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"strings"
+
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
@@ -18,6 +20,7 @@ import (
 	"cipher/internal/discovery"
 	"cipher/internal/identity"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/protocol/push"
 	"cipher/internal/transport"
 
 	golog "github.com/ipfs/go-log/v2"
@@ -38,6 +41,9 @@ func main() {
 	republishHours := flag.Int("republish-interval", 12, "Interval in hours for DHT republisher")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending corrupt chunk for testing")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
+	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
+	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
 
 	flag.Parse()
 
@@ -111,7 +117,23 @@ func main() {
 	// 5. Register Data-Plane Stream Handler (/cipher/chunk/1.0.0)
 	chunk.NewStreamHandler(h, eng)
 
-	// 6. Start Control-Plane DHT Republisher for all local manifests
+	// 6. Register Ingestion Stream Handler (/cipher/push/1.0.0)
+	var allowedPublishersList []peer.ID
+	if *pushAllowedPublishers != "" {
+		for _, pidStr := range strings.Split(*pushAllowedPublishers, ",") {
+			pidStr = strings.TrimSpace(pidStr)
+			if pid, err := peer.Decode(pidStr); err == nil {
+				allowedPublishersList = append(allowedPublishersList, pid)
+			}
+		}
+	}
+	push.NewStreamHandler(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList)
+
+	// 7. Start Control-Plane DHT Announcements
+	if *allowPush {
+		discovery.StartStorageProviderHeartbeat(ctx, kdht, 10*time.Minute)
+	}
+
 	interval := time.Duration(*republishHours) * time.Hour
 	discovery.StartRepublisher(ctx, kdht, store, interval)
 

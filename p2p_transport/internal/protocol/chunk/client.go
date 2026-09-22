@@ -14,6 +14,8 @@ import (
 	"cipher/internal/transport"
 )
 
+var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
+
 type Client struct {
 	transport *transport.Transport
 	peerID    peer.ID
@@ -142,6 +144,9 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
+		if code == ErrChunkNotFound {
+			return nil, ErrRemoteChunkNotFound
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
