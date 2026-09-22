@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +128,45 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_DetectsSpoofing(t *testing.T) {
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 100,
+		},
+		ChunkIDs: []core.ChunkID{{0x01}},
+	}
+	correctID, err := m.DeriveContentID()
+	if err != nil {
+		t.Fatalf("DeriveContentID failed: %v", err)
+	}
+	m.Descriptor.ID = correctID
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	// 1. Valid manifest matching requested ContentID passes
+	msgValid := chunk.BuildManifest(correctID, mBytes)
+	if err := chunk.ValidateManifestForRequest(correctID, msgValid.Payload); err != nil {
+		t.Fatalf("valid manifest should pass: %v", err)
+	}
+
+	// 2. Spoofed manifest: payload header claims correctID, but manifest body contains different content or wrong Descriptor.ID
+	spoofedManifest := *m
+	spoofedManifest.ChunkIDs = []core.ChunkID{{0xFF}} // Tampered chunks!
+	// Even if descriptor ID is set to correctID, derived ID won't match!
+	spoofedManifest.Descriptor.ID = correctID
+	spoofedBytes, _ := spoofedManifest.Serialize()
+
+	msgSpoofed := chunk.BuildManifest(correctID, spoofedBytes)
+	err = chunk.ValidateManifestForRequest(correctID, msgSpoofed.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected ErrContentMismatch for spoofed manifest content, got %v", err)
 	}
 }

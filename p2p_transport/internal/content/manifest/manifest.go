@@ -1,8 +1,9 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+
 	"cipher/internal/content/core"
 )
 
@@ -53,3 +54,28 @@ func Deserialize(data []byte) (*Manifest, error) {
 	}
 	return &m, nil
 }
+
+// DeriveContentID computes the deterministic SHA-256 ContentID for the manifest.
+// The descriptor's ID field is zeroed out during hashing to avoid circular dependency.
+func (m *Manifest) DeriveContentID() (core.ContentID, error) {
+	temp := *m
+	temp.Descriptor.ID = core.ContentID{}
+	data, err := temp.Serialize()
+	if err != nil {
+		return core.ContentID{}, err
+	}
+	hash := sha256.Sum256(data)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	return id, nil
+}
+
+// VerifyIntegrity checks if the manifest's Descriptor.ID matches its derived ContentID.
+func (m *Manifest) VerifyIntegrity() bool {
+	derived, err := m.DeriveContentID()
+	if err != nil {
+		return false
+	}
+	return derived == m.Descriptor.ID
+}
+
