@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -12,15 +13,18 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/reputation"
 	"cipher/internal/transport"
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream  network.Stream
+	engine  *engine.ContentEngine
+	digest  core.Digest
+	tracker *reputation.PeerTracker
+	host    host.Host
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
@@ -29,11 +33,34 @@ func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng 
 	if err != nil {
 		return nil, err
 	}
+	var tr *reputation.PeerTracker
+	var h host.Host
+	if t != nil {
+		tr = t.Tracker()
+		h = t.Host()
+	}
+	if tr == nil {
+		tr = reputation.Default()
+	}
 	return &Client{
-		stream: stream,
-		engine: eng,
-		digest: verifier.NewSHA256Digest(),
+		stream:  stream,
+		engine:  eng,
+		digest:  verifier.NewSHA256Digest(),
+		tracker: tr,
+		host:    h,
 	}, nil
+}
+
+func (c *Client) SetTracker(tracker *reputation.PeerTracker) {
+	c.tracker = tracker
+}
+
+func (c *Client) SetHost(h host.Host) {
+	c.host = h
+}
+
+func (c *Client) Tracker() *reputation.PeerTracker {
+	return c.tracker
 }
 
 func (c *Client) Close() error {
@@ -119,8 +146,22 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	// Verify Hash matches ChunkID
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
+		remotePeer := c.stream.Conn().RemotePeer()
+		log.Printf("[Chunk Protocol] Hash verification failure for peer %s on chunk %x", remotePeer, chunkID)
+		if c.tracker != nil {
+			score, blacklisted := c.tracker.RecordHashFailure(remotePeer)
+			log.Printf("[Chunk Protocol] Penalized peer %s: score=%d blacklisted=%v", remotePeer, score, blacklisted)
+			if blacklisted {
+				if c.host != nil {
+					_ = c.tracker.DisconnectAndBlacklist(c.host, remotePeer)
+				} else {
+					c.tracker.Blacklist(remotePeer)
+				}
+			}
+		}
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
+		_ = WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 

@@ -11,33 +11,61 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	"cipher/internal/reputation"
 )
 
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host    host.Host
+	engine  *engine.ContentEngine
+	tracker *reputation.PeerTracker
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+	return NewStreamHandlerWithTracker(h, eng, reputation.Default())
+}
+
+func NewStreamHandlerWithTracker(h host.Host, eng *engine.ContentEngine, tracker *reputation.PeerTracker) *StreamHandler {
+	if tracker == nil {
+		tracker = reputation.Default()
+	}
 	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+		host:    h,
+		engine:  eng,
+		tracker: tracker,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
 }
 
+func (h *StreamHandler) Tracker() *reputation.PeerTracker {
+	return h.tracker
+}
+
+func (h *StreamHandler) SetTracker(tracker *reputation.PeerTracker) {
+	h.tracker = tracker
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	remotePeer := s.Conn().RemotePeer()
+	log.Printf("[Chunk Protocol] New stream from %s", remotePeer)
+
+	if h.tracker != nil && h.tracker.IsBlacklisted(remotePeer) {
+		log.Printf("[Chunk Protocol] Rejecting stream from blacklisted peer %s", remotePeer)
+		_ = s.Reset()
+		if h.host != nil {
+			_ = h.host.Network().ClosePeer(remotePeer)
+		}
+		return
+	}
 
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", remotePeer)
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
@@ -48,6 +76,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			if h.tracker != nil {
+				_, blacklisted := h.tracker.RecordError(remotePeer)
+				if blacklisted {
+					_ = h.tracker.DisconnectAndBlacklist(h.host, remotePeer)
+					_ = s.Reset()
+				}
+			}
 			return
 		}
 
@@ -59,6 +94,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			if h.tracker != nil {
+				_, blacklisted := h.tracker.RecordError(remotePeer)
+				if blacklisted {
+					_ = h.tracker.DisconnectAndBlacklist(h.host, remotePeer)
+					_ = s.Reset()
+				}
+			}
 		}
 	}
 }
@@ -124,6 +166,15 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		remotePeer := s.Conn().RemotePeer()
+		if code == ErrIntegrityMismatch && h.tracker != nil {
+			_, blacklisted := h.tracker.RecordHashFailure(remotePeer)
+			if blacklisted {
+				log.Printf("[Chunk Protocol] Peer %s blacklisted via error ACK. Disconnecting.", remotePeer)
+				_ = h.tracker.DisconnectAndBlacklist(h.host, remotePeer)
+				_ = s.Reset()
+			}
+		}
 		return
 	}
 	if ackMsg.Type != MsgAck {
