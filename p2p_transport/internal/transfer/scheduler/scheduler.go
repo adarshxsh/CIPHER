@@ -10,6 +10,7 @@ import (
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/reputation"
 	"cipher/internal/transport"
 )
 
@@ -22,6 +23,7 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Reputation  *reputation.PeerReputationManager
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -39,15 +41,22 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
+		if s.Reputation != nil && s.Reputation.IsBanned(source.PeerID) {
+			log.Printf("[Scheduler] Skipping banned peer %s", source.PeerID)
+			continue
+		}
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
 		}
+		if s.Reputation != nil {
+			client.SetReputationManager(s.Reputation)
+		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Reputation)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
