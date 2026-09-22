@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 
 	"cipher/internal/content/core"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	DefaultPageLimit = 50
+	MaxPageLimit     = 1000
 )
 
 type SessionStatus string
@@ -49,18 +56,25 @@ type SessionManager interface {
 	Close(id core.ContentID) error
 	Delete(id core.ContentID) error
 	List() ([]*TransferSession, error)
+	ListSessions(offset, limit int) ([]*TransferSession, error)
+	ListSessionsPaginated(offset, limit int) ([]*TransferSession, error)
 }
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
 type FileSessionManager struct {
-	dir string
+	dir          string
+	mu           sync.RWMutex
+	modTimeCache map[string]time.Time
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	return &FileSessionManager{
+		dir:          dir,
+		modTimeCache: make(map[string]time.Time),
+	}, nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -95,7 +109,13 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.modTimeCache[filepath.Base(path)] = session.UpdatedAt
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *FileSessionManager) Close(id core.ContentID) error {
@@ -109,10 +129,36 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	m.mu.Lock()
+	delete(m.modTimeCache, filepath.Base(path))
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *FileSessionManager) List() ([]*TransferSession, error) {
+	return m.ListSessionsPaginated(0, DefaultPageLimit)
+}
+
+func (m *FileSessionManager) ListSessions(offset, limit int) ([]*TransferSession, error) {
+	return m.ListSessionsPaginated(offset, limit)
+}
+
+type fileModTime struct {
+	name    string
+	modTime time.Time
+}
+
+func (m *FileSessionManager) ListSessionsPaginated(offset, limit int) ([]*TransferSession, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = DefaultPageLimit
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -120,18 +166,62 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
-	var sessions []*TransferSession
+
+	var files []fileModTime
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
+			name := entry.Name()
+			m.mu.RLock()
+			cachedTime, exists := m.modTimeCache[name]
+			m.mu.RUnlock()
+
+			if exists {
+				files = append(files, fileModTime{name: name, modTime: cachedTime})
+			} else {
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+				mt := info.ModTime()
+				m.mu.Lock()
+				m.modTimeCache[name] = mt
+				m.mu.Unlock()
+				files = append(files, fileModTime{name: name, modTime: mt})
 			}
 		}
 	}
+
+	// Sort by modification time descending (most recent first)
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].modTime.Equal(files[j].modTime) {
+			return files[i].name < files[j].name
+		}
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	if offset >= len(files) {
+		return []*TransferSession{}, nil
+	}
+
+	end := offset + limit
+	if end > len(files) || end < 0 {
+		end = len(files)
+	}
+
+	pageFiles := files[offset:end]
+	sessions := make([]*TransferSession, 0, len(pageFiles))
+
+	for _, f := range pageFiles {
+		b, err := os.ReadFile(filepath.Join(m.dir, f.name))
+		if err != nil {
+			continue
+		}
+		var s TransferSession
+		if err := json.Unmarshal(b, &s); err == nil {
+			sessions = append(sessions, &s)
+		}
+	}
+
 	return sessions, nil
 }
+
