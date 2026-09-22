@@ -2,10 +2,12 @@ package transport
 
 import (
 	"cipher/internal/discovery"
+	"cipher/internal/protocol"
 	"context"
 
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -14,8 +16,19 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
+)
+
+const (
+	// DefaultLowWatermark is the minimum number of connections maintained by ConnManager.
+	DefaultLowWatermark = 50
+	// DefaultHighWatermark is the maximum number of connections allowed before pruning.
+	DefaultHighWatermark = 100
+	// DefaultGracePeriod allows new connections (e.g. hole-punching) to complete before pruning.
+	DefaultGracePeriod = 1 * time.Minute
 )
 
 // NewNode creates a new libp2p host.
@@ -28,9 +41,57 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	cm, err := connmgr.NewConnManager(
+		DefaultLowWatermark,
+		DefaultHighWatermark,
+		connmgr.WithGracePeriod(DefaultGracePeriod),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
+	scalingLimits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+	// Custom scope limits: System (512MB), Peer (16MB), Protocol (64MB)
+	scalingLimits.SystemBaseLimit.Memory = 512 << 20
+	scalingLimits.SystemLimitIncrease.Memory = 0
+
+	scalingLimits.PeerBaseLimit.Memory = 16 << 20
+	scalingLimits.PeerLimitIncrease.Memory = 0
+
+	scalingLimits.ProtocolBaseLimit.Memory = 64 << 20
+	scalingLimits.ProtocolLimitIncrease.Memory = 0
+
+	// Stream scope limits per peer for cipher protocols (max 8 streams per peer)
+	chunkProtocolPeerLimit := rcmgr.BaseLimit{
+		StreamsInbound:  8,
+		StreamsOutbound: 8,
+		Streams:         8,
+		Memory:          16 << 20,
+	}
+	scalingLimits.AddProtocolPeerLimit(
+		protocol.ChunkTransportProtocolID,
+		chunkProtocolPeerLimit,
+		rcmgr.BaseLimitIncrease{},
+	)
+	scalingLimits.AddProtocolPeerLimit(
+		protocol.FileTransferProtocolID,
+		chunkProtocolPeerLimit,
+		rcmgr.BaseLimitIncrease{},
+	)
+
+	limiter := rcmgr.NewFixedLimiter(scalingLimits.Scale(0, 0))
+	rm, err := rcmgr.NewResourceManager(limiter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(cm),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
