@@ -62,3 +62,26 @@ func TestDecodeFrame_RejectsOversizedPayloadBeforeAllocation(t *testing.T) {
 		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
+
+func TestReadMessage_RejectsOversizedManifestFrame(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Frame size for MsgManifest payload that exceeds MaxManifestSize (256 KiB)
+	declaredPayloadSize := uint32(chunk.MaxManifestSize + 1)
+	frameSize := declaredPayloadSize + 3
+
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgManifest)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+}
