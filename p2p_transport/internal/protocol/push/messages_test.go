@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +127,24 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestReadPushMessage_OversizedControlMessage(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(2 * 1024 * 1024) // 2MB frame claimed for control ack
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, CurrentPushVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(MsgPushChunkAck)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := ReadPushMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected ReadPushMessage to reject oversized MsgPushChunkAck frame, got nil error")
 	}
 }
