@@ -28,7 +28,7 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
-	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
+	if (header.Version != ProtocolVersion1 && header.Version != ProtocolVersion2) || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
@@ -75,10 +75,20 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
+	var expectedChecksum [32]byte
+	if header.Version == ProtocolVersion2 {
+		if _, err := io.ReadFull(s, expectedChecksum[:]); err != nil {
+			return fmt.Errorf("failed to read trailing checksum footer: %w", err)
+		}
+	} else {
+		expectedChecksum = header.Checksum
+	}
+
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	if !bytes.Equal(computedChecksum[:], expectedChecksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", expectedChecksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", expectedChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
