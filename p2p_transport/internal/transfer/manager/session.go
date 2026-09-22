@@ -57,7 +57,10 @@ type FileSessionManager struct {
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
 		return nil, err
 	}
 	return &FileSessionManager{dir: dir}, nil
@@ -67,13 +70,28 @@ func (m *FileSessionManager) getPath(id core.ContentID) string {
 	return filepath.Join(m.dir, fmt.Sprintf("%x.json", id))
 }
 
+func verifyFilePermissions(info os.FileInfo) error {
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		return fmt.Errorf("insecure session file permissions: %o (expected 0600)", perm)
+	}
+	return nil
+}
+
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No session found
 		}
+		return nil, err
+	}
+	if err := verifyFilePermissions(info); err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
 	var s TransferSession
@@ -92,7 +110,11 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	path := m.getPath(session.ContentID)
 	// Write to temporary file and rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, b, 0600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	return os.Rename(tmpPath, path)
@@ -123,6 +145,13 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 	var sessions []*TransferSession
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if err := verifyFilePermissions(info); err != nil {
+				continue
+			}
 			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
 			if err != nil {
 				continue
