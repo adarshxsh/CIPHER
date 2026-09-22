@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +105,18 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_RejectsOversizedPayloadHeader(t *testing.T) {
+	var buf bytes.Buffer
+	// Frame size: 3 (header) + 1000 (payload for MsgRequestManifest whose limit is 512)
+	frameSize := uint32(3 + 1000)
+	binary.Write(&buf, binary.LittleEndian, frameSize)
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgRequestManifest))
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("expected ReadMessage to reject oversized payload limit before reading payload")
+	}
 }

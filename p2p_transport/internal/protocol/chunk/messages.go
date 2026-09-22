@@ -74,26 +74,32 @@ func ReadMessage(r io.Reader) (*Message, error) {
 		return nil, err
 	}
 
-	if size > 2*1024*1024 { // 2MB max frame size
+	if size < 3 || size > MaxFrameSize { // 2MB max frame size
 		return nil, errors.New("message exceeds maximum frame size")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
-	}
-
-	buf := bytes.NewReader(data)
 	msg := &Message{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &msg.Version); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &msg.Type); err != nil {
 		return nil, err
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
+	payloadSize := size - 3
+	maxPayload := MaxPayloadSizeForMessage(msg.Type)
+	if maxPayload <= 0 {
+		maxPayload = MaxMessagePayloadSize
+	}
+
+	if int(payloadSize) > maxPayload {
+		return nil, fmt.Errorf("message payload size %d exceeds limit %d for type %d", payloadSize, maxPayload, msg.Type)
+	}
+
+	msg.Payload = make([]byte, payloadSize)
+	if _, err := io.ReadFull(r, msg.Payload); err != nil {
+		return nil, err
+	}
 
 	return msg, nil
 }
@@ -130,6 +136,9 @@ func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	var id core.ContentID
 	if len(payload) < 32 {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+	}
+	if len(payload) > MaxManifestSize {
+		return id, nil, fmt.Errorf("manifest payload exceeds maximum limit: %d > %d", len(payload), MaxManifestSize)
 	}
 	copy(id[:], payload[:32])
 	return id, payload[32:], nil
