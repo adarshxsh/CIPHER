@@ -14,8 +14,28 @@ import (
 // NewDHT creates and returns a Kademlia DHT bound to the given host.
 // mode should be dht.ModeServer for peers (they help route/store records too,
 // matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+func NewDHT(h host.Host, mode dht.ModeOpt, opts ...dht.Option) (*dht.IpfsDHT, error) {
+	dhtOpts := []dht.Option{
+		dht.Mode(mode),
+		dht.AddressFilter(PublicAddressFilter),
+		dht.RoutingTablePeerDiversityFilter(dht.NewRTPeerDiversityFilter(h, 2, 3)),
+	}
+
+	if IsPrivateDHTAllowed() {
+		dhtOpts = append(dhtOpts,
+			dht.RoutingTableFilter(dht.PrivateRoutingTableFilter),
+			dht.QueryFilter(dht.PrivateQueryFilter),
+		)
+	} else {
+		dhtOpts = append(dhtOpts,
+			dht.RoutingTableFilter(dht.PublicRoutingTableFilter),
+			dht.QueryFilter(dht.PublicQueryFilter),
+		)
+	}
+
+	dhtOpts = append(dhtOpts, opts...)
+
+	kdht, err := dht.New(h, dhtOpts...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
