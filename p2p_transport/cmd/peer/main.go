@@ -58,6 +58,7 @@ func main() {
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	// Testing Flags
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
@@ -127,7 +128,6 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
-
 	// Apply testing flags
 	if *corruptProb > 0 {
 		chunk.TestCorruptProb = *corruptProb

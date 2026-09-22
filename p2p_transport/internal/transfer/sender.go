@@ -54,7 +54,7 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
-	if err := header.WriteTo(s); err != nil {
+	if err := header.Encode(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
