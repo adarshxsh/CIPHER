@@ -105,3 +105,59 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_SanitizesControlCharacters(t *testing.T) {
+	// Construct payload with control characters, newlines, tabs, and ANSI escape sequence
+	rawPayload := append([]byte{byte(chunk.ErrInternal)}, []byte("Error line 1\nError line 2\rTab:\tANSI:\x1b[31mRed\x1b[0m\x00Null")...)
+
+	code, sanitizedMsg, err := chunk.ParseError(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrInternal {
+		t.Errorf("expected ErrInternal, got %v", code)
+	}
+
+	expected := `Error line 1\nError line 2\rTab:\tANSI:\x1b[31mRed\x1b[0m\x00Null`
+	if sanitizedMsg != expected {
+		t.Errorf("expected sanitized message:\n%q\ngot:\n%q", expected, sanitizedMsg)
+	}
+}
+
+func TestParseError_TruncatesLargeErrorMessage(t *testing.T) {
+	// Build payload with 600 'A' characters
+	largeMsg := bytes.Repeat([]byte("A"), 600)
+	rawPayload := append([]byte{byte(chunk.ErrBadRequest)}, largeMsg...)
+
+	code, sanitizedMsg, err := chunk.ParseError(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected ErrBadRequest, got %v", code)
+	}
+
+	if len(sanitizedMsg) != chunk.MaxErrorMessageSize {
+		t.Errorf("expected length %d, got %d", chunk.MaxErrorMessageSize, len(sanitizedMsg))
+	}
+}
+
+func TestParseError_PreservesReadableDiagnosticText(t *testing.T) {
+	normalMsg := "Requested chunk 0x12345678 not found in local store"
+	rawPayload := append([]byte{byte(chunk.ErrChunkNotFound)}, []byte(normalMsg)...)
+
+	code, sanitizedMsg, err := chunk.ParseError(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrChunkNotFound {
+		t.Errorf("expected ErrChunkNotFound, got %v", code)
+	}
+
+	if sanitizedMsg != normalMsg {
+		t.Errorf("expected %q, got %q", normalMsg, sanitizedMsg)
+	}
+}
