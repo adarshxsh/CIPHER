@@ -44,6 +44,14 @@ func NewContentEngine(
 	}
 }
 
+func (e *ContentEngine) drainAndRecycle(chunkCh <-chan *core.Chunk) {
+	for chunk := range chunkCh {
+		if chunk != nil && chunk.Data != nil {
+			e.chunker.PutBuffer(chunk.Data)
+		}
+	}
+}
+
 // Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
 func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.ContentType) (*manifest.Manifest, error) {
 	chunkCh, errCh := e.chunker.Split(r)
@@ -51,17 +59,20 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	// Generate a unique ContentID for this upload
 	var contentID core.ContentID
 	if _, err := rand.Read(contentID[:]); err != nil {
+		e.drainAndRecycle(chunkCh)
 		return nil, fmt.Errorf("failed to generate content id: %w", err)
 	}
 
 	// Generate a new encryption key
 	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
 	if _, err := rand.Read(key); err != nil {
+		e.drainAndRecycle(chunkCh)
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	// Store key
 	if err := e.keys.Put(ctx, contentID, key); err != nil {
+		e.drainAndRecycle(chunkCh)
 		return nil, fmt.Errorf("failed to store key: %w", err)
 	}
 
@@ -72,6 +83,8 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	for chunk := range chunkCh {
 		// Encrypt the chunk
 		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
+			e.drainAndRecycle(chunkCh)
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
 
@@ -83,11 +96,16 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 		// Store the chunk
 		if err := e.sink.PutChunk(ctx, chunk); err != nil {
+			e.chunker.PutBuffer(chunk.Data)
+			e.drainAndRecycle(chunkCh)
 			return nil, fmt.Errorf("failed to store chunk: %w", err)
 		}
 
 		chunkIDs = append(chunkIDs, chunkID)
 		totalSize += uint64(chunk.Header.PlainSize)
+
+		// Release chunk buffer back to pool
+		e.chunker.PutBuffer(chunk.Data)
 	}
 
 	if err := <-errCh; err != nil {

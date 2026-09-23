@@ -20,12 +20,10 @@ func NewChaCha20Encryptor() *ChaCha20Encryptor {
 }
 
 func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
-	h := sha256.New()
-	h.Write([]byte("cipher-nonce"))
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(index))
-	h.Write(b)
-	sum := h.Sum(nil)
+	var buf [20]byte
+	copy(buf[0:12], "cipher-nonce")
+	binary.LittleEndian.PutUint64(buf[12:20], uint64(index))
+	sum := sha256.Sum256(buf[:])
 	nonce := make([]byte, 12)
 	copy(nonce, sum[:12])
 	return nonce
@@ -38,7 +36,7 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	}
 
 	nonce := e.generateNonce(chunk.Header.Index)
-	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
+	ciphertext := aead.Seal(chunk.Data[:0], nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
 	chunk.Header.CipherSize = uint32(len(ciphertext))
@@ -57,7 +55,7 @@ func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
 		return errors.New("cipher size mismatch in header")
 	}
 
-	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, nil)
+	plaintext, err := aead.Open(chunk.Data[:0], chunk.Header.Nonce[:], chunk.Data, nil)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt chunk: %w", err)
 	}
