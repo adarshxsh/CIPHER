@@ -125,6 +125,19 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	// Tracking metrics
 	peerContributions := make(map[string]int)
 
+	// Async persistence pipeline
+	saveChan := make(chan *TransferSession, 128)
+	saveDone := make(chan struct{})
+
+	go func() {
+		defer close(saveDone)
+		for s := range saveChan {
+			if err := tm.SessionManager.Save(s); err != nil {
+				log.Printf("[TransferManager] Warning: failed to save session: %v", err)
+			}
+		}
+	}()
+
 	// 6. Handle Progress
 	for res := range completions {
 		if res.Task.Index < len(sess.Completed) {
@@ -136,12 +149,17 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 			peerContributions[res.PeerID]++
 		}
 
-		if err := tm.SessionManager.Save(sess); err != nil {
-			log.Printf("[TransferManager] Warning: failed to save session: %v", err)
+		select {
+		case saveChan <- sess:
+		default:
+			// Save buffer full; latest 'sess' state will be saved in subsequent iterations or final flush
 		}
 
 		fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%)", completedCount, sess.TotalChunks, float64(completedCount)/float64(sess.TotalChunks)*100)
 	}
+
+	close(saveChan)
+	<-saveDone
 
 	fmt.Println()
 	if sess.TotalChunks > 0 {
