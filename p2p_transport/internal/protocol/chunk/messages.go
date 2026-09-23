@@ -128,11 +128,11 @@ func BuildManifest(id core.ContentID, data []byte) *Message {
 
 func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	var id core.ContentID
-	if len(payload) < 32 {
-		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+	if err := ValidateManifestPayload(payload); err != nil {
+		return id, nil, err
 	}
-	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+	copy(id[:], payload[:ContentIDSize])
+	return id, payload[ContentIDSize:], nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
