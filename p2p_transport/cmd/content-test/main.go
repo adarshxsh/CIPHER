@@ -31,13 +31,16 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
-
 	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}
 	store := storage.NewFSStore(storeDir)
+
+	keys, err := engine.NewFileKeyVault(storeDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize key vault: %v", err)
+	}
 
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 	ctx := context.Background()
