@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,7 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	showDecryptionKey := flag.Bool("show-decryption-key", false, "Display raw decryption key in stdout")
 
 	flag.Parse()
 
@@ -235,11 +237,17 @@ func main() {
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	keyFingerprint := sha256.Sum256(key)
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	if *showDecryptionKey {
+		fmt.Printf("Decryption Key: %x\n", key)
+	} else {
+		fmt.Printf("Decryption Key: [REDACTED]\n")
+	}
+	fmt.Printf("Key Fingerprint: %x\n", keyFingerprint[:8])
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
