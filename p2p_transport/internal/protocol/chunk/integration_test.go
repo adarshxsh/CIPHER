@@ -131,3 +131,34 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 		t.Errorf("Unexpected error msg: %v", err)
 	}
 }
+
+func TestChunkProtocol_ResolveTamperedManifestRejected(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	eng2 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	data := []byte("P2P manifest tampering protection test data")
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	// Store corrupted/tampered manifest payload under original ContentID
+	tamperedManifestBytes := []byte(`{"version":1,"descriptor":{"type":"file","size":999999}}`)
+	if err := eng1.PutManifestBytes(ctx, m.Descriptor.ID, tamperedManifestBytes); err != nil {
+		t.Fatalf("PutManifestBytes failed: %v", err)
+	}
+
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Resolve(ctx, m.Descriptor.ID)
+	if err == nil {
+		t.Fatalf("Expected Resolve to fail for tampered manifest payload, got nil error")
+	}
+}
