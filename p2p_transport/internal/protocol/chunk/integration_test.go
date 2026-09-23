@@ -20,7 +20,7 @@ import (
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
-	config := core.EngineConfig{ChunkSize: 256 * 1024}
+	config := core.EngineConfig{ChunkSize: chunk.StandardChunkSize}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
@@ -98,8 +98,8 @@ func TestChunkProtocol_Integration(t *testing.T) {
 	// NOTE: We must give eng2 the decryption key to reassemble locally, as key transfer is out of scope.
 	// Since keys aren't exposed, let's just verify download succeeds!
 	
-	if len(m2.ChunkIDs) != 4 { // 1MB / 256KB = 4 chunks
-		t.Errorf("Expected 4 chunks, got %d", len(m2.ChunkIDs))
+	if len(m2.ChunkIDs) != 32 { // 1MB / 32KB = 32 chunks
+		t.Errorf("Expected 32 chunks, got %d", len(m2.ChunkIDs))
 	}
 
 	for _, chunkID := range m2.ChunkIDs {
