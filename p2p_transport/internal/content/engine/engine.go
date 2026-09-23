@@ -9,6 +9,7 @@ import (
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
+	"cipher/internal/content/crypto"
 	"cipher/internal/content/manifest"
 )
 
@@ -59,6 +60,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
+	defer crypto.Zeroize(key)
 
 	// Store key
 	if err := e.keys.Put(ctx, contentID, key); err != nil {
@@ -130,6 +132,7 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 	if err != nil {
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
+	defer crypto.Zeroize(key)
 
 	// Fetch all chunks, decrypt and verify
 	// For simplicity in Milestone 7, we fetch sequentially.
