@@ -22,18 +22,34 @@ type Progress struct {
 	ETA             time.Duration
 }
 
+type TransferManagerOption func(*TransferManager)
+
+func WithMaxConcurrency(max int) TransferManagerOption {
+	return func(tm *TransferManager) {
+		if max > 0 {
+			tm.MaxConcurrency = max
+		}
+	}
+}
+
 type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	MaxConcurrency int
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
-	return &TransferManager{
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, opts ...TransferManagerOption) *TransferManager {
+	tm := &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		MaxConcurrency: scheduler.DefaultMaxConcurrency,
 	}
+	for _, opt := range opts {
+		opt(tm)
+	}
+	return tm
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
@@ -112,7 +128,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3, scheduler.WithMaxConcurrency(tm.MaxConcurrency)) // MaxAttempts = 3
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
