@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrInvalidErrorCode       = errors.New("invalid error code")
 	ErrInvalidErrorMessage    = errors.New("invalid error message")
 	ErrContentMismatch        = errors.New("content ID does not match request")
+	ErrContentIDMismatch      = manifest.ErrContentIDMismatch
 	ErrChunkMismatch          = errors.New("chunk ID does not match request")
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
@@ -225,13 +227,27 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, data, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	m, err := manifest.Deserialize(data)
+	if err != nil {
+		return fmt.Errorf("manifest: %w", ErrInvalidManifestPayload)
+	}
+
+	computedID, err := m.ComputeContentID()
+	if err != nil {
+		return fmt.Errorf("manifest: %w", ErrInvalidManifestPayload)
+	}
+
+	if computedID != requested {
+		return fmt.Errorf("manifest: %w", ErrContentIDMismatch)
 	}
 
 	return nil

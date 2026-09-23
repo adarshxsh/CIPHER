@@ -25,15 +25,13 @@ func generateTestManifest(chunkCount int) *manifest.Manifest {
 		_, _ = rand.Read(chunkIDs[i][:])
 	}
 
-	var cid core.ContentID
-	_, _ = rand.Read(cid[:])
-
-	return &manifest.Manifest{
-		Descriptor: manifest.ContentDescriptor{
-			ID: cid,
-		},
-		ChunkIDs: chunkIDs,
+	m := &manifest.Manifest{
+		Descriptor: manifest.ContentDescriptor{},
+		ChunkIDs:   chunkIDs,
 	}
+	cid, _ := m.ComputeContentID()
+	m.Descriptor.ID = cid
+	return m
 }
 
 func TestPlanPlacement(t *testing.T) {
