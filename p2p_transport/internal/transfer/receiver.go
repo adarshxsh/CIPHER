@@ -23,10 +23,13 @@ func Receive(s network.Stream) error {
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
+	_ = s.SetReadDeadline(time.Now().Add(ReadTimeout))
 	var header Header
 	if err := header.ReadFrom(s); err != nil {
+		_ = s.SetReadDeadline(time.Time{})
 		return fmt.Errorf("failed to read header: %w", err)
 	}
+	_ = s.SetReadDeadline(time.Time{})
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
@@ -53,13 +56,16 @@ func Receive(s network.Stream) error {
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
+	_ = s.SetReadDeadline(time.Now().Add(ReadTimeout))
+	dr := &deadlineReader{s: s, timeout: ReadTimeout}
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(dr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}
 
 	received, err := io.Copy(multiWriter, pr)
+	_ = s.SetReadDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}
@@ -94,4 +100,20 @@ func Receive(s network.Stream) error {
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
 	return nil
+}
+
+type deadlineReader struct {
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dr *deadlineReader) Read(p []byte) (n int, err error) {
+	if dr.timeout > 0 {
+		_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	}
+	n, err = dr.s.Read(p)
+	if err == nil && dr.timeout > 0 {
+		_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	}
+	return n, err
 }
