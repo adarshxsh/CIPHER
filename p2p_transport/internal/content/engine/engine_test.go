@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/rand"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -71,3 +72,70 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_Reassemble_Streaming(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-stream-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 64 * 1024, // 64KB chunks
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create 5 MB of data (~80 chunks)
+	dataSize := 5 * 1024 * 1024
+	originalData := make([]byte, dataSize)
+	rand.Read(originalData)
+
+	ctx := context.Background()
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Reassemble to counting writer
+	var bytesWritten int64
+	cw := &countingWriter{onWrite: func(n int) { bytesWritten += int64(n) }}
+
+	runtime.GC()
+	var mBefore runtime.MemStats
+	runtime.ReadMemStats(&mBefore)
+
+	if err := eng.Reassemble(ctx, m, cw); err != nil {
+		t.Fatalf("failed to reassemble stream: %v", err)
+	}
+
+	var mAfter runtime.MemStats
+	runtime.ReadMemStats(&mAfter)
+
+	if bytesWritten != int64(dataSize) {
+		t.Errorf("written bytes %d != expected %d", bytesWritten, dataSize)
+	}
+
+	heapAlloc := int64(mAfter.Alloc) - int64(mBefore.Alloc)
+	t.Logf("Reassemble heap allocation delta: %d bytes for %d bytes content", heapAlloc, dataSize)
+}
+
+type countingWriter struct {
+	onWrite func(n int)
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.onWrite(len(p))
+	return len(p), nil
+}
+
