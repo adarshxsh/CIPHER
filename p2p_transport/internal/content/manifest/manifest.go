@@ -1,10 +1,14 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+	"errors"
+
 	"cipher/internal/content/core"
 )
+
+var ErrContentIDMismatch = errors.New("content ID mismatch")
 
 type ContentType string
 
@@ -53,3 +57,28 @@ func Deserialize(data []byte) (*Manifest, error) {
 	}
 	return &m, nil
 }
+
+// ComputeContentID derives the ContentID by hashing the serialized canonical JSON bytes
+// of the manifest with zeroed Descriptor.ID using SHA-256.
+func (m *Manifest) ComputeContentID() (core.ContentID, error) {
+	if m == nil {
+		return core.ContentID{}, errors.New("nil manifest")
+	}
+
+	copyM := *m
+	copyM.Descriptor.ID = core.ContentID{}
+	if copyM.ChunkIDs == nil {
+		copyM.ChunkIDs = []core.ChunkID{}
+	}
+
+	data, err := copyM.Serialize()
+	if err != nil {
+		return core.ContentID{}, err
+	}
+
+	hash := sha256.Sum256(data)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	return id, nil
+}
+
