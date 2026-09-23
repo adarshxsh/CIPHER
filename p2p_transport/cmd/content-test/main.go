@@ -32,6 +32,7 @@ func main() {
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
+	defer keys.Close()
 
 	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
@@ -74,6 +75,7 @@ func main() {
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
 		os.WriteFile(keyPath, key, 0600)
+		crypto.Zeroize(key)
 		log.Printf("Test content key saved to: %s", keyPath)
 	}
 
@@ -95,6 +97,7 @@ func main() {
 		key, err := os.ReadFile(keyPath)
 		if err == nil {
 			keys.Put(ctx, m.Descriptor.ID, key)
+			crypto.Zeroize(key)
 		} else {
 			log.Printf("Warning: Could not load test key from %s: %v", keyPath, err)
 		}

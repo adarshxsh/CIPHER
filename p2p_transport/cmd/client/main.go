@@ -152,6 +152,7 @@ func main() {
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
+	defer keys.Close()
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -211,6 +212,7 @@ func main() {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
 		keys.Put(ctx, contentID, kBytes)
+		crypto.Zeroize(kBytes)
 	}
 
 	// 6. Data Plane: Resolve Manifest
