@@ -54,9 +54,12 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
+	_ = s.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	if err := header.WriteTo(s); err != nil {
+		_ = s.SetWriteDeadline(time.Time{})
 		return fmt.Errorf("failed to write header: %w", err)
 	}
+	_ = s.SetWriteDeadline(time.Time{})
 
 	// 3. Send Data with Progress Tracking
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
@@ -70,7 +73,10 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	_ = s.SetWriteDeadline(time.Now().Add(WriteTimeout))
+	dw := &deadlineWriter{s: s, timeout: WriteTimeout}
+	written, err := io.Copy(dw, pr)
+	_ = s.SetWriteDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
@@ -111,5 +117,21 @@ func (pr *progressReader) Read(p []byte) (n int, err error) {
 		}
 	}
 
+	return n, err
+}
+
+type deadlineWriter struct {
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dw *deadlineWriter) Write(p []byte) (n int, err error) {
+	if dw.timeout > 0 {
+		_ = dw.s.SetWriteDeadline(time.Now().Add(dw.timeout))
+	}
+	n, err = dw.s.Write(p)
+	if err == nil && dw.timeout > 0 {
+		_ = dw.s.SetWriteDeadline(time.Now().Add(dw.timeout))
+	}
 	return n, err
 }
