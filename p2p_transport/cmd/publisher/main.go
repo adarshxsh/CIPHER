@@ -161,7 +161,10 @@ func main() {
 			// Automated Kademlia DHT Storage Provider Discovery
 			log.Printf("[Publisher] No -providers specified. Querying Kademlia DHT for active storage providers...")
 
-			for attempt := 1; attempt <= 3; attempt++ {
+			maxAttempts := 3
+			backoff := 1 * time.Second
+
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
 				dhtCtx, dhtCancel := context.WithTimeout(ctx, 5*time.Second)
 				discovered, _ := discovery.FindStorageProviders(dhtCtx, kdht, 16)
 				dhtCancel()
@@ -192,9 +195,15 @@ func main() {
 				if len(targetPeers) > 0 {
 					break
 				}
-				if attempt < 3 {
-					log.Printf("[Publisher] Retrying DHT provider lookup (attempt %d/3)...", attempt+1)
-					time.Sleep(1 * time.Second)
+				if attempt < maxAttempts {
+					log.Printf("[Publisher] Retrying DHT provider lookup (attempt %d/%d) in %v...", attempt+1, maxAttempts, backoff)
+					select {
+					case <-ctx.Done():
+						log.Printf("[Publisher] Discovery retry canceled by context")
+						break
+					case <-time.After(backoff):
+					}
+					backoff *= 2
 				}
 			}
 		}
