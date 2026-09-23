@@ -22,7 +22,6 @@ import (
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/retrieval"
 	"cipher/internal/transfer/manager"
-	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 
 	"encoding/hex"
@@ -129,17 +128,17 @@ func main() {
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
+	var handlerOpts []chunk.StreamHandlerOption
 	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
+		handlerOpts = append(handlerOpts, chunk.WithCorruptProb(*corruptProb))
 		log.Printf("[TESTING] Chunk corruption probability set to %.2f", *corruptProb)
 	}
+	var tmOpts []manager.TransferManagerOption
 	if *throttle == "2MB" {
 		// 2MB/s = 8 chunks/sec (256KB each). Sleep 125ms per chunk.
-		scheduler.TestThrottle = 500 * time.Millisecond
+		tmOpts = append(tmOpts, manager.WithThrottle(500*time.Millisecond))
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
-
-	chunk.NewStreamHandler(h, eng) // mp duplicate, have called it again later
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
@@ -172,7 +171,7 @@ func main() {
 	}
 
 	// Setup protocol handler
-	chunk.NewStreamHandler(h, eng)
+	chunk.NewStreamHandler(h, eng, handlerOpts...)
 
 	// Start DHT Republisher for persistent provider lifecycle
 	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour)
@@ -385,7 +384,7 @@ func main() {
 		// Setup Transfer Manager and start download
 		log.Printf("Downloading %d chunks from %d peers...", len(m.ChunkIDs), len(targetPeers))
 
-		tm := manager.NewTransferManager(sm, eng, t)
+		tm := manager.NewTransferManager(sm, eng, t, tmOpts...)
 		if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 			log.Fatalf("Download failed: %v", err)
 		}

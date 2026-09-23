@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"sync"
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -18,24 +20,61 @@ type Source struct {
 	Available map[core.ChunkID]struct{}
 }
 
+type SchedulerOptions struct {
+	Throttle time.Duration
+}
+
+type SchedulerOption func(*Scheduler)
+
+func WithThrottle(d time.Duration) SchedulerOption {
+	return func(s *Scheduler) {
+		s.throttle = d
+	}
+}
+
+func WithTestThrottle(d time.Duration) SchedulerOption {
+	return WithThrottle(d)
+}
+
 type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	mu          sync.RWMutex
+	throttle    time.Duration
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
-	return &Scheduler{
+func (s *Scheduler) SetThrottle(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.throttle = d
+}
+
+func (s *Scheduler) Throttle() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.throttle
+}
+
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, opts ...SchedulerOption) *Scheduler {
+	s := &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
-	
+	throttle := s.Throttle()
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
@@ -47,7 +86,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, throttle)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}

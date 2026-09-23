@@ -22,18 +22,49 @@ type Progress struct {
 	ETA             time.Duration
 }
 
+type TransferManagerOptions struct {
+	Throttle time.Duration
+}
+
+type TransferManagerOption func(*TransferManager)
+
+func WithThrottle(d time.Duration) TransferManagerOption {
+	return func(tm *TransferManager) {
+		tm.throttle = d
+	}
+}
+
+func WithTestThrottle(d time.Duration) TransferManagerOption {
+	return WithThrottle(d)
+}
+
 type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	throttle       time.Duration
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
-	return &TransferManager{
+func (tm *TransferManager) SetThrottle(d time.Duration) {
+	tm.throttle = d
+}
+
+func (tm *TransferManager) Throttle() time.Duration {
+	return tm.throttle
+}
+
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, opts ...TransferManagerOption) *TransferManager {
+	tm := &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(tm)
+		}
+	}
+	return tm
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
@@ -112,7 +143,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3, scheduler.WithThrottle(tm.Throttle())) // MaxAttempts = 3
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
