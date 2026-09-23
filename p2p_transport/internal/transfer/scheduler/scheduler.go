@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"sync"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -33,22 +34,49 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
+	var wg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		for {
+			select {
+			case <-done:
+				return
+			case <-results:
+			}
+		}
+	}()
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
+		client, err := chunk.NewClient(runCtx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
 		}
 		activeWorkers++
+		wg.Add(1)
 		go func(src Source, c *chunk.Client) {
+			defer wg.Done()
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			runWorker(runCtx, src, c, s.Engine, queue, results)
+			select {
+			case <-runCtx.Done():
+				return
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			}
 		}(source, client)
 	}
 	
@@ -60,8 +88,8 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-runCtx.Done():
+			return runCtx.Err()
 		case res := <-results:
 			if res.Error != nil {
 				if res.Error.Error() == "worker_done" {
@@ -92,7 +120,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res
+				select {
+				case <-runCtx.Done():
+					return runCtx.Err()
+				case completions <- res:
+				}
 				pendingTasks--
 			}
 		}
