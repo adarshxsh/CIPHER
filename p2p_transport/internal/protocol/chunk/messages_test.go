@@ -2,6 +2,8 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +106,37 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_OversizedControlMessageRejection(t *testing.T) {
+	// Construct a 7-byte header declaring a 2MB frame for MsgRequestChunk (max payload 512)
+	// Frame size: 2,000,000 bytes. Header size: 3. Payload size: 1,999,997 bytes.
+	var header [7]byte
+	binary.LittleEndian.PutUint32(header[0:4], 2000000)
+	binary.LittleEndian.PutUint16(header[4:6], 1)
+	header[6] = byte(chunk.MsgRequestChunk)
+
+	// Stream contains ONLY the 7-byte header, no payload bytes follow.
+	buf := bytes.NewReader(header[:])
+	_, err := chunk.ReadMessage(buf)
+	if err == nil {
+		t.Fatalf("expected error for oversized control message payload, got nil")
+	}
+	if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+		t.Errorf("expected ErrPayloadTooLarge, got %v", err)
+	}
+}
+
+func TestReadMessage_OversizedFrameRejection(t *testing.T) {
+	// Frame size exceeding MaxFrameSize (2MB)
+	var header [7]byte
+	binary.LittleEndian.PutUint32(header[0:4], 3000000)
+	binary.LittleEndian.PutUint16(header[4:6], 1)
+	header[6] = byte(chunk.MsgRequestChunk)
+
+	buf := bytes.NewReader(header[:])
+	_, err := chunk.ReadMessage(buf)
+	if err == nil {
+		t.Fatalf("expected error for oversized frame size, got nil")
+	}
 }

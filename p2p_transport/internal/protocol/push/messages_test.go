@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +127,35 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestReadPushMessage_OversizedControlMessageRejection(t *testing.T) {
+	// Construct a 7-byte header declaring a 2MB frame for MsgPushChunkAck (max payload 33)
+	// Frame size: 2,000,000 bytes. Header size: 3. Payload size: 1,999,997 bytes.
+	var header [7]byte
+	binary.LittleEndian.PutUint32(header[0:4], 2000000)
+	binary.LittleEndian.PutUint16(header[4:6], CurrentPushVersion)
+	header[6] = byte(MsgPushChunkAck)
+
+	// Stream contains ONLY the 7-byte header, no payload bytes follow.
+	buf := bytes.NewReader(header[:])
+	_, err := ReadPushMessage(buf)
+	if err == nil {
+		t.Fatalf("expected error for oversized control message payload, got nil")
+	}
+}
+
+func TestReadPushMessage_OversizedFrameRejection(t *testing.T) {
+	// Frame size exceeding MaxMessageSize (4MB)
+	var header [7]byte
+	binary.LittleEndian.PutUint32(header[0:4], 5000000)
+	binary.LittleEndian.PutUint16(header[4:6], CurrentPushVersion)
+	header[6] = byte(MsgPushChunkAck)
+
+	buf := bytes.NewReader(header[:])
+	_, err := ReadPushMessage(buf)
+	if err == nil {
+		t.Fatalf("expected error for oversized frame size, got nil")
 	}
 }
