@@ -46,9 +46,9 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 		return nil, errors.New("chunk decoder: nil reader")
 	}
 
-	header := make([]byte, frameHeaderSize)
+	var header [frameHeaderSize]byte
 
-	if _, err := io.ReadFull(r, header); err != nil {
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, fmt.Errorf("%w: failed to read frame header: %v", ErrTruncatedFrame, err)
 	}
 
@@ -158,9 +158,9 @@ func DecodeFrameHeader(r io.Reader) (
 		return
 	}
 
-	header := make([]byte, frameHeaderSize)
+	var header [frameHeaderSize]byte
 
-	if _, readErr := io.ReadFull(r, header); readErr != nil {
+	if _, readErr := io.ReadFull(r, header[:]); readErr != nil {
 		err = fmt.Errorf(
 			"%w: failed to read frame header: %v",
 			ErrTruncatedFrame,

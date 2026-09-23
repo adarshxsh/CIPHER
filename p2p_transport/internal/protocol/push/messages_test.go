@@ -3,6 +3,8 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +128,54 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestReadPushMessage_RejectsOversizedPayloadBeforeAllocation(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Write frame header: frameSize = 3 + 2000000 (2MB declared payload for MsgPushBatchComplete whose limit is 32)
+	frameSize := uint32(3 + 2000000)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, CurrentPushVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(MsgPushBatchComplete)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := ReadPushMessage(&buf)
+	if !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+}
+
+func TestReadPushMessage_RejectsInvalidVersion(t *testing.T) {
+	var buf bytes.Buffer
+
+	frameSize := uint32(3 + 32)
+	_ = binary.Write(&buf, binary.LittleEndian, frameSize)
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(99))
+	_ = buf.WriteByte(byte(MsgPushBatchComplete))
+
+	_, err := ReadPushMessage(&buf)
+	if !errors.Is(err, ErrInvalidProtocolVersion) {
+		t.Fatalf("expected ErrInvalidProtocolVersion, got %v", err)
+	}
+}
+
+func TestReadPushMessage_RejectsUnknownMessageType(t *testing.T) {
+	var buf bytes.Buffer
+
+	frameSize := uint32(3 + 32)
+	_ = binary.Write(&buf, binary.LittleEndian, frameSize)
+	_ = binary.Write(&buf, binary.LittleEndian, CurrentPushVersion)
+	_ = buf.WriteByte(byte(0xFF))
+
+	_, err := ReadPushMessage(&buf)
+	if !errors.Is(err, ErrUnknownMessageType) {
+		t.Fatalf("expected ErrUnknownMessageType, got %v", err)
 	}
 }
