@@ -19,11 +19,15 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+
 		task, ok := queue.Next()
 		if !ok {
 			return // Queue empty
 		}
-		
+
 		// If this source already returned candidate miss for this task, requeue and yield
 		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
 			queue.Push(task)
@@ -34,22 +38,38 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			}
 			continue
 		}
-		
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case <-ctx.Done():
+				return
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			}
 			continue
 		}
 
 		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(TestThrottle):
+			}
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case <-ctx.Done():
+				return
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case <-ctx.Done():
+			return
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		}
 	}
 }
