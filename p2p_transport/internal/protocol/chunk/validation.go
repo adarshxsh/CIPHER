@@ -107,6 +107,9 @@ func ValidateManifestPayload(payload []byte) error {
 			ContentIDSize,
 		)
 	}
+	if len(payload) > MaxManifestPayloadSize {
+		return ErrManifestTooLarge
+	}
 	return nil
 }
 

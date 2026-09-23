@@ -8,10 +8,16 @@ import (
 	"io"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 const (
-	CurrentMessageVersion uint16 = 1
+	CurrentMessageVersion  uint16 = 1
+	MaxManifestPayloadSize        = manifest.MaxManifestPayloadSize
+)
+
+var (
+	ErrManifestTooLarge = manifest.ErrManifestTooLarge
 )
 
 type MessageType uint8
@@ -128,6 +134,9 @@ func BuildManifest(id core.ContentID, data []byte) *Message {
 
 func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	var id core.ContentID
+	if len(payload) > MaxManifestPayloadSize {
+		return id, nil, ErrManifestTooLarge
+	}
 	if len(payload) < 32 {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
