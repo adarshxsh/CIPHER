@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -105,3 +106,25 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseManifest_SizeLimits(t *testing.T) {
+	var cid core.ContentID
+	validPayload := append(cid[:], []byte(`{"version":1}`)...)
+	_, data, err := chunk.ParseManifest(validPayload)
+	if err != nil {
+		t.Fatalf("expected valid ParseManifest to succeed, got %v", err)
+	}
+	if string(data) != `{"version":1}` {
+		t.Errorf("expected manifest data %s, got %s", `{"version":1}`, string(data))
+	}
+
+	oversizedPayload := make([]byte, chunk.MaxManifestPayloadSize+1)
+	_, _, err = chunk.ParseManifest(oversizedPayload)
+	if err == nil {
+		t.Fatalf("expected error for oversized manifest payload, got nil")
+	}
+	if !errors.Is(err, chunk.ErrManifestTooLarge) {
+		t.Errorf("expected error %v, got %v", chunk.ErrManifestTooLarge, err)
+	}
+}
+
