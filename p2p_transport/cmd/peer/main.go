@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log"
@@ -60,6 +61,7 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	showDecryptionKey := flag.Bool("show-decryption-key", false, "Display raw decryption key in logs and command hints")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -247,9 +249,15 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyFingerprint := sha256.Sum256(key)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		if *showDecryptionKey {
+			log.Printf("    Key: %x", key)
+		} else {
+			log.Printf("    Key: [REDACTED]")
+		}
+		log.Printf("    Key Fingerprint: %x", keyFingerprint[:8])
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -257,14 +265,19 @@ func main() {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
 		
+		keyHint := "[REDACTED]"
+		if *showDecryptionKey {
+			keyHint = fmt.Sprintf("%x", key)
+		}
+
 		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
 			"  -p 5001 \\\n" +
 			"  -ws-port 5002 \\\n" +
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyHint)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
