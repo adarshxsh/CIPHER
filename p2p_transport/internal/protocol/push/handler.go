@@ -29,12 +29,29 @@ const (
 
 type PendingSession struct {
 	ContentID       core.ContentID
+	PublisherPeer   peer.ID
 	Manifest        *manifest.Manifest
 	ManifestBytes   []byte
 	ExpectedChunks  map[core.ChunkID]struct{}
 	CommittedChunks map[core.ChunkID]bool
 	StartedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+type StreamHandlerConfig struct {
+	MaxPendingSessions int
+	MaxSessionsPerPeer int
+	SessionTTL         time.Duration
+	SessionIdleTimeout time.Duration
+	GCTickerInterval   time.Duration
+}
+
+var DefaultConfig = StreamHandlerConfig{
+	MaxPendingSessions: 100,
+	MaxSessionsPerPeer: 10,
+	SessionTTL:         15 * time.Minute,
+	SessionIdleTimeout: 5 * time.Minute,
+	GCTickerInterval:   1 * time.Minute,
 }
 
 type StreamHandler struct {
@@ -46,8 +63,20 @@ type StreamHandler struct {
 	authPolicy        AuthPolicy
 	allowedPublishers map[peer.ID]struct{}
 
-	sessionsMu sync.RWMutex
-	sessions   map[core.ContentID]*PendingSession
+	MaxPendingSessions int
+	MaxSessionsPerPeer int
+	SessionTTL         time.Duration
+	SessionIdleTimeout time.Duration
+	GCTickerInterval   time.Duration
+
+	sessionsMu   sync.RWMutex
+	sessions     map[core.ContentID]*PendingSession
+	peerSessions map[peer.ID]int
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 func NewStreamHandler(
@@ -58,10 +87,24 @@ func NewStreamHandler(
 	authPolicy AuthPolicy,
 	allowedPublishers []peer.ID,
 ) *StreamHandler {
+	return NewStreamHandlerWithConfig(h, eng, kdht, allowPush, authPolicy, allowedPublishers, DefaultConfig)
+}
+
+func NewStreamHandlerWithConfig(
+	h host.Host,
+	eng *engine.ContentEngine,
+	kdht *dht.IpfsDHT,
+	allowPush bool,
+	authPolicy AuthPolicy,
+	allowedPublishers []peer.ID,
+	cfg StreamHandlerConfig,
+) *StreamHandler {
 	allowedMap := make(map[peer.ID]struct{})
 	for _, pid := range allowedPublishers {
 		allowedMap[pid] = struct{}{}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	handler := &StreamHandler{
 		host:              h,
@@ -71,11 +114,102 @@ func NewStreamHandler(
 		allowPush:         allowPush,
 		authPolicy:        authPolicy,
 		allowedPublishers: allowedMap,
+		MaxPendingSessions: cfg.MaxPendingSessions,
+		MaxSessionsPerPeer: cfg.MaxSessionsPerPeer,
+		SessionTTL:         cfg.SessionTTL,
+		SessionIdleTimeout: cfg.SessionIdleTimeout,
+		GCTickerInterval:   cfg.GCTickerInterval,
 		sessions:          make(map[core.ContentID]*PendingSession),
+		peerSessions:      make(map[peer.ID]int),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
-	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	handler.startGC()
+
+	if h != nil {
+		h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	}
 	return handler
+}
+
+func (h *StreamHandler) startGC() {
+	if h.ctx == nil {
+		return
+	}
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		interval := h.GCTickerInterval
+		if interval <= 0 {
+			interval = DefaultConfig.GCTickerInterval
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-h.ctx.Done():
+				return
+			case <-ticker.C:
+				h.sessionsMu.Lock()
+				h.evictStaleSessionsLocked(time.Now())
+				h.sessionsMu.Unlock()
+			}
+		}
+	}()
+}
+
+func (h *StreamHandler) evictStaleSessionsLocked(now time.Time) int {
+	evicted := 0
+	for cid, session := range h.sessions {
+		isTTLExpired := h.SessionTTL > 0 && now.Sub(session.StartedAt) > h.SessionTTL
+		isIdleExpired := h.SessionIdleTimeout > 0 && now.Sub(session.UpdatedAt) > h.SessionIdleTimeout
+
+		if isTTLExpired || isIdleExpired {
+			delete(h.sessions, cid)
+			h.peerSessions[session.PublisherPeer]--
+			if h.peerSessions[session.PublisherPeer] <= 0 {
+				delete(h.peerSessions, session.PublisherPeer)
+			}
+			evicted++
+			log.Printf("[Push Protocol] GC evicted stale push session for ContentID %x from peer %s (TTL expired: %v, Idle expired: %v)",
+				cid, session.PublisherPeer, isTTLExpired, isIdleExpired)
+		}
+	}
+	return evicted
+}
+
+func (h *StreamHandler) Close() error {
+	h.stopOnce.Do(func() {
+		if h.cancel != nil {
+			h.cancel()
+		}
+		h.wg.Wait()
+	})
+	return nil
+}
+
+func (h *StreamHandler) Stop() {
+	_ = h.Close()
+}
+
+func (h *StreamHandler) PendingSessionCount() int {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+	return len(h.sessions)
+}
+
+func (h *StreamHandler) PeerSessionCount(pid peer.ID) int {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+	return h.peerSessions[pid]
+}
+
+func (h *StreamHandler) PurgeStaleSessions() int {
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+	return h.evictStaleSessionsLocked(time.Now())
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -134,6 +268,8 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 }
 
 func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
+	remotePeer := s.Conn().RemotePeer()
+
 	contentID, assignedChunkIDs, manifestData, err := ParsePushManifest(msg.Payload)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to parse PUSH_MANIFEST: %v", err)
@@ -159,19 +295,60 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		expectedMap[cid] = struct{}{}
 	}
 
+	now := time.Now()
+
 	h.sessionsMu.Lock()
+
+	existingSession, isUpdate := h.sessions[contentID]
+
+	// Check per-peer limit
+	currentPeerSessions := h.peerSessions[remotePeer]
+	if isUpdate && existingSession.PublisherPeer == remotePeer {
+		// Peer session count doesn't increase for same-peer update
+	} else if h.MaxSessionsPerPeer > 0 && currentPeerSessions >= h.MaxSessionsPerPeer {
+		h.sessionsMu.Unlock()
+		log.Printf("[Push Protocol] Rejecting push manifest from %s: peer session count %d reaches limit %d",
+			remotePeer, currentPeerSessions, h.MaxSessionsPerPeer)
+		_ = WritePushMessage(s, BuildPushManifestAck(contentID, PushStatusResourceExhausted))
+		return
+	}
+
+	// Check total session limit
+	if !isUpdate && h.MaxPendingSessions > 0 && len(h.sessions) >= h.MaxPendingSessions {
+		// Trigger immediate stale session eviction before rejecting new sessions
+		h.evictStaleSessionsLocked(now)
+
+		if len(h.sessions) >= h.MaxPendingSessions {
+			h.sessionsMu.Unlock()
+			log.Printf("[Push Protocol] Rejecting push manifest from %s: total sessions %d reaches max %d",
+				remotePeer, len(h.sessions), h.MaxPendingSessions)
+			_ = WritePushMessage(s, BuildPushManifestAck(contentID, PushStatusResourceExhausted))
+			return
+		}
+	}
+
+	// Clean up existing session tracking if replacing
+	if isUpdate {
+		h.peerSessions[existingSession.PublisherPeer]--
+		if h.peerSessions[existingSession.PublisherPeer] <= 0 {
+			delete(h.peerSessions, existingSession.PublisherPeer)
+		}
+	}
+
 	h.sessions[contentID] = &PendingSession{
 		ContentID:       contentID,
+		PublisherPeer:   remotePeer,
 		Manifest:        m,
 		ManifestBytes:   manifestData,
 		ExpectedChunks:  expectedMap,
 		CommittedChunks: make(map[core.ChunkID]bool),
-		StartedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		StartedAt:       now,
+		UpdatedAt:       now,
 	}
+	h.peerSessions[remotePeer]++
 	h.sessionsMu.Unlock()
 
-	log.Printf("[Push Protocol] Initialized push session for ContentID %x (expecting %d chunks)", contentID, len(expectedMap))
+	log.Printf("[Push Protocol] Initialized push session for ContentID %x from %s (expecting %d chunks)", contentID, remotePeer, len(expectedMap))
 
 	ack := BuildPushManifestAck(contentID, PushStatusOK)
 	if err := WritePushMessage(s, ack); err != nil {
@@ -295,6 +472,10 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 
 	// Remove session from pending
 	delete(h.sessions, contentID)
+	h.peerSessions[session.PublisherPeer]--
+	if h.peerSessions[session.PublisherPeer] <= 0 {
+		delete(h.peerSessions, session.PublisherPeer)
+	}
 	h.sessionsMu.Unlock()
 
 	log.Printf("[Push Protocol] Content %x successfully committed to CAS (all %d assigned chunks verified)",
