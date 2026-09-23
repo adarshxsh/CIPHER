@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -123,7 +122,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes directly to target disk offsets.
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
 	// Retrieve key
 	key, err := e.keys.Get(ctx, m.Descriptor.ID)
@@ -131,13 +130,12 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
+	sw, err := NewStreamWriter(w, m.Descriptor.Size, len(m.ChunkIDs))
+	if err != nil {
+		return fmt.Errorf("failed to initialize streaming writer: %w", err)
+	}
 
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
-
-	for _, chunkID := range m.ChunkIDs {
+	for i, chunkID := range m.ChunkIDs {
 		chunk, err := e.source.GetChunk(ctx, chunkID)
 		if err != nil {
 			return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
@@ -154,21 +152,48 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
-	}
-
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
-
-	// Write out
-	for _, chunk := range chunks {
-		if _, err := w.Write(chunk.Data); err != nil {
-			return fmt.Errorf("failed to write decrypted chunk: %w", err)
+		offset := chunk.Header.Offset
+		if offset == 0 && i > 0 {
+			offset = int64(i) * int64(e.config.ChunkSize)
 		}
+
+		if err := sw.WriteChunk(uint32(i), offset, chunk.Data); err != nil {
+			return fmt.Errorf("failed to write decrypted chunk at index %d: %w", i, err)
+		}
+
+		// Free memory immediately to maintain constant O(1) RAM footprint
+		chunk.Data = nil
+		chunk = nil
 	}
 
+	if !sw.IsComplete() {
+		return fmt.Errorf("reassembly incomplete: missing chunks")
+	}
+
+	return nil
+}
+
+// ReassembleChunkAt processes and writes a single chunk directly at its offset during out-of-order reassembly.
+func (e *ContentEngine) ReassembleChunkAt(ctx context.Context, m *manifest.Manifest, chunk *core.Chunk, sw *StreamWriter) error {
+	key, err := e.keys.Get(ctx, m.Descriptor.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get content key: %w", err)
+	}
+
+	hash := e.digest.Sum(chunk.Data)
+	if hash != core.Hash(chunk.Header.ID) {
+		return fmt.Errorf("corrupted chunk %x: hash mismatch", chunk.Header.ID)
+	}
+
+	if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
+		return fmt.Errorf("failed to decrypt chunk %x: %w", chunk.Header.ID, err)
+	}
+
+	if err := sw.WriteChunk(chunk.Header.Index, chunk.Header.Offset, chunk.Data); err != nil {
+		return fmt.Errorf("failed to write chunk at index %d: %w", chunk.Header.Index, err)
+	}
+
+	chunk.Data = nil
 	return nil
 }
 
