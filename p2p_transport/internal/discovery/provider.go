@@ -4,11 +4,82 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"golang.org/x/time/rate"
 )
+
+var (
+	announcementLimiterMu sync.RWMutex
+	announcementLimiter   = rate.NewLimiter(rate.Limit(10), 10) // Default 10 CIDs/sec, burst 10
+)
+
+// SetAnnouncementRateLimit configures the token bucket rate (ops/sec) and burst capacity for DHT announcements.
+func SetAnnouncementRateLimit(r rate.Limit, b int) {
+	announcementLimiterMu.Lock()
+	defer announcementLimiterMu.Unlock()
+	announcementLimiter = rate.NewLimiter(r, b)
+}
+
+func getAnnouncementLimiter() *rate.Limiter {
+	announcementLimiterMu.RLock()
+	defer announcementLimiterMu.RUnlock()
+	return announcementLimiter
+}
+
+type lookupSemaphore struct {
+	mu  sync.RWMutex
+	ch  chan struct{}
+	max int
+}
+
+func newLookupSemaphore(max int) *lookupSemaphore {
+	return &lookupSemaphore{
+		ch:  make(chan struct{}, max),
+		max: max,
+	}
+}
+
+func (s *lookupSemaphore) Acquire(ctx context.Context) (func(), error) {
+	s.mu.RLock()
+	ch := s.ch
+	s.mu.RUnlock()
+
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *lookupSemaphore) SetMax(max int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ch = make(chan struct{}, max)
+	s.max = max
+}
+
+var (
+	lookupSem     = newLookupSemaphore(5) // Default max 5 active queries
+	activeLookups int32
+)
+
+// SetMaxLookupConcurrency updates the worker semaphore concurrency bound for FindProviders.
+func SetMaxLookupConcurrency(max int) {
+	if max > 0 {
+		lookupSem.SetMax(max)
+	}
+}
+
+// GetActiveLookups returns the current number of active in-flight FindProviders queries.
+func GetActiveLookups() int32 {
+	return atomic.LoadInt32(&activeLookups)
+}
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
 // over the /cipher/push/1.0.0 protocol to register on the Kademlia DHT.
@@ -21,6 +92,10 @@ var StorageProviderNamespace = core.ContentID{
 
 // Provide announces to the DHT that this node can provide the content identified by the given ContentID.
 func Provide(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID) error {
+	limiter := getAnnouncementLimiter()
+	if err := limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("announcement rate limit wait failed: %w", err)
+	}
 
 	cid, err := contentIDToCID(id)
 	if err != nil {
@@ -77,6 +152,15 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 		return nil, fmt.Errorf("provider limit must be greater than zero")
 	}
 
+	release, err := lookupSem.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire lookup semaphore: %w", err)
+	}
+	defer release()
+
+	atomic.AddInt32(&activeLookups, 1)
+	defer atomic.AddInt32(&activeLookups, -1)
+
 	cid, err := contentIDToCID(id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
@@ -131,6 +215,11 @@ func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestSto
 
 	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
 	for _, id := range manifests {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		if err := Provide(ctx, kdht, id); err != nil {
 			fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
 		}
