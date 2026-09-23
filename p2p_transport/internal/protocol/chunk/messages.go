@@ -205,9 +205,47 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+const TruncationIndicator = "... [truncated]"
+
+// SanitizeErrorMessage sanitizes an error message string by escaping non-printable
+// ASCII characters, control codes, carriage returns, and newlines into safe ASCII escape sequences.
+func SanitizeErrorMessage(msg string) string {
+	var buf bytes.Buffer
+	for i := 0; i < len(msg); i++ {
+		b := msg[i]
+		switch b {
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\r':
+			buf.WriteString(`\r`)
+		case '\t':
+			buf.WriteString(`\t`)
+		default:
+			if b >= ' ' && b <= '~' {
+				buf.WriteByte(b)
+			} else {
+				fmt.Fprintf(&buf, "\\x%02x", b)
+			}
+		}
+	}
+	return buf.String()
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	rawMsg := string(payload[1:])
+	sanitized := SanitizeErrorMessage(rawMsg)
+
+	if len(sanitized) > MaxErrorMessageSize {
+		if MaxErrorMessageSize > len(TruncationIndicator) {
+			sanitized = sanitized[:MaxErrorMessageSize-len(TruncationIndicator)] + TruncationIndicator
+		} else {
+			sanitized = sanitized[:MaxErrorMessageSize]
+		}
+	}
+
+	return code, sanitized, nil
 }
