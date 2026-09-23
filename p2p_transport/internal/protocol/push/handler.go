@@ -48,6 +48,9 @@ type StreamHandler struct {
 
 	sessionsMu sync.RWMutex
 	sessions   map[core.ContentID]*PendingSession
+
+	maxTransactions int
+	maxMessages     int
 }
 
 func NewStreamHandler(
@@ -72,10 +75,17 @@ func NewStreamHandler(
 		authPolicy:        authPolicy,
 		allowedPublishers: allowedMap,
 		sessions:          make(map[core.ContentID]*PendingSession),
+		maxTransactions:   MaxPushTransactionsPerStream,
+		maxMessages:       MaxPushMessagesPerStream,
 	}
 
 	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func (h *StreamHandler) SetLimits(maxTxns, maxMsgs int) {
+	h.maxTransactions = maxTxns
+	h.maxMessages = maxMsgs
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -99,9 +109,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 
 	log.Printf("[Push Protocol] Accepted push stream from %s", remotePeer)
 
+	msgCount := 0
+	txnCount := 0
+
 	for {
 		_ = s.SetReadDeadline(time.Now().Add(ReadTimeout))
 		msg, err := ReadPushMessage(s)
+		_ = s.SetReadDeadline(time.Time{})
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
 				log.Printf("[Push Protocol] Push stream closed by %s", remotePeer)
@@ -110,12 +124,28 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			log.Printf("[Push Protocol] Error reading message: %v", err)
 			return
 		}
-		_ = s.SetReadDeadline(time.Time{})
+
+		msgCount++
+		if h.maxMessages > 0 && msgCount > h.maxMessages {
+			log.Printf("[Push Protocol] Message limit exceeded (%d > %d) from %s", msgCount, h.maxMessages, remotePeer)
+			_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "message limit exceeded"))
+			return
+		}
 
 		if msg.Version != CurrentPushVersion {
 			log.Printf("[Push Protocol] Unsupported message version: %d", msg.Version)
 			_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "unsupported version"))
 			return
+		}
+
+		switch msg.Type {
+		case MsgPushManifest, MsgPushChunk, MsgPushBatchComplete:
+			txnCount++
+			if h.maxTransactions > 0 && txnCount > h.maxTransactions {
+				log.Printf("[Push Protocol] Transaction limit exceeded (%d > %d) from %s", txnCount, h.maxTransactions, remotePeer)
+				_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "transaction limit exceeded"))
+				return
+			}
 		}
 
 		switch msg.Type {

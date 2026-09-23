@@ -21,6 +21,9 @@ const (
 	ReadTimeout  = 15 * time.Second
 	WriteTimeout = 15 * time.Second
 	AckTimeout   = 30 * time.Second
+
+	MaxPushTransactionsPerStream = 1000
+	MaxPushMessagesPerStream     = 2000
 )
 
 type PushMessageType uint8

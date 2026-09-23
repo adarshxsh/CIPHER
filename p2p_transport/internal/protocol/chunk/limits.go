@@ -81,11 +81,9 @@ const (
 )
 
 const (
-	// The initial hardened protocol allows one chunk transaction
-	// per stream.
 	MaxChunksPerRequest      = 1
-	MaxTransactionsPerStream = 1
-	MaxMessagesPerStream     = 4
+	MaxTransactionsPerStream = 1000
+	MaxMessagesPerStream     = 2000
 )
 
 const (

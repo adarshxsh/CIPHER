@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"cipher/internal/content/core"
 )
 
 const (
 	CurrentMessageVersion uint16 = 1
+	ReadTimeout                  = 15 * time.Second
 )
 
 type MessageType uint8
