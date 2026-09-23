@@ -37,19 +37,35 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
 		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(TestThrottle):
+			}
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}:
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }

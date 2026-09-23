@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -18,9 +19,11 @@ import (
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream    network.Stream
+	engine    *engine.ContentEngine
+	digest    core.Digest
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
@@ -29,14 +32,26 @@ func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng 
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
+	c := &Client{
 		stream: stream,
 		engine: eng,
 		digest: verifier.NewSHA256Digest(),
-	}, nil
+		done:   make(chan struct{}),
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			stream.Reset()
+		case <-c.done:
+		}
+	}()
+	return c, nil
 }
 
 func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
 	return c.stream.Close()
 }
 
