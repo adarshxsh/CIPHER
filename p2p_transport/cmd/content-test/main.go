@@ -71,10 +71,13 @@ func main() {
 
 		// For manual testing, we persist the generated content key so it can be reassembled later
 		// (Normally this would be handled securely or retrieved over network)
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
-		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		os.WriteFile(keyPath, key, 0600)
-		log.Printf("Test content key saved to: %s", keyPath)
+		if key, err := keys.Get(ctx, m.Descriptor.ID); err == nil {
+			defer key.Destroy()
+			keyBytes, _ := key.Bytes()
+			keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
+			os.WriteFile(keyPath, keyBytes, 0600)
+			log.Printf("Test content key saved to: %s", keyPath)
+		}
 	}
 
 	if *reassembleOut != "" {
@@ -92,9 +95,12 @@ func main() {
 
 		// Load the test content key back into the key provider
 		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		key, err := os.ReadFile(keyPath)
+		keyData, err := os.ReadFile(keyPath)
 		if err == nil {
-			keys.Put(ctx, m.Descriptor.ID, key)
+			if sKey, err := core.NewSecretKey(keyData); err == nil {
+				defer sKey.Destroy()
+				keys.Put(ctx, m.Descriptor.ID, sKey)
+			}
 		} else {
 			log.Printf("Warning: Could not load test key from %s: %v", keyPath, err)
 		}

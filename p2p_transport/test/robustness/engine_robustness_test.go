@@ -131,8 +131,11 @@ func TestWrongKey(t *testing.T) {
 	}
 
 	// Replace the key with a wrong one
-	wrongKey := make([]byte, 32)
-	rand.Read(wrongKey)
+	wrongKey, err := core.NewRandomSecretKey(32)
+	if err != nil {
+		t.Fatalf("failed to create secret key: %v", err)
+	}
+	defer wrongKey.Destroy()
 	keys.Put(ctx, m.Descriptor.ID, wrongKey)
 
 	var outBuf bytes.Buffer

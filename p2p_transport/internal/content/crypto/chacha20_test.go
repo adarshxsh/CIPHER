@@ -2,7 +2,6 @@ package crypto
 
 import (
 	"bytes"
-	"crypto/rand"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -11,8 +10,11 @@ import (
 func TestChaCha20Encryptor(t *testing.T) {
 	enc := NewChaCha20Encryptor()
 
-	key := make([]byte, 32)
-	rand.Read(key)
+	key, err := core.NewRandomSecretKey(32)
+	if err != nil {
+		t.Fatalf("failed to create secret key: %v", err)
+	}
+	defer key.Destroy()
 
 	originalData := []byte("hello decentralized encrypted cdn")
 	chunk := &core.Chunk{
@@ -51,8 +53,11 @@ func TestChaCha20Encryptor(t *testing.T) {
 
 func TestChaCha20Encryptor_Corruption(t *testing.T) {
 	enc := NewChaCha20Encryptor()
-	key := make([]byte, 32)
-	rand.Read(key)
+	key, err := core.NewRandomSecretKey(32)
+	if err != nil {
+		t.Fatalf("failed to create secret key: %v", err)
+	}
+	defer key.Destroy()
 
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
@@ -66,7 +71,7 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 	// Corrupt
 	chunk.Data[0] ^= 0xFF
 
-	err := enc.DecryptChunk(key, chunk)
+	err = enc.DecryptChunk(key, chunk)
 	if err == nil {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
 	}
