@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -18,46 +19,108 @@ type Source struct {
 	Available map[core.ChunkID]struct{}
 }
 
+const DefaultMaxWorkers = 16
+
 type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	MaxWorkers  int
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
-	return &Scheduler{
+type Option func(*Scheduler)
+
+func WithMaxWorkers(maxWorkers int) Option {
+	return func(s *Scheduler) {
+		if maxWorkers > 0 {
+			s.MaxWorkers = maxWorkers
+		}
+	}
+}
+
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, opts ...Option) *Scheduler {
+	s := &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		MaxWorkers:  DefaultMaxWorkers,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
-	results := make(chan WorkerResult, len(sources)*2)
-	
-	// Start workers
-	activeWorkers := 0
-	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
-		if err != nil {
-			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
-			continue
-		}
-		activeWorkers++
-		go func(src Source, c *chunk.Client) {
-			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
-		}(source, client)
+	maxWorkers := s.MaxWorkers
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxWorkers
 	}
-	
-	if activeWorkers == 0 {
+
+	if len(sources) == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
-	
+
+	queue := NewChunkQueue(tasks)
+	sourceQueue := NewSourceQueue(sources)
+	results := make(chan WorkerResult, maxWorkers*2)
+
+	numWorkers := maxWorkers
+	if len(sources) < numWorkers {
+		numWorkers = len(sources)
+	}
+
+	activeWorkers := numWorkers
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			defer func() {
+				results <- WorkerResult{Error: fmt.Errorf("worker_done")}
+			}()
+
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+
+				source, ok := sourceQueue.Pop()
+				if !ok {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(10 * time.Millisecond):
+					}
+					source, ok = sourceQueue.Pop()
+					if !ok {
+						if queue.Len() == 0 {
+							return
+						}
+						// Wait once more
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(10 * time.Millisecond):
+						}
+						source, ok = sourceQueue.Pop()
+						if !ok && queue.Len() == 0 {
+							return
+						}
+					}
+				}
+
+				client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
+				if err != nil {
+					log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
+					continue
+				}
+
+				runWorker(ctx, source, client, s.Engine, queue, sourceQueue, results)
+				client.Close()
+			}
+		}()
+	}
+
 	pendingTasks := len(tasks)
-	
+
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
@@ -68,7 +131,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					activeWorkers--
 					continue
 				}
-				
+
 				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
 				if errors.Is(res.Error, chunk.ErrRemoteChunkNotFound) {
 					if res.Task.MissedPeers == nil {
@@ -97,10 +160,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			}
 		}
 	}
-	
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
-	
+
 	return nil
 }
