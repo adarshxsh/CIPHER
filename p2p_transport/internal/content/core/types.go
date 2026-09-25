@@ -37,13 +37,13 @@ type Digest interface {
 }
 
 type Encryptor interface {
-	EncryptChunk(key []byte, chunk *Chunk) error
-	DecryptChunk(key []byte, chunk *Chunk) error
+	EncryptChunk(key *SecretKey, chunk *Chunk) error
+	DecryptChunk(key *SecretKey, chunk *Chunk) error
 }
 
 type KeyProvider interface {
-	Get(ctx context.Context, id ContentID) ([]byte, error)
-	Put(ctx context.Context, id ContentID, key []byte) error
+	Get(ctx context.Context, id ContentID) (*SecretKey, error)
+	Put(ctx context.Context, id ContentID, key *SecretKey) error
 	Delete(ctx context.Context, id ContentID) error
 }
 
