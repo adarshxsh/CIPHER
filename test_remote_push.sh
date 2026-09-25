@@ -61,15 +61,16 @@ echo "Provider 3: $P3_ADDR"
 
 echo "\n[Step 5/6] Publisher pushes 2 MB file across Providers with Replication R=2..."
 ./bin/publisher -p 48040 -ws-port 0 -file test_orig.dat -store ./store_pub \
+    -key-out ./store_pub/content.key \
     -push -providers "$P1_ADDR,$P2_ADDR,$P3_ADDR" -replication 2 \
     -bootstrap "$BOOT_ADDR" -seed=false > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY_FILE=$(grep "^Key File" publisher.log | awk '{print $NF}')
 
 echo "Publisher Push Completed Successfully:"
 echo "  - ContentID:      $CONTENT_ID"
-echo "  - Decryption Key: $KEY"
+echo "  - Key File:       $KEY_FILE"
 
 # Verify publisher exited cleanly
 echo "✓ Verified: Publisher process exited after satisfying replication invariant."
@@ -79,7 +80,7 @@ sleep 2
 
 echo "\n[Step 6/6] Client 1 discovers providers via DHT and swarm-retrieves content..."
 ./bin/client -p 48050 -ws-port 0 -identity ./store_client1/client.key -store ./store_client1 \
-    -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_recovered.dat > client1.log 2>&1
+    -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file "$KEY_FILE" -out test_recovered.dat > client1.log 2>&1
 
 RECOV_HASH=$(shasum -a 256 test_recovered.dat | awk '{print $1}')
 echo "Client 1 Downloaded SHA-256: $RECOV_HASH"
@@ -99,7 +100,7 @@ sleep 1
 
 echo "Client 2 downloading content from remaining Providers (2 & 3)..."
 ./bin/client -p 48060 -ws-port 0 -identity ./store_client2/client.key -store ./store_client2 \
-    -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_recovered_fault.dat > client2.log 2>&1
+    -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file "$KEY_FILE" -out test_recovered_fault.dat > client2.log 2>&1
 
 RECOV_FAULT_HASH=$(shasum -a 256 test_recovered_fault.dat | awk '{print $1}')
 echo "Client 2 Downloaded SHA-256: $RECOV_FAULT_HASH"
