@@ -69,7 +69,7 @@ func main() {
 	}
 
 	// 2. Start libp2p host and DHT
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay, transport.WithRoleProfile(transport.RoleProvider))
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
