@@ -78,6 +78,12 @@ func NewStreamHandler(
 	return handler
 }
 
+func writePushMessageWithDeadline(s network.Stream, msg *PushMessage) error {
+	_ = s.SetWriteDeadline(time.Now().Add(WriteTimeout))
+	defer s.SetWriteDeadline(time.Time{})
+	return WritePushMessage(s, msg)
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	remotePeer := s.Conn().RemotePeer()
@@ -85,14 +91,14 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	// 1. Authorization check
 	if !h.allowPush {
 		log.Printf("[Push Protocol] Ingestion rejected from %s: push disabled (-allow-push=false)", remotePeer)
-		_ = WritePushMessage(s, BuildPushError(PushStatusUnauthorized, "provider push disabled"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusUnauthorized, "provider push disabled"))
 		return
 	}
 
 	if h.authPolicy == AuthPolicyAllowlist {
 		if _, ok := h.allowedPublishers[remotePeer]; !ok {
 			log.Printf("[Push Protocol] Ingestion rejected from unauthorized publisher: %s", remotePeer)
-			_ = WritePushMessage(s, BuildPushError(PushStatusUnauthorized, "publisher not in allowlist"))
+			_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusUnauthorized, "publisher not in allowlist"))
 			return
 		}
 	}
@@ -101,7 +107,12 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 
 	for {
 		_ = s.SetReadDeadline(time.Now().Add(ReadTimeout))
+		readTimer := time.AfterFunc(ReadTimeout, func() {
+			_ = s.Reset()
+		})
 		msg, err := ReadPushMessage(s)
+		readTimer.Stop()
+		_ = s.SetReadDeadline(time.Time{})
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
 				log.Printf("[Push Protocol] Push stream closed by %s", remotePeer)
@@ -110,11 +121,10 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			log.Printf("[Push Protocol] Error reading message: %v", err)
 			return
 		}
-		_ = s.SetReadDeadline(time.Time{})
 
 		if msg.Version != CurrentPushVersion {
 			log.Printf("[Push Protocol] Unsupported message version: %d", msg.Version)
-			_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "unsupported version"))
+			_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "unsupported version"))
 			return
 		}
 
@@ -127,7 +137,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			h.handlePushBatchComplete(s, msg)
 		default:
 			log.Printf("[Push Protocol] Unsupported message type: %d", msg.Type)
-			_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "unknown message type"))
+			_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "unknown message type"))
 			return
 		}
 	}
@@ -137,20 +147,20 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 	contentID, assignedChunkIDs, manifestData, err := ParsePushManifest(msg.Payload)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to parse PUSH_MANIFEST: %v", err)
-		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "malformed manifest payload"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "malformed manifest payload"))
 		return
 	}
 
 	m, err := manifest.Deserialize(manifestData)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to deserialize manifest JSON: %v", err)
-		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "invalid manifest JSON"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "invalid manifest JSON"))
 		return
 	}
 
 	if m.Descriptor.ID != contentID {
 		log.Printf("[Push Protocol] Manifest contentID mismatch: %x vs %x", m.Descriptor.ID, contentID)
-		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "contentID mismatch"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "contentID mismatch"))
 		return
 	}
 
@@ -174,7 +184,7 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 	log.Printf("[Push Protocol] Initialized push session for ContentID %x (expecting %d chunks)", contentID, len(expectedMap))
 
 	ack := BuildPushManifestAck(contentID, PushStatusOK)
-	if err := WritePushMessage(s, ack); err != nil {
+	if err := writePushMessageWithDeadline(s, ack); err != nil {
 		log.Printf("[Push Protocol] Failed to write PUSH_MANIFEST_ACK: %v", err)
 	}
 }
@@ -183,7 +193,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 	contentID, chunk, err := ParsePushChunk(msg.Payload)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to parse PUSH_CHUNK: %v", err)
-		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "malformed chunk payload"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "malformed chunk payload"))
 		return
 	}
 
@@ -195,14 +205,14 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 
 	if !exists {
 		log.Printf("[Push Protocol] Chunk %x received for unknown/non-pending content %x", chunkID, contentID)
-		_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusNotInAssignedSet))
+		_ = writePushMessageWithDeadline(s, BuildPushChunkAck(chunkID, PushStatusNotInAssignedSet))
 		return
 	}
 
 	// 1. Validate chunk is in assigned set
 	if _, ok := session.ExpectedChunks[chunkID]; !ok {
 		log.Printf("[Push Protocol] Chunk %x not in assigned set for ContentID %x", chunkID, contentID)
-		_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusNotInAssignedSet))
+		_ = writePushMessageWithDeadline(s, BuildPushChunkAck(chunkID, PushStatusNotInAssignedSet))
 		return
 	}
 
@@ -216,7 +226,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 	}
 	if !foundInManifest {
 		log.Printf("[Push Protocol] Chunk %x not listed in manifest for ContentID %x", chunkID, contentID)
-		_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusMalformed))
+		_ = writePushMessageWithDeadline(s, BuildPushChunkAck(chunkID, PushStatusMalformed))
 		return
 	}
 
@@ -224,7 +234,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 	computedHash := h.digest.Sum(chunk.Data)
 	if computedHash != core.Hash(chunkID) {
 		log.Printf("[Push Protocol] Checksum mismatch for chunk %x", chunkID)
-		_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusHashMismatch))
+		_ = writePushMessageWithDeadline(s, BuildPushChunkAck(chunkID, PushStatusHashMismatch))
 		return
 	}
 
@@ -234,7 +244,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 	if !has {
 		if err := h.engine.PutChunk(ctx, chunk); err != nil {
 			log.Printf("[Push Protocol] Failed to store chunk %x: %v", chunkID, err)
-			_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusIOError))
+			_ = writePushMessageWithDeadline(s, BuildPushChunkAck(chunkID, PushStatusIOError))
 			return
 		}
 	}
@@ -245,7 +255,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 	h.sessionsMu.Unlock()
 
 	ack := BuildPushChunkAck(chunkID, PushStatusOK)
-	if err := WritePushMessage(s, ack); err != nil {
+	if err := writePushMessageWithDeadline(s, ack); err != nil {
 		log.Printf("[Push Protocol] Failed to write PUSH_CHUNK_ACK: %v", err)
 	}
 }
@@ -254,7 +264,7 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	contentID, err := ParsePushBatchComplete(msg.Payload)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to parse PUSH_BATCH_COMPLETE: %v", err)
-		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "malformed batch complete payload"))
+		_ = writePushMessageWithDeadline(s, BuildPushError(PushStatusMalformed, "malformed batch complete payload"))
 		return
 	}
 
@@ -263,7 +273,7 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	if !exists {
 		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] BatchComplete requested for non-pending content %x", contentID)
-		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
+		_ = writePushMessageWithDeadline(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
 		return
 	}
 
@@ -280,7 +290,7 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] BatchComplete rejected for %x: committed %d/%d assigned chunks",
 			contentID, len(session.CommittedChunks), len(session.ExpectedChunks))
-		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
+		_ = writePushMessageWithDeadline(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
 		return
 	}
 
@@ -289,7 +299,7 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	if err := h.engine.PutManifestBytes(ctx, contentID, session.ManifestBytes); err != nil {
 		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] Failed to store manifest for %x: %v", contentID, err)
-		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIOError))
+		_ = writePushMessageWithDeadline(s, BuildPushBatchCompleteAck(contentID, PushStatusIOError))
 		return
 	}
 
@@ -314,7 +324,7 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	}
 
 	ack := BuildPushBatchCompleteAck(contentID, PushStatusOK)
-	if err := WritePushMessage(s, ack); err != nil {
+	if err := writePushMessageWithDeadline(s, ack); err != nil {
 		log.Printf("[Push Protocol] Failed to write PUSH_BATCH_COMPLETE_ACK: %v", err)
 	}
 }
