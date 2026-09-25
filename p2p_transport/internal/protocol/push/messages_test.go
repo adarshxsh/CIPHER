@@ -128,3 +128,55 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestBufferPoolReuse(t *testing.T) {
+	var contentID core.ContentID
+	var chunkID core.ChunkID
+	_, _ = rand.Read(contentID[:])
+	_, _ = rand.Read(chunkID[:])
+
+	chunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			Version:    1,
+			ID:         chunkID,
+			Index:      1,
+			Offset:     0,
+			PlainSize:  100,
+			CipherSize: 116,
+		},
+		Data: make([]byte, 116),
+	}
+	_, _ = rand.Read(chunk.Data)
+
+	for i := 0; i < 100; i++ {
+		msg, err := BuildPushChunk(contentID, chunk)
+		if err != nil {
+			t.Fatalf("iter %d BuildPushChunk failed: %v", i, err)
+		}
+
+		outBuf := getBuffer()
+		err = WritePushMessage(outBuf, msg)
+		if err != nil {
+			t.Fatalf("iter %d WritePushMessage failed: %v", i, err)
+		}
+
+		readMsg, err := ReadPushMessage(outBuf)
+		putBuffer(outBuf)
+		if err != nil {
+			t.Fatalf("iter %d ReadPushMessage failed: %v", i, err)
+		}
+
+		parsedCID, parsedChunk, err := ParsePushChunk(readMsg.Payload)
+		if err != nil {
+			t.Fatalf("iter %d ParsePushChunk failed: %v", i, err)
+		}
+
+		if parsedCID != contentID || parsedChunk.Header.ID != chunkID {
+			t.Fatalf("iter %d content or chunk mismatch", i)
+		}
+		if !bytes.Equal(parsedChunk.Data, chunk.Data) {
+			t.Fatalf("iter %d data mismatch", i)
+		}
+	}
+}
+
