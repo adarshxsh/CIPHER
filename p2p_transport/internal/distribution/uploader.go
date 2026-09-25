@@ -16,13 +16,15 @@ import (
 )
 
 type UploaderConfig struct {
-	MaxRetriesPerChunk int
-	FailoverRounds     int
+	MaxRetriesPerChunk     int
+	FailoverRounds         int
+	MaxConcurrentProviders int
 }
 
 var DefaultUploaderConfig = UploaderConfig{
-	MaxRetriesPerChunk: 3,
-	FailoverRounds:     2,
+	MaxRetriesPerChunk:     3,
+	FailoverRounds:         2,
+	MaxConcurrentProviders: 8,
 }
 
 // Distribute pushes all assigned chunks to target providers according to the placement plan,
@@ -52,6 +54,12 @@ func Distribute(
 	log.Printf("[Distribution] Beginning upload for ContentID %x across %d providers (Replication R=%d)...",
 		plan.ContentID, len(plan.ProviderChunks), plan.Replication)
 
+	maxConcurrent := cfg.MaxConcurrentProviders
+	if maxConcurrent <= 0 {
+		maxConcurrent = 8
+	}
+	sem := make(chan struct{}, maxConcurrent)
+
 	// Phase 1: Upload initial assignments in parallel across providers
 	var wg sync.WaitGroup
 	var activeProviders []peer.ID
@@ -65,6 +73,15 @@ func Distribute(
 
 		go func(targetPeer peer.ID, chunkList []core.ChunkID) {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				for _, cid := range chunkList {
+					tracker.SetStatus(cid, targetPeer, ReplicaFailed)
+				}
+				return
+			}
 			uploadToProvider(ctx, t, eng, plan.ContentID, targetPeer, chunkList, manifestBytes, tracker, cfg.MaxRetriesPerChunk)
 		}(p, assigned)
 	}
@@ -123,6 +140,15 @@ func Distribute(
 			failoverWg.Add(1)
 			go func(targetPeer peer.ID, chunkList []core.ChunkID) {
 				defer failoverWg.Done()
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					for _, cid := range chunkList {
+						tracker.SetStatus(cid, targetPeer, ReplicaFailed)
+					}
+					return
+				}
 				uploadToProvider(ctx, t, eng, plan.ContentID, targetPeer, chunkList, manifestBytes, tracker, cfg.MaxRetriesPerChunk)
 			}(p, chunks)
 		}
@@ -153,6 +179,14 @@ func uploadToProvider(
 	maxRetries int,
 ) {
 	log.Printf("[Distribution] Connecting push stream to provider %s (%d chunks assigned)...", targetPeer, len(chunks))
+
+	if t == nil {
+		log.Printf("[Distribution] Transport is nil for provider %s", targetPeer)
+		for _, cid := range chunks {
+			tracker.SetStatus(cid, targetPeer, ReplicaFailed)
+		}
+		return
+	}
 
 	client, err := push.NewClient(ctx, t, targetPeer)
 	if err != nil {
