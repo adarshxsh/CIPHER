@@ -17,6 +17,7 @@ import (
 	"cipher/internal/content/verifier"
 	"cipher/internal/discovery"
 	"cipher/internal/identity"
+	"cipher/internal/keyutil"
 	"cipher/internal/retrieval"
 	"cipher/internal/transfer/manager"
 	"cipher/internal/transfer/scheduler"
@@ -33,7 +34,8 @@ func main() {
 
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
-	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyHex := flag.String("key", "", "Decryption key (32-byte hex or key file path) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to file containing decryption key for reassembly")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -205,10 +207,14 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
-		kBytes, err := hex.DecodeString(*keyHex)
-		if err != nil || len(kBytes) != 32 {
-			log.Fatalf("Invalid key format (must be 32-byte hex)")
+	keyInput := *keyFile
+	if keyInput == "" {
+		keyInput = *keyHex
+	}
+	if keyInput != "" {
+		kBytes, err := keyutil.LoadKey(keyInput)
+		if err != nil {
+			log.Fatalf("Invalid key: %v", err)
 		}
 		keys.Put(ctx, contentID, kBytes)
 	}
@@ -231,8 +237,8 @@ func main() {
 
 	// 8. Content Engine: Decrypt & Reassemble
 	if *reassembleOut != "" {
-		if *keyHex == "" {
-			log.Printf("Warning: No decryption key provided (-key). Attempting reassembly with cached keys...")
+		if *keyHex == "" && *keyFile == "" {
+			log.Printf("Warning: No decryption key provided (-key or -key-file). Attempting reassembly with cached keys...")
 		}
 		outF, err := os.Create(*reassembleOut)
 		if err != nil {
