@@ -3,6 +3,8 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +128,77 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+type trackingReader struct {
+	data      []byte
+	bytesRead int
+}
+
+func (r *trackingReader) Read(p []byte) (n int, err error) {
+	if r.bytesRead >= len(r.data) {
+		return 0, errors.New("EOF - no more data in tracking reader")
+	}
+	n = copy(p, r.data[r.bytesRead:])
+	r.bytesRead += n
+	return n, nil
+}
+
+func TestReadPushMessage_RejectsInflatedControlHeader(t *testing.T) {
+	// Send MsgPushChunkAck (limit: 33 bytes) with declared length of 500,000 bytes
+	var buf bytes.Buffer
+	inflatedSize := uint32(500000 + 3)
+	_ = binary.Write(&buf, binary.LittleEndian, inflatedSize)
+	_ = binary.Write(&buf, binary.LittleEndian, CurrentPushVersion)
+	_ = buf.WriteByte(byte(MsgPushChunkAck))
+
+	reader := &trackingReader{data: buf.Bytes()}
+	_, err := ReadPushMessage(reader)
+	if !errors.Is(err, ErrPushPayloadTooLarge) {
+		t.Fatalf("expected ErrPushPayloadTooLarge, got %v", err)
+	}
+	if reader.bytesRead != 7 {
+		t.Fatalf("expected exactly 7 bytes read before rejection, got %d", reader.bytesRead)
+	}
+}
+
+func TestReadPushMessage_ValidAllTypes(t *testing.T) {
+	var cid core.ContentID
+	cid[0] = 0x55
+
+	var chkID core.ChunkID
+	chkID[0] = 0x66
+
+	testCases := []struct {
+		name string
+		msg  *PushMessage
+	}{
+		{"ManifestAck", BuildPushManifestAck(cid, PushStatusOK)},
+		{"ChunkAck", BuildPushChunkAck(chkID, PushStatusOK)},
+		{"BatchComplete", BuildPushBatchComplete(cid)},
+		{"BatchCompleteAck", BuildPushBatchCompleteAck(cid, PushStatusOK)},
+		{"Error", BuildPushError(PushStatusDiskFull, "disk full")},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := WritePushMessage(&buf, tc.msg); err != nil {
+				t.Fatalf("WritePushMessage failed: %v", err)
+			}
+
+			readMsg, err := ReadPushMessage(&buf)
+			if err != nil {
+				t.Fatalf("ReadPushMessage failed: %v", err)
+			}
+
+			if readMsg.Type != tc.msg.Type {
+				t.Errorf("type mismatch: got %d, want %d", readMsg.Type, tc.msg.Type)
+			}
+			if readMsg.Version != tc.msg.Version {
+				t.Errorf("version mismatch: got %d, want %d", readMsg.Version, tc.msg.Version)
+			}
+		})
 	}
 }
