@@ -18,6 +18,7 @@ client_store/
 *.log
 *.dat
 *.key
+*.key.enc
 run_*.sh
 temp
 
