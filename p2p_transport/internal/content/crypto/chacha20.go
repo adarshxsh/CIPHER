@@ -38,7 +38,7 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	}
 
 	nonce := e.generateNonce(chunk.Header.Index)
-	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
+	ciphertext := aead.Seal(chunk.Data[:0], nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
 	chunk.Header.CipherSize = uint32(len(ciphertext))
