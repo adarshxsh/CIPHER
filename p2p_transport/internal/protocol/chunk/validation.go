@@ -2,11 +2,14 @@ package chunk
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -225,13 +228,36 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, data, err := ParseManifest(payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("manifest parsing failed: %w: %v", ErrContentMismatch, err)
 	}
 
-	if received != requested {
-		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	if subtle.ConstantTimeCompare(received[:], requested[:]) != 1 {
+		log.Printf("[Security] Manifest header content ID mismatch: header %x does not match requested %x", received, requested)
+		return fmt.Errorf("manifest header mismatch: %w", ErrContentMismatch)
+	}
+
+	m, err := manifest.Deserialize(data)
+	if err != nil {
+		log.Printf("[Security] Manifest deserialization failed for content %x: %v", requested, err)
+		return fmt.Errorf("manifest deserialization failed: %w: %v", ErrContentMismatch, err)
+	}
+
+	computedID, err := m.ComputeContentID()
+	if err != nil {
+		log.Printf("[Security] Manifest digest computation failed for content %x: %v", requested, err)
+		return fmt.Errorf("manifest digest computation failed: %w: %v", ErrContentMismatch, err)
+	}
+
+	if subtle.ConstantTimeCompare(computedID[:], requested[:]) != 1 {
+		log.Printf("[Security] Manifest digest verification failed for content %x: computed digest %x does not match requested %x", requested, computedID, requested)
+		return fmt.Errorf("manifest digest mismatch: %w", ErrContentMismatch)
+	}
+
+	if subtle.ConstantTimeCompare(m.Descriptor.ID[:], requested[:]) != 1 {
+		log.Printf("[Security] Manifest descriptor ID mismatch for content %x: descriptor %x does not match requested %x", requested, m.Descriptor.ID, requested)
+		return fmt.Errorf("manifest descriptor ID mismatch: %w", ErrContentMismatch)
 	}
 
 	return nil
