@@ -23,16 +23,25 @@ type Progress struct {
 }
 
 type TransferManager struct {
-	SessionManager SessionManager
-	Engine         *engine.ContentEngine
-	Transport      *transport.Transport
+	SessionManager  SessionManager
+	Engine          *engine.ContentEngine
+	Transport       *transport.Transport
+	SchedulerConfig scheduler.Config
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, cfg ...scheduler.Config) *TransferManager {
+	schedCfg := scheduler.Config{MaxAttempts: 3}
+	if len(cfg) > 0 {
+		schedCfg = cfg[0]
+		if schedCfg.MaxAttempts == 0 {
+			schedCfg.MaxAttempts = 3
+		}
+	}
 	return &TransferManager{
-		SessionManager: sm,
-		Engine:         eng,
-		Transport:      t,
+		SessionManager:  sm,
+		Engine:          eng,
+		Transport:       t,
+		SchedulerConfig: schedCfg,
 	}
 }
 
@@ -112,7 +121,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, tm.SchedulerConfig.MaxAttempts, tm.SchedulerConfig)
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
