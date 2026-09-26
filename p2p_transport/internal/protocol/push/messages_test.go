@@ -128,3 +128,65 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestBufferPoolRecycling(t *testing.T) {
+	var contentID core.ContentID
+	var chunkID core.ChunkID
+	_, _ = rand.Read(contentID[:])
+	_, _ = rand.Read(chunkID[:])
+
+	chunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			Version:    1,
+			ID:         chunkID,
+			Index:      1,
+			Offset:     0,
+			PlainSize:  100,
+			CipherSize: 116,
+		},
+		Data: []byte("test-data-for-buffer-pooling"),
+	}
+
+	msg, err := BuildPushChunk(contentID, chunk)
+	if err != nil {
+		t.Fatalf("BuildPushChunk failed: %v", err)
+	}
+
+	if msg.buffer == nil {
+		t.Fatalf("expected msg.buffer to be non-nil when built from pool")
+	}
+
+	outBuf := new(bytes.Buffer)
+	if err := WritePushMessage(outBuf, msg); err != nil {
+		t.Fatalf("WritePushMessage failed: %v", err)
+	}
+
+	// After WritePushMessage, msg.buffer should be released (nil)
+	if msg.buffer != nil {
+		t.Fatalf("expected msg.buffer to be nil after WritePushMessage")
+	}
+	if msg.Payload != nil {
+		t.Fatalf("expected msg.Payload to be nil after WritePushMessage release")
+	}
+
+	// Verify that the written frame can be parsed back correctly
+	readMsg, err := ReadPushMessage(outBuf)
+	if err != nil {
+		t.Fatalf("ReadPushMessage failed: %v", err)
+	}
+
+	parsedCID, parsedChunk, err := ParsePushChunk(readMsg.Payload)
+	if err != nil {
+		t.Fatalf("ParsePushChunk failed: %v", err)
+	}
+
+	if parsedCID != contentID {
+		t.Errorf("contentID mismatch")
+	}
+	if parsedChunk.Header.ID != chunkID {
+		t.Errorf("chunkID mismatch")
+	}
+	if !bytes.Equal(parsedChunk.Data, chunk.Data) {
+		t.Errorf("chunk data mismatch")
+	}
+}
