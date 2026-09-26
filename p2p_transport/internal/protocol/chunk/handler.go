@@ -8,6 +8,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"golang.org/x/time/rate"
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
@@ -16,22 +17,33 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host          host.Host
+	engine        *engine.ContentEngine
+	errorLogRate  rate.Limit
+	errorLogBurst int
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+		host:          h,
+		engine:        eng,
+		errorLogRate:  rate.Limit(DefaultErrorLogRate),
+		errorLogBurst: DefaultErrorLogBurst,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
 }
 
+func (h *StreamHandler) SetErrorLogRate(r rate.Limit, b int) {
+	h.errorLogRate = r
+	h.errorLogBurst = b
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+
+	logLimiter := rate.NewLimiter(h.errorLogRate, h.errorLogBurst)
 
 	for {
 		msg, err := ReadMessage(s)
@@ -55,7 +67,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		case MsgRequestManifest:
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, logLimiter)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
@@ -64,6 +76,11 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 }
 
 func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
+	if err := ValidateMessagePayload(msg.Type, msg.Payload); err != nil {
+		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
+		return
+	}
+
 	contentID, err := ParseRequestManifest(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
@@ -84,7 +101,12 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, logLimiter *rate.Limiter) {
+	if err := ValidateMessagePayload(msg.Type, msg.Payload); err != nil {
+		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
+		return
+	}
+
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -121,9 +143,25 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
+
+	if err := ValidateMessagePayload(ackMsg.Type, ackMsg.Payload); err != nil {
+		if logLimiter == nil || logLimiter.Allow() {
+			log.Printf("[Chunk Protocol] Invalid payload from client on chunk %x: %v", chunkID, err)
+		}
+		return
+	}
+
 	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		code, msgStr, err := ParseError(ackMsg.Payload)
+		if err != nil {
+			if logLimiter == nil || logLimiter.Allow() {
+				log.Printf("[Chunk Protocol] Client sent malformed error payload on chunk %x: %v", chunkID, err)
+			}
+			return
+		}
+		if logLimiter == nil || logLimiter.Allow() {
+			log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		}
 		return
 	}
 	if ackMsg.Type != MsgAck {

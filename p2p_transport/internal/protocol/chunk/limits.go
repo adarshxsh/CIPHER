@@ -86,6 +86,11 @@ const (
 	MaxChunksPerRequest      = 1
 	MaxTransactionsPerStream = 1
 	MaxMessagesPerStream     = 4
+
+	// DefaultErrorLogRate is the rate limit (logs per second) for remote stream error logging.
+	DefaultErrorLogRate = 2.0
+	// DefaultErrorLogBurst is the allowed burst size for remote stream error logging.
+	DefaultErrorLogBurst = 5
 )
 
 const (
