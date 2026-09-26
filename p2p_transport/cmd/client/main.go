@@ -34,6 +34,8 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
 	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to file containing decryption key")
+	keyOut := flag.String("key-out", "", "Path to write raw decryption key material")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -151,7 +153,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -205,12 +207,31 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
+	if *keyFile != "" {
+		kBytes, err := engine.LoadKeyFromFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to load key file: %v", err)
+		}
+		if err := keys.Put(ctx, contentID, kBytes); err != nil {
+			log.Fatalf("Failed to store key in keystore: %v", err)
+		}
+	} else if *keyHex != "" {
 		kBytes, err := hex.DecodeString(*keyHex)
 		if err != nil || len(kBytes) != 32 {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
-		keys.Put(ctx, contentID, kBytes)
+		if err := keys.Put(ctx, contentID, kBytes); err != nil {
+			log.Fatalf("Failed to store key in keystore: %v", err)
+		}
+	}
+
+	if *keyOut != "" {
+		if kBytes, err := keys.Get(ctx, contentID); err == nil && len(kBytes) > 0 {
+			if err := engine.ExportKey(*keyOut, kBytes); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+			log.Printf("[✓] Key exported to: %s", *keyOut)
+		}
 	}
 
 	// 6. Data Plane: Resolve Manifest
