@@ -26,6 +26,7 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	Reputation     *scheduler.ReputationManager
 }
 
 func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
@@ -33,6 +34,7 @@ func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transpo
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		Reputation:     scheduler.NewReputationManager(),
 	}
 }
 
@@ -102,17 +104,25 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 		return nil
 	}
 
-	// 4. Setup Sources
+	// 4. Setup Sources (filtering out blacklisted peers)
 	var sources []scheduler.Source
 	for _, p := range peers {
+		if tm.Reputation != nil && tm.Reputation.IsBlacklisted(p.String()) {
+			log.Printf("[TransferManager] Skipping blacklisted peer %s", p.String())
+			continue
+		}
 		sources = append(sources, scheduler.Source{
 			PeerID:    p,
 			Available: nil, // Assume all chunks are available initially
 		})
 	}
 
+	if len(sources) == 0 {
+		return fmt.Errorf("no healthy peers available for download")
+	}
+
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewSchedulerWithReputation(tm.Transport, tm.Engine, 3, tm.Reputation) // MaxAttempts = 3
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
