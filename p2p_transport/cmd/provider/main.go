@@ -44,6 +44,10 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	pushMaxGlobalSessions := flag.Int("push-max-global-sessions", 100, "Maximum total concurrent pending push sessions")
+	pushMaxPeerSessions := flag.Int("push-max-peer-sessions", 10, "Maximum concurrent pending push sessions per peer")
+	pushSessionTTL := flag.Duration("push-session-ttl", 5*time.Minute, "Inactivity TTL for pending push sessions")
+	pushPruneInterval := flag.Duration("push-prune-interval", 30*time.Second, "Interval for background push session pruner")
 
 	flag.Parse()
 
@@ -127,7 +131,14 @@ func main() {
 			}
 		}
 	}
-	push.NewStreamHandler(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList)
+	pushHandler := push.NewStreamHandler(
+		h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList,
+		push.WithMaxGlobalSessions(*pushMaxGlobalSessions),
+		push.WithMaxPeerSessions(*pushMaxPeerSessions),
+		push.WithSessionTTL(*pushSessionTTL),
+		push.WithPruneInterval(*pushPruneInterval),
+	)
+	defer pushHandler.Close()
 
 	// 7. Start Control-Plane DHT Announcements
 	if *allowPush {
