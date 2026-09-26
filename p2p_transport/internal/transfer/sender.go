@@ -54,7 +54,9 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
-	if err := header.WriteTo(s); err != nil {
+	dw := &deadlineWriter{w: s, s: s, timeout: WriteTimeout}
+
+	if err := header.WriteTo(dw); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
@@ -70,7 +72,7 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	written, err := io.Copy(dw, pr)
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
