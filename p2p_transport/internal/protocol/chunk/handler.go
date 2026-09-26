@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -13,17 +14,25 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+type HandlerConfig struct {
+	CorruptProb float64
+}
 
 type StreamHandler struct {
 	host   host.Host
 	engine *engine.ContentEngine
+	config HandlerConfig
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, cfg ...HandlerConfig) *StreamHandler {
+	var config HandlerConfig
+	if len(cfg) > 0 {
+		config = cfg[0]
+	}
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+		config: config,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,10 +107,14 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	if h.config.CorruptProb > 0 && rand.Float64() < h.config.CorruptProb && len(chunkData.Data) > 0 {
+		// Corrupt the chunk for testing on a COPY so cached/engine data is untouched
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+		corruptedData := bytes.Clone(chunkData.Data)
+		corruptedData[0] ^= 0xFF
+		corruptedChunk := *chunkData
+		corruptedChunk.Data = corruptedData
+		chunkData = &corruptedChunk
 	}
 
 	resp, err := BuildChunk(chunkData)
