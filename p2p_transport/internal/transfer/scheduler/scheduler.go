@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -24,6 +25,21 @@ type Scheduler struct {
 	MaxAttempts int
 }
 
+func CalculateBackoff(attempts int) time.Duration {
+	if attempts <= 1 {
+		return 10 * time.Millisecond
+	}
+	shift := uint(attempts - 1)
+	if shift > 30 {
+		return time.Second
+	}
+	delay := 10 * time.Millisecond * time.Duration(1<<shift)
+	if delay > time.Second {
+		return time.Second
+	}
+	return delay
+}
+
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
 	return &Scheduler{
 		Transport:   t,
@@ -34,6 +50,8 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
@@ -48,7 +66,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
 			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			select {
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			case <-ctx.Done():
+			}
 		}(source, client)
 	}
 	
@@ -77,7 +98,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					res.Task.MissedPeers[res.PeerID] = true
 
 					if len(res.Task.MissedPeers) < len(sources) {
-						queue.Push(res.Task)
+						if err := queue.Push(res.Task); err != nil {
+							return fmt.Errorf("queue push failed for candidate miss: %w", err)
+						}
 						continue
 					}
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
@@ -86,13 +109,23 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				// Real network / integrity error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+					backoff := CalculateBackoff(res.Task.Attempts)
+					res.Task.AvailableAt = time.Now().Add(backoff)
+					if err := queue.Push(res.Task); err != nil {
+						return fmt.Errorf("queue push failed on task retry: %w", err)
+					}
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
 			} else {
 				// Success
-				completions <- res
+				if completions != nil {
+					select {
+					case completions <- res:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
 				pendingTasks--
 			}
 		}
