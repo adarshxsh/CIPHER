@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"cipher/internal/content/core"
 )
@@ -206,8 +207,34 @@ func BuildError(code ErrorCode, msg string) *Message {
 }
 
 func ParseError(payload []byte) (ErrorCode, string, error) {
-	if len(payload) < 1 {
-		return 0, "", errors.New("invalid payload length for ERROR")
+	if err := ValidateErrorPayload(payload); err != nil {
+		return 0, "", err
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	return ErrorCode(payload[0]), SanitizeErrorMessage(string(payload[1:])), nil
+}
+
+// SanitizeErrorMessage escapes control characters, carriage returns, line feeds, tabs,
+// and non-printable ASCII characters in untrusted error message strings.
+func SanitizeErrorMessage(msg string) string {
+	var builder strings.Builder
+	builder.Grow(len(msg))
+
+	for i := 0; i < len(msg); i++ {
+		b := msg[i]
+		switch b {
+		case '\n':
+			builder.WriteString("\\n")
+		case '\r':
+			builder.WriteString("\\r")
+		case '\t':
+			builder.WriteString("\\t")
+		default:
+			if b < 32 || b >= 127 {
+				fmt.Fprintf(&builder, "\\x%02x", b)
+			} else {
+				builder.WriteByte(b)
+			}
+		}
+	}
+	return builder.String()
 }
