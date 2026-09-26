@@ -8,6 +8,7 @@ import (
 
 const (
 	ProtocolVersion1 byte = 1
+	ProtocolVersion2 byte = 2
 	MsgTypeFileTransfer byte = 1
 )
 
@@ -18,7 +19,7 @@ const (
 // [2 bytes] Filename Length (N)
 // [N bytes] Filename
 // [8 bytes] File Size
-// [32 bytes] SHA-256 Checksum
+// [32 bytes] SHA-256 Checksum (Used in ProtocolVersion1, or zeroed for ProtocolVersion2)
 type Header struct {
 	Version  byte
 	Type     byte
