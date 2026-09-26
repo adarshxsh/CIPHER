@@ -71,3 +71,58 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
 	}
 }
+
+func TestChaCha20Encryptor_RandomNonceAndUniqueness(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	originalData := []byte("identical chunk content for nonce randomness test")
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     42,
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     42, // Same index
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk1: %v", err)
+	}
+
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk2: %v", err)
+	}
+
+	// Verify nonces are 24 bytes (type array [24]byte)
+	if len(chunk1.Header.Nonce) != 24 || len(chunk2.Header.Nonce) != 24 {
+		t.Fatalf("expected 24-byte nonces, got %d and %d", len(chunk1.Header.Nonce), len(chunk2.Header.Nonce))
+	}
+
+	// Verify nonces are not zero
+	zeroNonce := [24]byte{}
+	if bytes.Equal(chunk1.Header.Nonce[:], zeroNonce[:]) {
+		t.Errorf("chunk1 nonce is all zeros")
+	}
+
+	// Verify nonces across identical plaintexts and indices are distinct
+	if bytes.Equal(chunk1.Header.Nonce[:], chunk2.Header.Nonce[:]) {
+		t.Errorf("consecutive encryptions generated identical nonces")
+	}
+
+	// Verify ciphertexts are distinct
+	if bytes.Equal(chunk1.Data, chunk2.Data) {
+		t.Errorf("consecutive encryptions generated identical ciphertexts")
+	}
+}
