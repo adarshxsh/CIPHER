@@ -4,10 +4,21 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	DefaultMaxRepublishWorkers  = 8
+	DefaultRepublishItemTimeout = 5 * time.Second
+)
+
+var (
+	MaxRepublishWorkers  = DefaultMaxRepublishWorkers
+	RepublishItemTimeout = DefaultRepublishItemTimeout
 )
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
@@ -119,6 +130,10 @@ func StartRepublisher(ctx context.Context, kdht *dht.IpfsDHT, store core.Manifes
 }
 
 func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	manifests, err := store.ListManifests(ctx)
 	if err != nil {
 		fmt.Printf("[DHT Republisher] Failed to list manifests: %v\n", err)
@@ -130,9 +145,57 @@ func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestSto
 	}
 
 	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
-	for _, id := range manifests {
-		if err := Provide(ctx, kdht, id); err != nil {
-			fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
-		}
+
+	numWorkers := MaxRepublishWorkers
+	if numWorkers <= 0 {
+		numWorkers = DefaultMaxRepublishWorkers
 	}
+	if numWorkers > len(manifests) {
+		numWorkers = len(manifests)
+	}
+
+	itemTimeout := RepublishItemTimeout
+	if itemTimeout <= 0 {
+		itemTimeout = DefaultRepublishItemTimeout
+	}
+
+	jobs := make(chan core.ContentID, len(manifests))
+	for _, id := range manifests {
+		jobs <- id
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case id, ok := <-jobs:
+					if !ok {
+						return
+					}
+					if ctx.Err() != nil {
+						return
+					}
+
+					itemCtx, itemCancel := context.WithTimeout(ctx, itemTimeout)
+					err := Provide(itemCtx, kdht, id)
+					itemCancel()
+
+					if err != nil && ctx.Err() == nil {
+						fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
