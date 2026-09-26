@@ -43,7 +43,9 @@ const (
 	PushStatusIncomplete      byte = 0x04
 	PushStatusHashMismatch    byte = 0x05
 	PushStatusNotInAssignedSet byte = 0x06
-	PushStatusIOError         byte = 0x07
+	PushStatusIOError          byte = 0x07
+	PushStatusQuotaExceeded    byte = 0x08
+	PushStatusCapacityExceeded byte = 0x09
 )
 
 type PushMessage struct {
