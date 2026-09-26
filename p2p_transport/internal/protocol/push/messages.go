@@ -155,6 +155,9 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 	}
 
 	manifestData := payload[expectedOffset:]
+	if uint32(len(manifestData)) > MaxManifestSize {
+		return contentID, nil, nil, fmt.Errorf("manifest data size %d exceeds maximum limit %d", len(manifestData), MaxManifestSize)
+	}
 	return contentID, assignedChunkIDs, manifestData, nil
 }
 
