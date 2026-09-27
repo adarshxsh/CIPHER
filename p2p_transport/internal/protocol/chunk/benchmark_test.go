@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"io"
 	"testing"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
@@ -49,5 +51,45 @@ func BenchmarkChunkTransport_Sequential(b *testing.B) {
 		}
 		
 		client.Close()
+	}
+}
+
+func BenchmarkWriteMessage(b *testing.B) {
+	msg := chunk.BuildRequestManifest(core.ContentID{0x01})
+	var nw nopWriter
+	var w io.Writer = &nw
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = chunk.WriteMessage(w, msg)
+	}
+}
+
+func BenchmarkReadMessage(b *testing.B) {
+	msg := chunk.BuildRequestManifest(core.ContentID{0x01})
+	var buf bytes.Buffer
+	_ = chunk.WriteMessage(&buf, msg)
+	data := buf.Bytes()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(data)
+		_, _ = chunk.ReadMessage(r)
+	}
+}
+
+func BenchmarkParseChunk(b *testing.B) {
+	chunkObj := &core.Chunk{
+		Header: core.ChunkHeader{Version: 1, Index: 1},
+		Data:   make([]byte, 32768),
+	}
+	msg, _ := chunk.BuildChunk(chunkObj)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = chunk.ParseChunk(msg.Payload)
 	}
 }
