@@ -19,35 +19,46 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport         *transport.Transport
+	Engine            *engine.ContentEngine
+	MaxAttempts       int
+	ReputationManager *ReputationManager
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
 	return &Scheduler{
-		Transport:   t,
-		Engine:      eng,
-		MaxAttempts: maxAttempts,
+		Transport:         t,
+		Engine:            eng,
+		MaxAttempts:       maxAttempts,
+		ReputationManager: NewReputationManager(),
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	if s.ReputationManager == nil {
+		s.ReputationManager = NewReputationManager()
+	}
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
+		if s.ReputationManager.IsExcluded(source.PeerID.String()) {
+			log.Printf("[Scheduler] Skipping excluded/quarantined source: %s", source.PeerID)
+			continue
+		}
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
+			s.ReputationManager.RecordError(source.PeerID.String(), err)
 			continue
 		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.ReputationManager)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
@@ -83,15 +94,39 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
 				}
 
-				// Real network / integrity error: count attempts
+				// Real network / integrity error: record fault and count attempts
+				s.ReputationManager.RecordError(res.PeerID, res.Error)
+				if s.ReputationManager.IsExcluded(res.PeerID) {
+					log.Printf("[Scheduler] Peer %s isolated/quarantined (score: %.1f, error: %v)", res.PeerID, s.ReputationManager.GetScore(res.PeerID), res.Error)
+				}
+
+				if res.Task.MissedPeers == nil {
+					res.Task.MissedPeers = make(map[string]bool)
+				}
+				res.Task.MissedPeers[res.PeerID] = true
+
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
 					queue.Push(res.Task)
 				} else {
-					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
+					// Check if clean non-excluded peers remain that haven't tried this task yet
+					hasCleanPeer := false
+					for _, src := range sources {
+						pStr := src.PeerID.String()
+						if !s.ReputationManager.IsExcluded(pStr) && !res.Task.MissedPeers[pStr] {
+							hasCleanPeer = true
+							break
+						}
+					}
+					if hasCleanPeer {
+						queue.Push(res.Task)
+					} else {
+						return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
+					}
 				}
 			} else {
 				// Success
+				s.ReputationManager.RecordSuccess(res.PeerID)
 				completions <- res
 				pendingTasks--
 			}
