@@ -17,35 +17,48 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
-	defer s.Close()
+func Receive(s network.Stream) (err error) {
+	defer func() {
+		if err != nil {
+			s.Reset()
+		} else {
+			s.Close()
+		}
+	}()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err = header.ReadFrom(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
-		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
+		err = fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
+		return err
 	}
 
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
-	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+	if err = os.MkdirAll(downloadsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
 	outPath := filepath.Join(downloadsDir, header.Filename)
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
-	outFile, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	outFile, createErr := os.Create(outPath)
+	if createErr != nil {
+		err = fmt.Errorf("failed to create output file: %w", createErr)
+		return err
 	}
-	defer outFile.Close()
+	defer func() {
+		outFile.Close()
+		if err != nil {
+			os.Remove(outPath)
+		}
+	}()
 
 	startTime := time.Now()
 
@@ -59,13 +72,15 @@ func Receive(s network.Stream) error {
 		last:  0,
 	}
 
-	received, err := io.Copy(multiWriter, pr)
-	if err != nil {
-		return fmt.Errorf("failed to receive file data: %w", err)
+	received, copyErr := io.Copy(multiWriter, pr)
+	if copyErr != nil {
+		err = fmt.Errorf("failed to receive file data: %w", copyErr)
+		return err
 	}
 
 	if uint64(received) != header.FileSize {
-		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		err = fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+		return err
 	}
 
 	duration := time.Since(startTime)
@@ -75,10 +90,9 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		err = fmt.Errorf("checksum mismatch: expected %x, got %x", header.Checksum, computedChecksum)
+		return err
 	}
 
 	// Determine Connection Type
@@ -89,7 +103,7 @@ func Receive(s network.Stream) error {
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
