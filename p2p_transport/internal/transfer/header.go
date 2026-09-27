@@ -18,7 +18,7 @@ const (
 // [2 bytes] Filename Length (N)
 // [N bytes] Filename
 // [8 bytes] File Size
-// [32 bytes] SHA-256 Checksum
+// [32 bytes] Reserved Checksum (zeroed when using post-transfer trailer mode)
 type Header struct {
 	Version  byte
 	Type     byte
