@@ -128,3 +128,16 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestBufferPoolRecycling(t *testing.T) {
+	buf1 := getBuffer()
+	buf1.WriteString("test payload data")
+	putBuffer(buf1)
+
+	buf2 := getBuffer()
+	if buf2.Len() != 0 {
+		t.Errorf("expected recycled buffer length to be 0, got %d", buf2.Len())
+	}
+	putBuffer(buf2)
+}
+

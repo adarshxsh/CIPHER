@@ -16,13 +16,15 @@ import (
 )
 
 type UploaderConfig struct {
-	MaxRetriesPerChunk int
-	FailoverRounds     int
+	MaxRetriesPerChunk    int
+	FailoverRounds        int
+	MaxConcurrentProviders int
 }
 
 var DefaultUploaderConfig = UploaderConfig{
-	MaxRetriesPerChunk: 3,
-	FailoverRounds:     2,
+	MaxRetriesPerChunk:    3,
+	FailoverRounds:        2,
+	MaxConcurrentProviders: 8,
 }
 
 // Distribute pushes all assigned chunks to target providers according to the placement plan,
@@ -49,8 +51,18 @@ func Distribute(
 		}
 	}
 
-	log.Printf("[Distribution] Beginning upload for ContentID %x across %d providers (Replication R=%d)...",
-		plan.ContentID, len(plan.ProviderChunks), plan.Replication)
+	maxConcurrency := cfg.MaxConcurrentProviders
+	if maxConcurrency <= 0 {
+		maxConcurrency = DefaultUploaderConfig.MaxConcurrentProviders
+	}
+	if maxConcurrency <= 0 {
+		maxConcurrency = 8
+	}
+
+	sem := make(chan struct{}, maxConcurrency)
+
+	log.Printf("[Distribution] Beginning upload for ContentID %x across %d providers (Replication R=%d, MaxConcurrency=%d)...",
+		plan.ContentID, len(plan.ProviderChunks), plan.Replication, maxConcurrency)
 
 	// Phase 1: Upload initial assignments in parallel across providers
 	var wg sync.WaitGroup
@@ -65,6 +77,17 @@ func Distribute(
 
 		go func(targetPeer peer.ID, chunkList []core.ChunkID) {
 			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				for _, cid := range chunkList {
+					tracker.SetStatus(cid, targetPeer, ReplicaFailed)
+				}
+				return
+			}
+			defer func() { <-sem }()
+
 			uploadToProvider(ctx, t, eng, plan.ContentID, targetPeer, chunkList, manifestBytes, tracker, cfg.MaxRetriesPerChunk)
 		}(p, assigned)
 	}
@@ -123,6 +146,17 @@ func Distribute(
 			failoverWg.Add(1)
 			go func(targetPeer peer.ID, chunkList []core.ChunkID) {
 				defer failoverWg.Done()
+
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					for _, cid := range chunkList {
+						tracker.SetStatus(cid, targetPeer, ReplicaFailed)
+					}
+					return
+				}
+				defer func() { <-sem }()
+
 				uploadToProvider(ctx, t, eng, plan.ContentID, targetPeer, chunkList, manifestBytes, tracker, cfg.MaxRetriesPerChunk)
 			}(p, chunks)
 		}
