@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	mrand "math/rand"
 	"os"
@@ -81,13 +82,13 @@ func TestBoundarySizes(t *testing.T) {
 	}
 }
 
-// TestMissingChunk verifies that Reassemble returns an error (and does not panic) if a chunk is missing
+// TestMissingChunk verifies that Reassemble returns an error immediately if a chunk is missing
 func TestMissingChunk(t *testing.T) {
 	eng, tmpDir, _ := setupTestEngine(t, 32*1024)
 	defer os.RemoveAll(tmpDir)
 	ctx := context.Background()
 
-	data := make([]byte, 100*1024) // ~3 chunks
+	data := make([]byte, 100*1024) // ~4 chunks
 	rand.Read(data)
 
 	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
@@ -95,24 +96,70 @@ func TestMissingChunk(t *testing.T) {
 		t.Fatalf("Ingest failed: %v", err)
 	}
 
-	if len(m.ChunkIDs) == 0 {
-		t.Fatal("Expected at least 1 chunk")
+	if len(m.ChunkIDs) < 3 {
+		t.Fatalf("Expected at least 3 chunks, got %d", len(m.ChunkIDs))
 	}
 
-	// Delete the middle chunk
-	targetChunk := m.ChunkIDs[len(m.ChunkIDs)/2]
-	chunkFile := filepath.Join(tmpDir, string(targetChunk[:]))
-	// storage/fs.go encodes hex as filename
-	_ = os.Remove(chunkFile) // it might be hex encoded, we rely on Reassemble failing. Actually we should just truncate or remove it properly, but any file removal or corruption works.
-
-	// Let's just remove everything in tmpDir for simplicity to ensure missing chunk
-	os.RemoveAll(tmpDir)
-	os.MkdirAll(tmpDir, 0755)
+	// Delete chunk index 1 (the 2nd chunk)
+	targetChunk := m.ChunkIDs[1]
+	encoded := hex.EncodeToString(targetChunk[:])
+	chunkFile := filepath.Join(tmpDir, encoded[0:2], encoded[2:4], encoded)
+	if err := os.Remove(chunkFile); err != nil {
+		t.Fatalf("Failed to remove target chunk file: %v", err)
+	}
 
 	var outBuf bytes.Buffer
 	err = eng.Reassemble(ctx, m, &outBuf)
 	if err == nil {
 		t.Fatal("Expected Reassemble to fail due to missing chunk, but it succeeded")
+	}
+
+	// Verify streaming reassembly stopped at missing chunk (wrote only chunk 0 = 32KB)
+	if outBuf.Len() != 32*1024 {
+		t.Fatalf("Expected exactly 1 chunk (32768 bytes) written before failing, got %d bytes", outBuf.Len())
+	}
+}
+
+// TestCorruptedChunk verifies that Reassemble aborts immediately on hash mismatch
+func TestCorruptedChunk(t *testing.T) {
+	eng, tmpDir, _ := setupTestEngine(t, 32*1024)
+	defer os.RemoveAll(tmpDir)
+	ctx := context.Background()
+
+	data := make([]byte, 100*1024) // ~4 chunks
+	rand.Read(data)
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	if len(m.ChunkIDs) < 3 {
+		t.Fatalf("Expected at least 3 chunks, got %d", len(m.ChunkIDs))
+	}
+
+	// Corrupt chunk index 1 (the 2nd chunk)
+	targetChunk := m.ChunkIDs[1]
+	encoded := hex.EncodeToString(targetChunk[:])
+	chunkFile := filepath.Join(tmpDir, encoded[0:2], encoded[2:4], encoded)
+
+	f, err := os.OpenFile(chunkFile, os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("Failed to open chunk file for corruption: %v", err)
+	}
+	f.Seek(100, os.SEEK_SET) // corrupt payload bytes past the 66-byte ChunkHeader
+	f.Write([]byte("CORRUPTED_DATA_BYTES"))
+	f.Close()
+
+	var outBuf bytes.Buffer
+	err = eng.Reassemble(ctx, m, &outBuf)
+	if err == nil {
+		t.Fatal("Expected Reassemble to fail due to corrupted chunk, but it succeeded")
+	}
+
+	// Verify streaming reassembly stopped at corrupted chunk
+	if outBuf.Len() != 32*1024 {
+		t.Fatalf("Expected exactly 1 chunk (32768 bytes) written before failing, got %d bytes", outBuf.Len())
 	}
 }
 
