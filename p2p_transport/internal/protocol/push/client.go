@@ -40,16 +40,35 @@ func (c *Client) PeerID() peer.ID {
 
 // SendManifest sends the manifest metadata along with the exact set of assigned chunk IDs for this provider.
 func (c *Client) SendManifest(ctx context.Context, contentID core.ContentID, assignedChunkIDs []core.ChunkID, manifestData []byte) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + ReadTimeout))
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	} else {
+		deadline = time.Now().Add(WriteTimeout + ReadTimeout)
+	}
+	_ = c.stream.SetDeadline(deadline)
 	defer c.stream.SetDeadline(time.Time{})
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.stream.Reset()
+	})
+	defer stop()
 
 	req := BuildPushManifest(contentID, assignedChunkIDs, manifestData)
 	if err := WritePushMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to write PUSH_MANIFEST: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to write PUSH_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadPushMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to read PUSH_MANIFEST_ACK: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to read PUSH_MANIFEST_ACK: %w", err)
 	}
 
@@ -80,8 +99,19 @@ func (c *Client) SendManifest(ctx context.Context, contentID core.ContentID, ass
 
 // SendChunk transmits a single chunk to the provider and waits for confirmation.
 func (c *Client) SendChunk(ctx context.Context, contentID core.ContentID, chunk *core.Chunk) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + AckTimeout))
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	} else {
+		deadline = time.Now().Add(WriteTimeout + AckTimeout)
+	}
+	_ = c.stream.SetDeadline(deadline)
 	defer c.stream.SetDeadline(time.Time{})
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.stream.Reset()
+	})
+	defer stop()
 
 	req, err := BuildPushChunk(contentID, chunk)
 	if err != nil {
@@ -89,11 +119,19 @@ func (c *Client) SendChunk(ctx context.Context, contentID core.ContentID, chunk 
 	}
 
 	if err := WritePushMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to write PUSH_CHUNK: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to write PUSH_CHUNK: %w", err)
 	}
 
 	resp, err := ReadPushMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to read PUSH_CHUNK_ACK: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to read PUSH_CHUNK_ACK: %w", err)
 	}
 
@@ -124,16 +162,35 @@ func (c *Client) SendChunk(ctx context.Context, contentID core.ContentID, chunk 
 
 // SendBatchComplete signals to the provider that all assigned chunks have been uploaded.
 func (c *Client) SendBatchComplete(ctx context.Context, contentID core.ContentID) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + ReadTimeout))
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	} else {
+		deadline = time.Now().Add(WriteTimeout + ReadTimeout)
+	}
+	_ = c.stream.SetDeadline(deadline)
 	defer c.stream.SetDeadline(time.Time{})
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.stream.Reset()
+	})
+	defer stop()
 
 	req := BuildPushBatchComplete(contentID)
 	if err := WritePushMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to write PUSH_BATCH_COMPLETE: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to write PUSH_BATCH_COMPLETE: %w", err)
 	}
 
 	resp, err := ReadPushMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return fmt.Errorf("failed to read PUSH_BATCH_COMPLETE_ACK: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to read PUSH_BATCH_COMPLETE_ACK: %w", err)
 	}
 

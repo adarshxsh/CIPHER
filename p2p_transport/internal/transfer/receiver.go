@@ -16,6 +16,25 @@ import (
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
+const DefaultTransferTimeout = 30 * time.Second
+
+type deadlineReader struct {
+	r       io.Reader
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dr *deadlineReader) Read(p []byte) (int, error) {
+	if dr.timeout > 0 {
+		_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	}
+	n, err := dr.r.Read(p)
+	if err != nil && err != io.EOF {
+		_ = dr.s.Reset()
+	}
+	return n, err
+}
+
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
 	defer s.Close()
@@ -24,17 +43,22 @@ func Receive(s network.Stream) error {
 
 	// 1. Read Header
 	var header Header
+	_ = s.SetReadDeadline(time.Now().Add(DefaultTransferTimeout))
 	if err := header.ReadFrom(s); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to read header: %w", err)
 	}
+	_ = s.SetReadDeadline(time.Time{})
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
+		_ = s.Reset()
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
@@ -43,6 +67,7 @@ func Receive(s network.Stream) error {
 
 	outFile, err := os.Create(outPath)
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer outFile.Close()
@@ -53,14 +78,22 @@ func Receive(s network.Stream) error {
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
+	dr := &deadlineReader{
+		r:       s,
+		s:       s,
+		timeout: DefaultTransferTimeout,
+	}
+
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(dr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}
 
 	received, err := io.Copy(multiWriter, pr)
+	_ = s.SetReadDeadline(time.Time{})
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}
 
