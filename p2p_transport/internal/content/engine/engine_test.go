@@ -71,3 +71,55 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_RestartPersistenceWithFSKeyProvider(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "restart-engine-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 32 * 1024,
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+
+	fsKeys1, err := NewFSKeyProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create FSKeyProvider: %v", err)
+	}
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store1 := storage.NewFSStore(tmpDir)
+
+	eng1 := NewContentEngine(config, enc, dig, store1, store1, fsKeys1, store1)
+
+	originalData := []byte("Hello, persistent keystore cross-restart test content!")
+	ctx := context.Background()
+
+	m, err := eng1.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Simulate node/daemon restart: create new key provider and content engine from same store directory
+	fsKeys2, err := NewFSKeyProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to reload FSKeyProvider: %v", err)
+	}
+	store2 := storage.NewFSStore(tmpDir)
+	eng2 := NewContentEngine(config, enc, dig, store2, store2, fsKeys2, store2)
+
+	var reassembled bytes.Buffer
+	if err := eng2.Reassemble(ctx, m, &reassembled); err != nil {
+		t.Fatalf("failed to reassemble after engine restart: %v", err)
+	}
+
+	if !bytes.Equal(originalData, reassembled.Bytes()) {
+		t.Errorf("reassembled data mismatch after process restart")
+	}
+}
