@@ -82,7 +82,17 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
 	}
 
-	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	providerCh := kdht.FindProvidersAsync(queryCtx, cid, PROVIDER_LIMIT)
+
+	defer func() {
+		go func() {
+			for range providerCh {
+			}
+		}()
+	}()
 
 	var providers []peer.AddrInfo
 
@@ -95,7 +105,6 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 	}
 
 	return providers, nil
-
 }
 
 // StartRepublisher begins a background loop that re-announces all locally available manifests to the DHT.
