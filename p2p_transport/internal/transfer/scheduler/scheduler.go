@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -18,18 +19,49 @@ type Source struct {
 	Available map[core.ChunkID]struct{}
 }
 
+type SchedulerConfig struct {
+	Throttle time.Duration
+}
+
+type Option func(*Scheduler)
+
+func WithThrottle(d time.Duration) Option {
+	return func(s *Scheduler) {
+		s.Throttle = d
+	}
+}
+
+func WithSchedulerConfig(cfg SchedulerConfig) Option {
+	return func(s *Scheduler) {
+		s.Throttle = cfg.Throttle
+	}
+}
+
+func WithWorkerConfig(cfg WorkerConfig) Option {
+	return func(s *Scheduler) {
+		s.Throttle = cfg.Throttle
+	}
+}
+
 type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Throttle    time.Duration
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
-	return &Scheduler{
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, opts ...Option) *Scheduler {
+	s := &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
@@ -47,7 +79,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Throttle)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
