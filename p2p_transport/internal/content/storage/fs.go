@@ -94,25 +94,46 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
-	chunk := &core.Chunk{}
-	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
+	c := &core.Chunk{}
+	if err := binary.Read(f, binary.LittleEndian, &c.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read chunk data: %w", err)
+	if c.Header.CipherSize > core.MaxCiphertextSize {
+		return nil, fmt.Errorf("chunk cipher size %d exceeds maximum limit %d", c.Header.CipherSize, core.MaxCiphertextSize)
+	}
+	if c.Header.PlainSize > core.MaxCiphertextSize {
+		return nil, fmt.Errorf("chunk plain size %d exceeds maximum limit %d", c.Header.PlainSize, core.MaxCiphertextSize)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	payloadSize := c.Header.CipherSize
+	if payloadSize == 0 {
+		payloadSize = c.Header.PlainSize
+	}
 
-	return chunk, nil
+	if payloadSize > core.MaxCiphertextSize {
+		return nil, fmt.Errorf("chunk payload size %d exceeds maximum limit %d", payloadSize, core.MaxCiphertextSize)
+	}
+
+	data := make([]byte, payloadSize)
+	if payloadSize > 0 {
+		limitReader := io.LimitReader(f, int64(payloadSize))
+		if _, err := io.ReadFull(limitReader, data); err != nil {
+			return nil, fmt.Errorf("failed to read chunk data: %w", err)
+		}
+	}
+
+	var extra [1]byte
+	n, err := f.Read(extra[:])
+	if n > 0 {
+		return nil, fmt.Errorf("unexpected extra data at end of chunk file")
+	}
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to check chunk trailing data: %w", err)
+	}
+
+	c.Data = data
+	return c, nil
 }
 
 func (s *FSStorage) manifestPath(id core.ContentID) string {
@@ -122,10 +143,22 @@ func (s *FSStorage) manifestPath(id core.ContentID) string {
 
 func (s *FSStorage) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {
 	path := s.manifestPath(id)
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("manifest not found: %w", err)
 	}
+	defer f.Close()
+
+	limitReader := io.LimitReader(f, int64(core.MaxManifestSize)+1)
+	data, err := io.ReadAll(limitReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	if uint32(len(data)) > core.MaxManifestSize {
+		return nil, fmt.Errorf("manifest size %d exceeds maximum limit %d", len(data), core.MaxManifestSize)
+	}
+
 	return data, nil
 }
 
