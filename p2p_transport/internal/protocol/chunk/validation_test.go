@@ -129,3 +129,38 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_Bounds(t *testing.T) {
+	// Undersized payload
+	shortPayload := make([]byte, chunk.ContentIDSize-1)
+	err := chunk.ValidateManifestPayload(shortPayload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for short payload, got %v", err)
+	}
+
+	// Oversized payload
+	overPayload := make([]byte, chunk.MaxManifestSize+1)
+	err = chunk.ValidateManifestPayload(overPayload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for oversized payload, got %v", err)
+	}
+
+	// ValidateMessage with oversized manifest payload
+	msg := &chunk.Message{
+		Version: chunk.CurrentMessageVersion,
+		Type:    chunk.MsgManifest,
+		Payload: overPayload,
+	}
+	err = chunk.ValidateMessage(msg)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload from ValidateMessage, got %v", err)
+	}
+}
+
+func TestParseManifest_OversizedPayload(t *testing.T) {
+	overPayload := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err := chunk.ParseManifest(overPayload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload from ParseManifest, got %v", err)
+	}
+}
