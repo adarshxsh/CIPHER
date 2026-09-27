@@ -40,10 +40,10 @@ echo "Bootstrap Multiaddr: $BOOT_ADDR"
 
 echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 # Seed is set to false so the publisher explicitly terminates after ingestion
-./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
+./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat -export-key-file pub_indep_key.bin > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY=$(python3 -c "import sys; print(open('pub_indep_key.bin','rb').read().hex())" 2>/dev/null)
 
 echo "Content Published:"
 echo "  - ContentID:      $CONTENT_ID"

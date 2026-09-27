@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+	exportKeyFile := flag.String("export-key-file", "", "Target file path to export raw key material to")
 
 	flag.Parse()
 
@@ -151,7 +153,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewFSKeyProvider(*storePath)
+	if err != nil {
+		log.Fatalf("Failed to create FSKeyProvider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -206,9 +211,22 @@ func main() {
 
 	// 5. Store decryption key if provided
 	if *keyHex != "" {
-		kBytes, err := hex.DecodeString(*keyHex)
-		if err != nil || len(kBytes) != 32 {
-			log.Fatalf("Invalid key format (must be 32-byte hex)")
+		var kBytes []byte
+		if fileData, err := os.ReadFile(*keyHex); err == nil {
+			if len(fileData) == 32 {
+				kBytes = fileData
+			} else if decoded, err := hex.DecodeString(strings.TrimSpace(string(fileData))); err == nil && len(decoded) == 32 {
+				kBytes = decoded
+			}
+		}
+		if len(kBytes) == 0 {
+			decoded, err := hex.DecodeString(*keyHex)
+			if err == nil && len(decoded) == 32 {
+				kBytes = decoded
+			}
+		}
+		if len(kBytes) != 32 {
+			log.Fatalf("Invalid key format or length (must be 32 bytes binary or 32-byte hex)")
 		}
 		keys.Put(ctx, contentID, kBytes)
 	}
@@ -244,5 +262,19 @@ func main() {
 			log.Fatalf("Reassembly failed: %v", err)
 		}
 		log.Printf("[✓] Content decrypted and reassembled to: %s", *reassembleOut)
+	}
+
+	if *exportKeyFile != "" {
+		if keyBytes, err := keys.Get(ctx, contentID); err == nil {
+			if dir := filepath.Dir(*exportKeyFile); dir != "." && dir != "" {
+				_ = os.MkdirAll(dir, 0700)
+			}
+			if err := os.WriteFile(*exportKeyFile, keyBytes, 0600); err == nil {
+				_ = os.Chmod(*exportKeyFile, 0600)
+				log.Printf("[✓] Exported decryption key to %s", *exportKeyFile)
+			} else {
+				log.Printf("Warning: Failed to export key to %s: %v", *exportKeyFile, err)
+			}
+		}
 	}
 }

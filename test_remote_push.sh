@@ -62,10 +62,10 @@ echo "Provider 3: $P3_ADDR"
 echo "\n[Step 5/6] Publisher pushes 2 MB file across Providers with Replication R=2..."
 ./bin/publisher -p 48040 -ws-port 0 -file test_orig.dat -store ./store_pub \
     -push -providers "$P1_ADDR,$P2_ADDR,$P3_ADDR" -replication 2 \
-    -bootstrap "$BOOT_ADDR" -seed=false > publisher.log 2>&1
+    -bootstrap "$BOOT_ADDR" -seed=false -export-key-file push_key.bin > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY=$(python3 -c "import sys; print(open('push_key.bin','rb').read().hex())" 2>/dev/null)
 
 echo "Publisher Push Completed Successfully:"
 echo "  - ContentID:      $CONTENT_ID"
