@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
 
 	"cipher/internal/content/core"
 )
@@ -196,7 +198,39 @@ func ParseAck(payload []byte) (core.ChunkID, uint8, error) {
 	return id, payload[32], nil
 }
 
+// SanitizeErrorMessage sanitizes an error message string by escaping control
+// characters (such as line feeds, carriage returns, and tabs) into safe escaped
+// sequences and capping the resulting string to MaxErrorMessageSize.
+func SanitizeErrorMessage(msg string) string {
+	var sb strings.Builder
+	sb.Grow(len(msg))
+	for _, r := range msg {
+		switch r {
+		case '\n':
+			sb.WriteString(`\n`)
+		case '\r':
+			sb.WriteString(`\r`)
+		case '\t':
+			sb.WriteString(`\t`)
+		default:
+			if unicode.IsControl(r) {
+				fmt.Fprintf(&sb, "\\x%02x", r)
+			} else {
+				sb.WriteRune(r)
+			}
+		}
+	}
+	res := sb.String()
+	if len(res) > MaxErrorMessageSize {
+		res = res[:MaxErrorMessageSize]
+	}
+	return res
+}
+
 func BuildError(code ErrorCode, msg string) *Message {
+	if len(msg) > MaxErrorMessageSize {
+		msg = msg[:MaxErrorMessageSize]
+	}
 	payload := append([]byte{byte(code)}, []byte(msg)...)
 	return &Message{
 		Version: CurrentMessageVersion,
@@ -206,8 +240,10 @@ func BuildError(code ErrorCode, msg string) *Message {
 }
 
 func ParseError(payload []byte) (ErrorCode, string, error) {
-	if len(payload) < 1 {
-		return 0, "", errors.New("invalid payload length for ERROR")
+	if err := ValidateErrorPayload(payload); err != nil {
+		return 0, "", err
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	sanitizedMsg := SanitizeErrorMessage(string(payload[1:]))
+	return code, sanitizedMsg, nil
 }

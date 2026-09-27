@@ -56,6 +56,18 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
 			h.handleRequestChunk(s, msg)
+		case MsgError:
+			if err := ValidateErrorPayload(msg.Payload); err != nil {
+				log.Printf("[Chunk Protocol] Invalid error payload from peer %s: %v", s.Conn().RemotePeer(), err)
+				return
+			}
+			code, msgStr, err := ParseError(msg.Payload)
+			if err != nil {
+				log.Printf("[Chunk Protocol] Error parsing error payload from peer %s: %v", s.Conn().RemotePeer(), err)
+				return
+			}
+			log.Printf("[Chunk Protocol] Peer %s reported error: [%d] %q", s.Conn().RemotePeer(), code, msgStr)
+			return
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
@@ -122,8 +134,16 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		if err := ValidateErrorPayload(ackMsg.Payload); err != nil {
+			log.Printf("[Chunk Protocol] Invalid error payload from peer %s: %v", s.Conn().RemotePeer(), err)
+			return
+		}
+		code, msgStr, err := ParseError(ackMsg.Payload)
+		if err != nil {
+			log.Printf("[Chunk Protocol] Error parsing error payload from peer %s: %v", s.Conn().RemotePeer(), err)
+			return
+		}
+		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %q", chunkID, code, msgStr)
 		return
 	}
 	if ackMsg.Type != MsgAck {
