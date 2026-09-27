@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -34,9 +35,9 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		frame, err := DecodeFrame(s)
 		if err != nil {
-			if err == io.EOF || err.Error() == "stream reset" {
+			if errors.Is(err, io.EOF) || err == io.EOF || err.Error() == "stream reset" {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
@@ -44,27 +45,27 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 
-		if msg.Version != CurrentMessageVersion {
+		if frame.Version != CurrentMessageVersion {
 			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
+			log.Printf("[Chunk Protocol] Unsupported version %d", frame.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
 
-		switch msg.Type {
+		switch frame.MessageType {
 		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
+			h.handleRequestManifest(s, frame)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, frame)
 		default:
-			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
+			log.Printf("[Chunk Protocol] Unsupported message type: %d", frame.MessageType)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
 	}
 }
 
-func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
-	contentID, err := ParseRequestManifest(msg.Payload)
+func (h *StreamHandler) handleRequestManifest(s network.Stream, frame *Frame) {
+	contentID, err := ParseRequestManifest(frame.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
 		return
@@ -84,8 +85,8 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
-	chunkID, err := ParseRequestChunk(msg.Payload)
+func (h *StreamHandler) handleRequestChunk(s network.Stream, frame *Frame) {
+	chunkID, err := ParseRequestChunk(frame.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
 		return
@@ -116,18 +117,18 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
-	ackMsg, err := ReadMessage(s)
+	ackFrame, err := DecodeFrame(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
-	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
+	if ackFrame.MessageType == MsgError {
+		code, msgStr, _ := ParseError(ackFrame.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
-	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+	if ackFrame.MessageType != MsgAck {
+		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackFrame.MessageType)
 		return
 	}
 }
