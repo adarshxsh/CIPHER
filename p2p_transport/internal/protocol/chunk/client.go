@@ -47,18 +47,18 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := DecodeFrame(c.stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.Type == MsgError {
+	if resp.MessageType == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
-	if resp.Type != MsgManifest {
-		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
+	if resp.MessageType != MsgManifest {
+		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.MessageType)
 	}
 
 	respID, data, err := ParseManifest(resp.Payload)
@@ -94,12 +94,12 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := DecodeFrame(c.stream)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.Type == MsgError {
+	if resp.MessageType == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
@@ -107,8 +107,8 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
-	if resp.Type != MsgChunk {
-		return nil, fmt.Errorf("expected CHUNK, got %d", resp.Type)
+	if resp.MessageType != MsgChunk {
+		return nil, fmt.Errorf("expected CHUNK, got %d", resp.MessageType)
 	}
 
 	chunk, err := ParseChunk(resp.Payload)
