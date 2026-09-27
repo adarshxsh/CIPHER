@@ -154,6 +154,13 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
+	computedID, err := m.ComputeDigest()
+	if err != nil || computedID != contentID {
+		log.Printf("[Push Protocol] Manifest digest mismatch: expected %x, computed %x (err: %v)", contentID, computedID, err)
+		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "manifest digest mismatch"))
+		return
+	}
+
 	expectedMap := make(map[core.ChunkID]struct{})
 	for _, cid := range assignedChunkIDs {
 		expectedMap[cid] = struct{}{}

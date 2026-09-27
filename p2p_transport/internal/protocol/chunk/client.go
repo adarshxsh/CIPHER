@@ -61,12 +61,13 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	if err := ValidateManifestForRequest(id, resp.Payload); err != nil {
+		return nil, fmt.Errorf("manifest validation failed: %w", err)
+	}
+
+	_, data, err := ParseManifest(resp.Payload)
 	if err != nil {
 		return nil, err
-	}
-	if respID != id {
-		return nil, fmt.Errorf("content ID mismatch in response")
 	}
 
 	return data, nil
