@@ -3,13 +3,20 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"cipher/internal/content/core"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	maxSessionFileSize int64 = 1 * 1024 * 1024 // 1 MB
+	maxSessionsList          = 100
 )
 
 type SessionStatus string
@@ -69,15 +76,24 @@ func (m *FileSessionManager) getPath(id core.ContentID) string {
 
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No session found
 		}
 		return nil, err
 	}
+	if info.Size() > maxSessionFileSize {
+		return nil, fmt.Errorf("session file %s exceeds maximum size of %d bytes", path, maxSessionFileSize)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
 	var s TransferSession
-	if err := json.Unmarshal(b, &s); err != nil {
+	if err := json.NewDecoder(io.LimitReader(f, maxSessionFileSize)).Decode(&s); err != nil {
 		return nil, err
 	}
 	return &s, nil
@@ -112,6 +128,12 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 	return nil
 }
 
+type sessionFileInfo struct {
+	path    string
+	modTime time.Time
+	size    int64
+}
+
 func (m *FileSessionManager) List() ([]*TransferSession, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -120,18 +142,54 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
-	var sessions []*TransferSession
+
+	var files []sessionFileInfo
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
+			info, err := entry.Info()
 			if err != nil {
 				continue
 			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
+			files = append(files, sessionFileInfo{
+				path:    filepath.Join(m.dir, entry.Name()),
+				modTime: info.ModTime(),
+				size:    info.Size(),
+			})
+		}
+	}
+
+	// Sort files by modification time descending (newest entries first)
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].modTime.Equal(files[j].modTime) {
+			return files[i].path > files[j].path
+		}
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	var sessions []*TransferSession
+	for _, fInfo := range files {
+		// Enforce size check before reading file content
+		if fInfo.size > maxSessionFileSize || fInfo.size == 0 {
+			continue
+		}
+
+		f, err := os.Open(fInfo.path)
+		if err != nil {
+			continue
+		}
+
+		var s TransferSession
+		// Stream JSON decoding using io.LimitReader
+		err = json.NewDecoder(io.LimitReader(f, maxSessionFileSize)).Decode(&s)
+		f.Close()
+
+		if err == nil {
+			sessions = append(sessions, &s)
+			if len(sessions) >= maxSessionsList {
+				break
 			}
 		}
 	}
+
 	return sessions, nil
 }
