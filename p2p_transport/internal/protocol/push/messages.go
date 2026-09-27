@@ -143,14 +143,19 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 	copy(contentID[:], payload[:32])
 	count := binary.LittleEndian.Uint32(payload[32:36])
 
-	expectedOffset := 36 + int(count)*32
-	if len(payload) < expectedOffset {
+	maxChunks := uint64(len(payload)-36) / 32
+	if uint64(count) > maxChunks {
+		return contentID, nil, nil, fmt.Errorf("chunk count %d exceeds payload capacity %d", count, maxChunks)
+	}
+
+	expectedOffset := uint64(36) + uint64(count)*32
+	if uint64(len(payload)) < expectedOffset {
 		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", len(payload), count)
 	}
 
 	assignedChunkIDs := make([]core.ChunkID, count)
-	for i := 0; i < int(count); i++ {
-		offset := 36 + i*32
+	for i := uint64(0); i < uint64(count); i++ {
+		offset := uint64(36) + i*32
 		copy(assignedChunkIDs[i][:], payload[offset:offset+32])
 	}
 
