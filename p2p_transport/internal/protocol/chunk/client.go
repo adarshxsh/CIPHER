@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -42,13 +43,35 @@ func (c *Client) Close() error {
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	} else {
+		deadline = time.Now().Add(DefaultStreamTimeout)
+	}
+	_ = c.stream.SetDeadline(deadline)
+	defer c.stream.SetDeadline(time.Time{})
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.stream.Reset()
+	})
+	defer stop()
+
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("failed to read response: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -89,13 +112,35 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	} else {
+		deadline = time.Now().Add(DefaultStreamTimeout)
+	}
+	_ = c.stream.SetDeadline(deadline)
+	defer c.stream.SetDeadline(time.Time{})
+
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.stream.Reset()
+	})
+	defer stop()
+
 	req := BuildRequestChunk(chunkID)
 	if err := WriteMessage(c.stream, req); err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		_ = c.stream.Reset()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("failed to read response: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -121,6 +166,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
 		WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
