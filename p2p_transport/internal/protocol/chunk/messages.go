@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"cipher/internal/content/core"
 )
@@ -45,37 +46,58 @@ type Message struct {
 	Payload []byte
 }
 
+var headerPool = sync.Pool{
+	New: func() any {
+		return new([7]byte)
+	},
+}
+
 func WriteMessage(w io.Writer, msg *Message) error {
-	buf := new(bytes.Buffer)
-	
-	// Envelope: Version (2), Type (1)
-	if err := binary.Write(buf, binary.LittleEndian, msg.Version); err != nil {
-		return err
+	if msg == nil {
+		return errors.New("nil message")
 	}
-	if err := binary.Write(buf, binary.LittleEndian, msg.Type); err != nil {
-		return err
-	}
-	// Payload
-	buf.Write(msg.Payload)
-
-	// Frame: Size prefix (4 bytes)
-	size := uint32(buf.Len())
-	if err := binary.Write(w, binary.LittleEndian, size); err != nil {
-		return err
+	payloadLen := len(msg.Payload)
+	size := uint32(3 + payloadLen)
+	if size > MaxFrameSize {
+		return errors.New("message exceeds maximum frame size")
 	}
 
-	_, err := w.Write(buf.Bytes())
-	return err
+	hdrPtr := headerPool.Get().(*[7]byte)
+	binary.LittleEndian.PutUint32(hdrPtr[0:4], size)
+	binary.LittleEndian.PutUint16(hdrPtr[4:6], msg.Version)
+	hdrPtr[6] = byte(msg.Type)
+
+	_, err := w.Write(hdrPtr[:])
+	headerPool.Put(hdrPtr)
+	if err != nil {
+		return err
+	}
+
+	if payloadLen > 0 {
+		if _, err := w.Write(msg.Payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ReadMessage(r io.Reader) (*Message, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	if r == nil {
+		return nil, errors.New("nil reader")
+	}
+
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
 		return nil, err
 	}
 
-	if size > 2*1024*1024 { // 2MB max frame size
+	size := binary.LittleEndian.Uint32(sizeBuf[:])
+
+	if size > MaxFrameSize {
 		return nil, errors.New("message exceeds maximum frame size")
+	}
+	if size < 3 {
+		return nil, errors.New("message frame too short")
 	}
 
 	data := make([]byte, size)
@@ -83,28 +105,25 @@ func ReadMessage(r io.Reader) (*Message, error) {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &Message{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
-	}
+	version := binary.LittleEndian.Uint16(data[0:2])
+	msgType := MessageType(data[2])
 
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
-
-	return msg, nil
+	return &Message{
+		Version: version,
+		Type:    msgType,
+		Payload: data[3:],
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
 
 func BuildRequestManifest(id core.ContentID) *Message {
+	payload := make([]byte, 32)
+	copy(payload, id[:])
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgRequestManifest,
-		Payload: id[:],
+		Payload: payload,
 	}
 }
 
@@ -118,7 +137,9 @@ func ParseRequestManifest(payload []byte) (core.ContentID, error) {
 }
 
 func BuildManifest(id core.ContentID, data []byte) *Message {
-	payload := append(id[:], data...)
+	payload := make([]byte, 32+len(data))
+	copy(payload[:32], id[:])
+	copy(payload[32:], data)
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgManifest,
@@ -136,10 +157,12 @@ func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
+	payload := make([]byte, 32)
+	copy(payload, id[:])
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgRequestChunk,
-		Payload: id[:],
+		Payload: payload,
 	}
 }
 
@@ -153,33 +176,41 @@ func ParseRequestChunk(payload []byte) (core.ChunkID, error) {
 }
 
 func BuildChunk(chunk *core.Chunk) (*Message, error) {
-	buf := new(bytes.Buffer)
-	// Write Header
+	if chunk == nil {
+		return nil, errors.New("nil chunk")
+	}
+	var dummyHeader core.ChunkHeader
+	headerSize := binary.Size(dummyHeader)
+	payload := make([]byte, headerSize+len(chunk.Data))
+
+	buf := bytes.NewBuffer(payload[:0])
 	if err := binary.Write(buf, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, err
 	}
-	// Write Ciphertext
-	buf.Write(chunk.Data)
+	copy(payload[headerSize:], chunk.Data)
+
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgChunk,
-		Payload: buf.Bytes(),
+		Payload: payload,
 	}, nil
 }
 
 func ParseChunk(payload []byte) (*core.Chunk, error) {
 	chunk := &core.Chunk{}
-	buf := bytes.NewReader(payload)
-	if err := binary.Read(buf, binary.LittleEndian, &chunk.Header); err != nil {
+	r := bytes.NewReader(payload)
+	if err := binary.Read(r, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, err
 	}
-	chunk.Data = make([]byte, buf.Len())
-	buf.Read(chunk.Data)
+	offset := len(payload) - r.Len()
+	chunk.Data = payload[offset:]
 	return chunk, nil
 }
 
 func BuildAck(id core.ChunkID, status uint8) *Message {
-	payload := append(id[:], status)
+	payload := make([]byte, 33)
+	copy(payload[:32], id[:])
+	payload[32] = status
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgAck,
@@ -197,7 +228,9 @@ func ParseAck(payload []byte) (core.ChunkID, uint8, error) {
 }
 
 func BuildError(code ErrorCode, msg string) *Message {
-	payload := append([]byte{byte(code)}, []byte(msg)...)
+	payload := make([]byte, 1+len(msg))
+	payload[0] = byte(code)
+	copy(payload[1:], msg)
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgError,
