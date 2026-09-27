@@ -113,9 +113,9 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 		MerkleRoot: wholeHash,
 		WholeHash:  wholeHash,
 		Crypto: manifest.CryptoDescriptor{
-			Algorithm:      "ChaCha20-Poly1305",
+			Algorithm:      "XChaCha20-Poly1305",
 			Version:        1,
-			ChunkNonceSize: 12,
+			ChunkNonceSize: 24,
 			KeyID:          "embedded",
 		},
 	}

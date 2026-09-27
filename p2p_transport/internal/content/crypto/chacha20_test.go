@@ -71,3 +71,37 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 		t.Errorf("expected decryption to fail for corrupted ciphertext")
 	}
 }
+
+func TestChaCha20Encryptor_DistinctNonces(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	plaintext := []byte("identical plaintext block for random nonce test")
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{PlainSize: uint32(len(plaintext))},
+		Data:   append([]byte(nil), plaintext...),
+	}
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{PlainSize: uint32(len(plaintext))},
+		Data:   append([]byte(nil), plaintext...),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk 1: %v", err)
+	}
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk 2: %v", err)
+	}
+
+	if bytes.Equal(chunk1.Header.Nonce[:], chunk2.Header.Nonce[:]) {
+		t.Errorf("expected distinct nonces for identical plaintexts, got identical nonces")
+	}
+
+	if bytes.Equal(chunk1.Data, chunk2.Data) {
+		t.Errorf("expected distinct ciphertexts for identical plaintexts, got identical ciphertexts")
+	}
+}
