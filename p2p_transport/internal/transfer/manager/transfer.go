@@ -150,6 +150,23 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 			fmt.Printf("Peer %s: %d chunks (%.1f%%)\n", peerID, count, float64(count)/float64(sess.TotalChunks)*100)
 		}
 		fmt.Println("---------------------------------")
+
+		reps := sched.ReputationManager.GetAllReputations()
+		if len(reps) > 0 {
+			fmt.Println("\n--- Peer Reputation & Fault Metrics ---")
+			log.Println("[TransferManager] Session Peer Fault Metrics:")
+			for peerID, rep := range reps {
+				status := "Healthy"
+				if rep.IsIsolated {
+					status = "Quarantined/Isolated"
+				}
+				metricsLine := fmt.Sprintf("Peer %s: Score=%.1f, Status=%s, TotalFaults=%d (Corruption=%d, Timeout=%d, Other=%d)",
+					peerID, rep.FaultScore, status, rep.FailureCount, rep.CorruptionCount, rep.TimeoutCount, rep.OtherErrorCount)
+				fmt.Println(metricsLine)
+				log.Printf("[TransferManager] %s", metricsLine)
+			}
+			fmt.Println("----------------------------------------")
+		}
 	}
 
 	schedErr := <-errCh
