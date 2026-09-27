@@ -8,8 +8,8 @@ import (
 	"cipher/internal/content/core"
 )
 
-func TestChaCha20Encryptor(t *testing.T) {
-	enc := NewChaCha20Encryptor()
+func TestXChaCha20Encryptor(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
 
 	key := make([]byte, 32)
 	rand.Read(key)
@@ -35,6 +35,10 @@ func TestChaCha20Encryptor(t *testing.T) {
 		t.Errorf("ciphertext is identical to plaintext")
 	}
 
+	if len(chunk.Header.Nonce) != 24 {
+		t.Errorf("expected 24-byte nonce, got %d", len(chunk.Header.Nonce))
+	}
+
 	// Decrypt
 	if err := enc.DecryptChunk(key, chunk); err != nil {
 		t.Fatalf("failed to decrypt: %v", err)
@@ -49,8 +53,37 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 }
 
-func TestChaCha20Encryptor_Corruption(t *testing.T) {
-	enc := NewChaCha20Encryptor()
+func TestXChaCha20Encryptor_RandomNoncesAndNoCollisions(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	const numChunks = 100
+	seenNonces := make(map[[24]byte]bool)
+
+	for i := 0; i < numChunks; i++ {
+		chunk := &core.Chunk{
+			Header: core.ChunkHeader{
+				Index:     0, // same chunk index across all runs
+				PlainSize: 5,
+			},
+			Data: []byte("hello"),
+		}
+
+		if err := enc.EncryptChunk(key, chunk); err != nil {
+			t.Fatalf("failed to encrypt chunk %d: %v", i, err)
+		}
+
+		nonce := chunk.Header.Nonce
+		if seenNonces[nonce] {
+			t.Fatalf("nonce collision detected on chunk %d: %x", i, nonce)
+		}
+		seenNonces[nonce] = true
+	}
+}
+
+func TestXChaCha20Encryptor_Corruption(t *testing.T) {
+	enc := NewXChaCha20Encryptor()
 	key := make([]byte, 32)
 	rand.Read(key)
 
@@ -61,7 +94,9 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 		Data: []byte("hello"),
 	}
 
-	enc.EncryptChunk(key, chunk)
+	if err := enc.EncryptChunk(key, chunk); err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
 
 	// Corrupt
 	chunk.Data[0] ^= 0xFF
