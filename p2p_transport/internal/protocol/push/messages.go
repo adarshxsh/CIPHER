@@ -143,8 +143,12 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 	copy(contentID[:], payload[:32])
 	count := binary.LittleEndian.Uint32(payload[32:36])
 
+	if count > (1<<24) {
+		return contentID, nil, nil, fmt.Errorf("chunk count %d exceeds maximum limit", count)
+	}
+
 	expectedOffset := 36 + int(count)*32
-	if len(payload) < expectedOffset {
+	if expectedOffset < 36 || len(payload) < expectedOffset {
 		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", len(payload), count)
 	}
 
@@ -155,6 +159,10 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 	}
 
 	manifestData := payload[expectedOffset:]
+	if uint32(len(manifestData)) > MaxManifestSize {
+		return contentID, nil, nil, fmt.Errorf("manifest data size %d exceeds maximum %d", len(manifestData), MaxManifestSize)
+	}
+
 	return contentID, assignedChunkIDs, manifestData, nil
 }
 

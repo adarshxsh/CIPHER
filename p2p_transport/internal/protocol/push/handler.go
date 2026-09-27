@@ -141,6 +141,12 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
+	if len(manifestData) == 0 || uint32(len(manifestData)) > MaxManifestSize {
+		log.Printf("[Push Protocol] Invalid manifest data length: %d", len(manifestData))
+		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "manifest payload size invalid"))
+		return
+	}
+
 	m, err := manifest.Deserialize(manifestData)
 	if err != nil {
 		log.Printf("[Push Protocol] Failed to deserialize manifest JSON: %v", err)
