@@ -110,6 +110,96 @@ func TestChunkProtocol_Integration(t *testing.T) {
 	}
 }
 
+func TestChunkProtocol_MultiTransactionRejection(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	var testID core.ContentID
+	mBytes := []byte("test manifest content")
+	eng1.PutManifestBytes(ctx, testID, mBytes)
+
+	tr2 := transport.NewTransport(h2)
+	stream, err := tr2.OpenStream(ctx, h1.ID(), "/cipher/chunk/1.0.0")
+	if err != nil {
+		t.Fatalf("Failed to open stream: %v", err)
+	}
+	defer stream.Close()
+
+	// Transaction 1: Should succeed
+	req1 := chunk.BuildRequestManifest(testID)
+	if err := chunk.WriteMessage(stream, req1); err != nil {
+		t.Fatalf("Failed to write request 1: %v", err)
+	}
+	resp1, err := chunk.ReadMessage(stream)
+	if err != nil {
+		t.Fatalf("Failed to read response 1: %v", err)
+	}
+	if resp1.Type != chunk.MsgManifest {
+		t.Fatalf("Expected MsgManifest, got %d", resp1.Type)
+	}
+
+	// Transaction 2 on same stream: Should be rejected because stream was closed by server
+	req2 := chunk.BuildRequestManifest(testID)
+	_ = chunk.WriteMessage(stream, req2)
+
+	resp2, err := chunk.ReadMessage(stream)
+	if err == nil {
+		t.Fatalf("Expected error or EOF on 2nd transaction over same stream, got msg type: %d", resp2.Type)
+	}
+}
+
+func TestChunkProtocol_MaxMessagesPerStreamExceeded(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	chunkData := &core.Chunk{
+		Header: core.ChunkHeader{Index: 0},
+		Data:   make([]byte, 1024),
+	}
+	if err := eng1.PutChunk(ctx, chunkData); err != nil {
+		t.Fatalf("Failed to put chunk: %v", err)
+	}
+
+	tr2 := transport.NewTransport(h2)
+	stream, err := tr2.OpenStream(ctx, h1.ID(), "/cipher/chunk/1.0.0")
+	if err != nil {
+		t.Fatalf("Failed to open stream: %v", err)
+	}
+	defer stream.Close()
+
+	// Send RequestChunk (message 1)
+	req := chunk.BuildRequestChunk(chunkData.Header.ID)
+	if err := chunk.WriteMessage(stream, req); err != nil {
+		t.Fatalf("Failed to write request: %v", err)
+	}
+	_, err = chunk.ReadMessage(stream) // receive MsgChunk
+	if err != nil {
+		t.Fatalf("Failed to read chunk response: %v", err)
+	}
+
+	// Send 4 ACK messages (messages 2, 3, 4, 5). messageCount exceeds MaxMessagesPerStream (4).
+	ackMsg := chunk.BuildAck(chunkData.Header.ID, 0)
+	var streamErr error
+	for i := 0; i < 4; i++ {
+		if err := chunk.WriteMessage(stream, ackMsg); err != nil {
+			streamErr = err
+			break
+		}
+	}
+
+	if streamErr == nil {
+		_, streamErr = chunk.ReadMessage(stream)
+	}
+
+	if streamErr == nil {
+		t.Fatalf("Expected stream to fail after exceeding MaxMessagesPerStream")
+	}
+}
+
 func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	h1, h2 := setupMockNetwork(t)
 	eng1 := createTestEngine(t)
