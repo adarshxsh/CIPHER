@@ -33,6 +33,9 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
@@ -48,7 +51,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
 			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			select {
+			case <-ctx.Done():
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			}
 		}(source, client)
 	}
 	
@@ -92,7 +98,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case completions <- res:
+				}
 				pendingTasks--
 			}
 		}
