@@ -180,3 +180,66 @@ func TestTheGauntlet(t *testing.T) {
 		os.RemoveAll(tmpDir)
 	}
 }
+
+// TestProcessRestart_FSKeyProvider verifies that keys persist to disk with 0600 permissions
+// and content can be reassembled after process restart using FSKeyProvider.
+func TestProcessRestart_FSKeyProvider(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-restart-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+
+	keys1, err := engine.NewFSKeyProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create FSKeyProvider: %v", err)
+	}
+
+	eng1 := engine.NewContentEngine(config, enc, dig, store, store, keys1, store)
+
+	data := make([]byte, 50*1024)
+	rand.Read(data)
+
+	ctx := context.Background()
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	// Verify key file permissions on disk
+	keyPath := filepath.Join(tmpDir, "keys", fmt.Sprintf("%x.key", m.Descriptor.ID))
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("Key file missing on disk: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("Key file permissions are %o, expected 0600", info.Mode().Perm())
+	}
+
+	// Simulate process restart by instantiating new engine & new FSKeyProvider
+	keys2, err := engine.NewFSKeyProvider(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create new FSKeyProvider: %v", err)
+	}
+
+	eng2 := engine.NewContentEngine(config, enc, dig, store, store, keys2, store)
+
+	var outBuf bytes.Buffer
+	if err := eng2.Reassemble(ctx, m, &outBuf); err != nil {
+		t.Fatalf("Reassemble after restart failed: %v", err)
+	}
+
+	if !bytes.Equal(data, outBuf.Bytes()) {
+		t.Fatalf("Reassembled data mismatch after restart")
+	}
+}
+

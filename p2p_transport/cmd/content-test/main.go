@@ -27,17 +27,20 @@ func main() {
 		log.Fatal("Must specify either -ingest <file> or -out <file>")
 	}
 
-	// Initialize Content Engine components
-	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
-	enc := crypto.NewChaCha20Encryptor()
-	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
-
 	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}
 	store := storage.NewFSStore(storeDir)
+
+	// Initialize Content Engine components
+	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys, err := engine.NewFSKeyProvider(storeDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 	ctx := context.Background()
