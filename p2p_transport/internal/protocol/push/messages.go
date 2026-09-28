@@ -136,20 +136,35 @@ func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID
 
 func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, error) {
 	var contentID core.ContentID
-	if len(payload) < 36 { // 32 bytes ContentID + 4 bytes count
+	payloadLen := uint64(len(payload))
+
+	if payloadLen < 36 { // 32 bytes ContentID + 4 bytes count
 		return contentID, nil, nil, errors.New("invalid payload length for PUSH_MANIFEST")
 	}
 
-	copy(contentID[:], payload[:32])
-	count := binary.LittleEndian.Uint32(payload[32:36])
+	if payloadLen > uint64(MaxManifestSize) {
+		return contentID, nil, nil, fmt.Errorf("payload size %d exceeds MaxManifestSize %d", payloadLen, MaxManifestSize)
+	}
 
-	expectedOffset := 36 + int(count)*32
-	if len(payload) < expectedOffset {
-		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", len(payload), count)
+	copy(contentID[:], payload[:32])
+	count := uint64(binary.LittleEndian.Uint32(payload[32:36]))
+
+	maxPossibleChunks := (payloadLen - 36) / 32
+	if count > maxPossibleChunks {
+		return contentID, nil, nil, fmt.Errorf("chunk count %d exceeds maximum possible chunks %d for payload length %d", count, maxPossibleChunks, payloadLen)
+	}
+
+	expectedOffset := 36 + count*32
+	if expectedOffset > uint64(MaxManifestSize) {
+		return contentID, nil, nil, fmt.Errorf("expected manifest offset %d exceeds MaxManifestSize %d", expectedOffset, MaxManifestSize)
+	}
+
+	if payloadLen < expectedOffset {
+		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", payloadLen, count)
 	}
 
 	assignedChunkIDs := make([]core.ChunkID, count)
-	for i := 0; i < int(count); i++ {
+	for i := uint64(0); i < count; i++ {
 		offset := 36 + i*32
 		copy(assignedChunkIDs[i][:], payload[offset:offset+32])
 	}
