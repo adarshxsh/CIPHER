@@ -17,27 +17,66 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func sendResult(ctx context.Context, results chan<- WorkerResult, res WorkerResult) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case results <- res:
+		return true
+	}
+}
+
+func pushTaskWithDefer(ctx context.Context, queue *ChunkQueue, task ChunkTask) bool {
 	for {
-		task, ok := queue.Next()
-		if !ok {
-			return // Queue empty
+		if queue.Push(task) {
+			return true
 		}
-		
-		// If this source already returned candidate miss for this task, requeue and yield
-		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+	peerID := source.PeerID.String()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		task, ok := queue.NextForPeer(peerID)
+		if !ok {
+			task, ok = queue.Next()
+			if !ok {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(10 * time.Millisecond):
+					continue
+				}
+			}
+		}
+
+		if task.MissedPeers != nil && task.MissedPeers[peerID] {
+			pushTaskWithDefer(ctx, queue, task)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Millisecond):
+			case <-time.After(10 * time.Millisecond):
 			}
 			continue
 		}
-		
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			if !sendResult(ctx, results, WorkerResult{Task: task, Error: err, PeerID: peerID}) {
+				return
+			}
 			continue
 		}
 
@@ -46,10 +85,14 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			if !sendResult(ctx, results, WorkerResult{Task: task, Error: err, PeerID: peerID}) {
+				return
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		if !sendResult(ctx, results, WorkerResult{Task: task, Error: nil, PeerID: peerID}) {
+			return
+		}
 	}
 }
