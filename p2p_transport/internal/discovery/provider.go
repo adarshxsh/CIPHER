@@ -4,10 +4,19 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	// DefaultMaxRepublishWorkers is the default number of concurrent workers used to republish manifests.
+	DefaultMaxRepublishWorkers = 10
+	// DefaultRepublishItemTimeout is the default per-item timeout for individual DHT provider announcements.
+	DefaultRepublishItemTimeout = 15 * time.Second
 )
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
@@ -100,9 +109,21 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 
 // StartRepublisher begins a background loop that re-announces all locally available manifests to the DHT.
 func StartRepublisher(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore, interval time.Duration) {
+	var running atomic.Bool
+
+	run := func() {
+		if !running.CompareAndSwap(false, true) {
+			fmt.Printf("[DHT Republisher] Republish run already in progress, skipping tick\n")
+			return
+		}
+		defer running.Store(false)
+
+		republishAll(ctx, kdht, store)
+	}
+
 	go func() {
 		// Republish immediately on startup
-		republishAll(ctx, kdht, store)
+		run()
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -112,13 +133,24 @@ func StartRepublisher(ctx context.Context, kdht *dht.IpfsDHT, store core.Manifes
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				republishAll(ctx, kdht, store)
+				run()
 			}
 		}
 	}()
 }
 
 func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore) {
+	republishAllBounded(ctx, kdht, store, DefaultMaxRepublishWorkers, DefaultRepublishItemTimeout)
+}
+
+func republishAllBounded(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore, workers int, itemTimeout time.Duration) {
+	if workers <= 0 {
+		workers = DefaultMaxRepublishWorkers
+	}
+	if itemTimeout <= 0 {
+		itemTimeout = DefaultRepublishItemTimeout
+	}
+
 	manifests, err := store.ListManifests(ctx)
 	if err != nil {
 		fmt.Printf("[DHT Republisher] Failed to list manifests: %v\n", err)
@@ -130,9 +162,41 @@ func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestSto
 	}
 
 	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
+
+	jobs := make(chan core.ContentID, len(manifests))
 	for _, id := range manifests {
-		if err := Provide(ctx, kdht, id); err != nil {
-			fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
-		}
+		jobs <- id
 	}
+	close(jobs)
+
+	numWorkers := workers
+	if len(manifests) < numWorkers {
+		numWorkers = len(manifests)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				itemCtx, itemCancel := context.WithTimeout(ctx, itemTimeout)
+				err := Provide(itemCtx, kdht, id)
+				itemCancel()
+
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
