@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 
 	"cipher/internal/content/core"
 )
@@ -206,8 +207,14 @@ func BuildError(code ErrorCode, msg string) *Message {
 }
 
 func ParseError(payload []byte) (ErrorCode, string, error) {
-	if len(payload) < 1 {
-		return 0, "", errors.New("invalid payload length for ERROR")
+	if err := ValidateErrorPayload(payload); err != nil {
+		return 0, "", err
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	msgStr := string(payload[1:])
+	sanitized := strconv.Quote(msgStr)
+	if len(sanitized) > MaxErrorMessageSize {
+		sanitized = sanitized[:MaxErrorMessageSize]
+	}
+	return code, sanitized, nil
 }
