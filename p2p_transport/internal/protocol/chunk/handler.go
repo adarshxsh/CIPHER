@@ -13,17 +13,46 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+// HandlerOptions defines configuration options for the chunk stream handler.
+type HandlerOptions struct {
+	CorruptProb float64
+}
+
+// FaultConfig is an alias for HandlerOptions for explicit fault configuration passing.
+type FaultConfig = HandlerOptions
+
+// HandlerOption is a functional option for configuring a StreamHandler.
+type HandlerOption func(*HandlerOptions)
+
+// WithCorruptProb sets the probability of test chunk corruption.
+func WithCorruptProb(prob float64) HandlerOption {
+	return func(o *HandlerOptions) {
+		o.CorruptProb = prob
+	}
+}
+
+// WithHandlerOptions sets the HandlerOptions struct directly.
+func WithHandlerOptions(opts HandlerOptions) HandlerOption {
+	return func(o *HandlerOptions) {
+		*o = opts
+	}
+}
 
 type StreamHandler struct {
 	host   host.Host
 	engine *engine.ContentEngine
+	opts   HandlerOptions
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...HandlerOption) *StreamHandler {
+	var options HandlerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+		opts:   options,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,10 +127,13 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	if h.opts.CorruptProb > 0 && rand.Float64() < h.opts.CorruptProb && len(chunkData.Data) > 0 {
+		// Deep copy chunk payload bytes before applying test mutation to prevent mutating shared store
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+		corruptedData := make([]byte, len(chunkData.Data))
+		copy(corruptedData, chunkData.Data)
+		corruptedData[0] ^= 0xFF
+		chunkData.Data = corruptedData
 	}
 
 	resp, err := BuildChunk(chunkData)
