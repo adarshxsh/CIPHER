@@ -127,7 +127,7 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Expected error for invalid ContentID")
 	}
-	if err.Error() != "remote error (code 1): manifest not found" {
+	if err.Error() != `remote error (code 1): "manifest not found"` {
 		t.Errorf("Unexpected error msg: %v", err)
 	}
 }

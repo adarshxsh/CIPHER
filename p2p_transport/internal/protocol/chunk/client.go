@@ -53,7 +53,10 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 
 	if resp.Type == MsgError {
-		code, msg, _ := ParseError(resp.Payload)
+		code, msg, err := ParseError(resp.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse remote error: %w", err)
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
@@ -100,7 +103,10 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	}
 
 	if resp.Type == MsgError {
-		code, msg, _ := ParseError(resp.Payload)
+		code, msg, err := ParseError(resp.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse remote error: %w", err)
+		}
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
