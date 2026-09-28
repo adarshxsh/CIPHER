@@ -14,8 +14,11 @@ import (
 )
 
 type Client struct {
-	stream network.Stream
-	peerID peer.ID
+	stream       network.Stream
+	peerID       peer.ID
+	WriteTimeout time.Duration
+	ReadTimeout  time.Duration
+	AckTimeout   time.Duration
 }
 
 func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID) (*Client, error) {
@@ -25,8 +28,11 @@ func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID) (*Cl
 	}
 
 	return &Client{
-		stream: stream,
-		peerID: peerID,
+		stream:       stream,
+		peerID:       peerID,
+		WriteTimeout: WriteTimeout,
+		ReadTimeout:  ReadTimeout,
+		AckTimeout:   AckTimeout,
 	}, nil
 }
 
@@ -40,15 +46,17 @@ func (c *Client) PeerID() peer.ID {
 
 // SendManifest sends the manifest metadata along with the exact set of assigned chunk IDs for this provider.
 func (c *Client) SendManifest(ctx context.Context, contentID core.ContentID, assignedChunkIDs []core.ChunkID, manifestData []byte) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + ReadTimeout))
-	defer c.stream.SetDeadline(time.Time{})
-
+	_ = c.stream.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
 	req := BuildPushManifest(contentID, assignedChunkIDs, manifestData)
-	if err := WritePushMessage(c.stream, req); err != nil {
+	err := WritePushMessage(c.stream, req)
+	_ = c.stream.SetWriteDeadline(time.Time{})
+	if err != nil {
 		return fmt.Errorf("failed to write PUSH_MANIFEST: %w", err)
 	}
 
+	_ = c.stream.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 	resp, err := ReadPushMessage(c.stream)
+	_ = c.stream.SetReadDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to read PUSH_MANIFEST_ACK: %w", err)
 	}
@@ -80,19 +88,21 @@ func (c *Client) SendManifest(ctx context.Context, contentID core.ContentID, ass
 
 // SendChunk transmits a single chunk to the provider and waits for confirmation.
 func (c *Client) SendChunk(ctx context.Context, contentID core.ContentID, chunk *core.Chunk) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + AckTimeout))
-	defer c.stream.SetDeadline(time.Time{})
-
 	req, err := BuildPushChunk(contentID, chunk)
 	if err != nil {
 		return fmt.Errorf("failed to build PUSH_CHUNK: %w", err)
 	}
 
-	if err := WritePushMessage(c.stream, req); err != nil {
+	_ = c.stream.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
+	err = WritePushMessage(c.stream, req)
+	_ = c.stream.SetWriteDeadline(time.Time{})
+	if err != nil {
 		return fmt.Errorf("failed to write PUSH_CHUNK: %w", err)
 	}
 
+	_ = c.stream.SetReadDeadline(time.Now().Add(c.AckTimeout))
 	resp, err := ReadPushMessage(c.stream)
+	_ = c.stream.SetReadDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to read PUSH_CHUNK_ACK: %w", err)
 	}
@@ -124,15 +134,17 @@ func (c *Client) SendChunk(ctx context.Context, contentID core.ContentID, chunk 
 
 // SendBatchComplete signals to the provider that all assigned chunks have been uploaded.
 func (c *Client) SendBatchComplete(ctx context.Context, contentID core.ContentID) error {
-	_ = c.stream.SetDeadline(time.Now().Add(WriteTimeout + ReadTimeout))
-	defer c.stream.SetDeadline(time.Time{})
-
+	_ = c.stream.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
 	req := BuildPushBatchComplete(contentID)
-	if err := WritePushMessage(c.stream, req); err != nil {
+	err := WritePushMessage(c.stream, req)
+	_ = c.stream.SetWriteDeadline(time.Time{})
+	if err != nil {
 		return fmt.Errorf("failed to write PUSH_BATCH_COMPLETE: %w", err)
 	}
 
+	_ = c.stream.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 	resp, err := ReadPushMessage(c.stream)
+	_ = c.stream.SetReadDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to read PUSH_BATCH_COMPLETE_ACK: %w", err)
 	}

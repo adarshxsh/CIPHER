@@ -13,6 +13,22 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+const (
+	HeaderTimeout = 15 * time.Second
+	BlockTimeout  = 30 * time.Second
+)
+
+type slidingWriter struct {
+	w       io.Writer
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (sw *slidingWriter) Write(p []byte) (int, error) {
+	_ = sw.s.SetWriteDeadline(time.Now().Add(sw.timeout))
+	return sw.w.Write(p)
+}
+
 // Send transfers a file to the remote peer over the provided stream.
 func Send(s network.Stream, filePath string) error {
 	defer s.Close()
@@ -45,7 +61,7 @@ func Send(s network.Stream, filePath string) error {
 		return fmt.Errorf("failed to rewind file: %w", err)
 	}
 
-	// 2. Construct and Write Header
+	// 2. Construct and Write Header with header deadline
 	header := &Header{
 		Version:  ProtocolVersion1,
 		Type:     MsgTypeFileTransfer,
@@ -54,23 +70,31 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
+	_ = s.SetWriteDeadline(time.Now().Add(HeaderTimeout))
 	if err := header.WriteTo(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
+	_ = s.SetWriteDeadline(time.Time{})
 
-	// 3. Send Data with Progress Tracking
+	// 3. Send Data with Progress Tracking & Sliding Write Deadline
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
 
 	startTime := time.Now()
 
-	// Create a progress reader
 	pr := &progressReader{
 		r:     file,
 		total: header.FileSize,
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	sw := &slidingWriter{
+		w:       s,
+		s:       s,
+		timeout: BlockTimeout,
+	}
+
+	written, err := io.Copy(sw, pr)
+	_ = s.SetDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
