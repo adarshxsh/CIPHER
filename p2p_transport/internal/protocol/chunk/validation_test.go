@@ -129,3 +129,25 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_EnforcesBounds(t *testing.T) {
+	// Under ContentIDSize -> ErrInvalidManifestPayload
+	shortPayload := make([]byte, chunk.ContentIDSize-1)
+	err := chunk.ValidateManifestPayload(shortPayload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload, got %v", err)
+	}
+
+	// Exact max size -> valid
+	maxValidPayload := make([]byte, chunk.ContentIDSize+chunk.MaxManifestJSONSize)
+	if err := chunk.ValidateManifestPayload(maxValidPayload); err != nil {
+		t.Fatalf("expected max valid payload to pass, got %v", err)
+	}
+
+	// Oversized payload -> ErrInvalidPayloadLength
+	oversizedPayload := make([]byte, chunk.ContentIDSize+chunk.MaxManifestJSONSize+1)
+	err = chunk.ValidateManifestPayload(oversizedPayload)
+	if !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidPayloadLength, got %v", err)
+	}
+}

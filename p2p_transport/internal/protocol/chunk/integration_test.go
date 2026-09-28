@@ -7,16 +7,18 @@ import (
 	"testing"
 
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/p2p/net/mock"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
-	"cipher/internal/transport"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
+	"cipher/internal/protocol"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
@@ -129,5 +131,38 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	}
 	if err.Error() != "remote error (code 1): manifest not found" {
 		t.Errorf("Unexpected error msg: %v", err)
+	}
+}
+
+func TestChunkProtocol_OversizedManifestResponse(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng2 := createTestEngine(t)
+
+	var targetID core.ContentID
+	targetID[0] = 0x11
+
+	// Server h1 responds with an oversized manifest payload (300 KiB > 256 KiB limit)
+	h1.SetStreamHandler(protocol.ChunkTransportProtocolID, func(s network.Stream) {
+		defer s.Close()
+		msg, err := chunk.ReadMessage(s)
+		if err != nil {
+			return
+		}
+		if msg.Type == chunk.MsgRequestManifest {
+			oversizedData := make([]byte, 300*1024) // 300 KiB manifest
+			resp := chunk.BuildManifest(targetID, oversizedData)
+			_ = chunk.WriteMessage(s, resp)
+		}
+	})
+
+	client, err := chunk.NewClient(context.Background(), transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Resolve(context.Background(), targetID)
+	if err == nil {
+		t.Fatal("Expected Resolve to fail for oversized manifest response, got nil")
 	}
 }
