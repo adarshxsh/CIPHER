@@ -82,6 +82,9 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
 
 	var providers []peer.AddrInfo
@@ -93,6 +96,11 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 			break
 		}
 	}
+
+	go func() {
+		for range providerCh {
+		}
+	}()
 
 	return providers, nil
 
