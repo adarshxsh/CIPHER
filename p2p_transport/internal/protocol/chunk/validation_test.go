@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +128,52 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_TamperedPayload(t *testing.T) {
+	var chunkID core.ChunkID
+	chunkID[0] = 0x11
+
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 100,
+		},
+		ChunkIDs:   []core.ChunkID{chunkID},
+		MerkleRoot: core.Hash(chunkID),
+		WholeHash:  core.Hash(chunkID),
+		Crypto: manifest.CryptoDescriptor{
+			Algorithm:      "ChaCha20-Poly1305",
+			Version:        1,
+			ChunkNonceSize: 12,
+			KeyID:          "embedded",
+		},
+	}
+
+	contentID, err := m.ComputeID()
+	if err != nil {
+		t.Fatalf("ComputeID failed: %v", err)
+	}
+	m.Descriptor.ID = contentID
+
+	// Create a tampered manifest with altered chunk IDs but same content ID claimed
+	tamperedM := *m
+	var fakeChunkID core.ChunkID
+	fakeChunkID[0] = 0x99
+	tamperedM.ChunkIDs = []core.ChunkID{fakeChunkID}
+	tamperedBytes, err := tamperedM.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	manifestMsg := chunk.BuildManifest(contentID, tamperedBytes)
+	err = chunk.ValidateManifestForRequest(contentID, manifestMsg.Payload)
+	if err == nil {
+		t.Fatalf("expected error for tampered manifest payload")
+	}
+	if !errors.Is(err, manifest.ErrIntegrityMismatch) {
+		t.Fatalf("expected ErrIntegrityMismatch, got %v", err)
 	}
 }
