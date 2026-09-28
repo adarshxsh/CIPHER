@@ -2,6 +2,7 @@ package push
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"sync"
@@ -101,9 +102,9 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 
 	for {
 		_ = s.SetReadDeadline(time.Now().Add(ReadTimeout))
-		msg, err := ReadPushMessage(s)
+		frame, err := DecodePushFrame(s)
 		if err != nil {
-			if err == io.EOF || err.Error() == "stream reset" {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || err.Error() == "stream reset" {
 				log.Printf("[Push Protocol] Push stream closed by %s", remotePeer)
 				return
 			}
@@ -111,6 +112,12 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 		_ = s.SetReadDeadline(time.Time{})
+
+		msg := &PushMessage{
+			Version: frame.Version,
+			Type:    frame.MessageType,
+			Payload: frame.Payload,
+		}
 
 		if msg.Version != CurrentPushVersion {
 			log.Printf("[Push Protocol] Unsupported message version: %d", msg.Version)
