@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -18,17 +19,45 @@ type Source struct {
 	Available map[core.ChunkID]struct{}
 }
 
+// Config defines configuration parameters for the transfer scheduler.
+type Config struct {
+	Throttle time.Duration
+}
+
+// Option defines functional options for configuring a Scheduler.
+type Option func(*Config)
+
+// WithThrottle sets the worker throttling delay.
+func WithThrottle(d time.Duration) Option {
+	return func(c *Config) {
+		c.Throttle = d
+	}
+}
+
+// WithConfig sets the scheduler Config directly.
+func WithConfig(cfg Config) Option {
+	return func(c *Config) {
+		*c = cfg
+	}
+}
+
 type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Config      Config
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, opts ...Option) *Scheduler {
+	var cfg Config
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	return &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		Config:      cfg,
 	}
 }
 
@@ -47,7 +76,8 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			w := NewWorker(src, c, s.Engine, queue, WorkerConfig{Throttle: s.Config.Throttle})
+			w.Run(ctx, results)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}

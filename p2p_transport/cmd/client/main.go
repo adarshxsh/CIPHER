@@ -19,7 +19,6 @@ import (
 	"cipher/internal/identity"
 	"cipher/internal/retrieval"
 	"cipher/internal/transfer/manager"
-	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 
 	golog "github.com/ipfs/go-log/v2"
@@ -155,8 +154,9 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
+	var tmOpts []manager.TransferManagerOption
 	if *throttle == "2MB" {
-		scheduler.TestThrottle = 500 * time.Millisecond
+		tmOpts = append(tmOpts, manager.WithThrottle(500*time.Millisecond))
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
 
@@ -223,7 +223,7 @@ func main() {
 
 	// 7. Data Plane: Parallel Swarming Chunk Download
 	log.Printf("Downloading %d chunks from %d provider(s)...", len(m.ChunkIDs), len(targetPeers))
-	tm := manager.NewTransferManager(sm, eng, t)
+	tm := manager.NewTransferManager(sm, eng, t, tmOpts...)
 	if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 		log.Fatalf("Download failed: %v", err)
 	}
