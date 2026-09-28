@@ -25,7 +25,31 @@ type AuthPolicy string
 const (
 	AuthPolicyOpen      AuthPolicy = "open"
 	AuthPolicyAllowlist AuthPolicy = "allowlist"
+
+	DefaultMaxSessions   = 1000
+	DefaultSessionTTL    = 30 * time.Minute
+	DefaultSweepInterval = 1 * time.Minute
 )
+
+type StreamHandlerOption func(*StreamHandler)
+
+func WithMaxSessions(max int) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		h.maxSessions = max
+	}
+}
+
+func WithSessionTTL(ttl time.Duration) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		h.sessionTTL = ttl
+	}
+}
+
+func WithSweepInterval(interval time.Duration) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		h.sweepInterval = interval
+	}
+}
 
 type PendingSession struct {
 	ContentID       core.ContentID
@@ -46,6 +70,10 @@ type StreamHandler struct {
 	authPolicy        AuthPolicy
 	allowedPublishers map[peer.ID]struct{}
 
+	maxSessions   int
+	sessionTTL    time.Duration
+	sweepInterval time.Duration
+
 	sessionsMu sync.RWMutex
 	sessions   map[core.ContentID]*PendingSession
 }
@@ -57,6 +85,7 @@ func NewStreamHandler(
 	allowPush bool,
 	authPolicy AuthPolicy,
 	allowedPublishers []peer.ID,
+	opts ...StreamHandlerOption,
 ) *StreamHandler {
 	allowedMap := make(map[peer.ID]struct{})
 	for _, pid := range allowedPublishers {
@@ -72,9 +101,18 @@ func NewStreamHandler(
 		authPolicy:        authPolicy,
 		allowedPublishers: allowedMap,
 		sessions:          make(map[core.ContentID]*PendingSession),
+		maxSessions:       DefaultMaxSessions,
+		sessionTTL:        DefaultSessionTTL,
+		sweepInterval:     DefaultSweepInterval,
 	}
 
-	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	for _, opt := range opts {
+		opt(handler)
+	}
+
+	if h != nil {
+		h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	}
 	return handler
 }
 
@@ -160,14 +198,24 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 	}
 
 	h.sessionsMu.Lock()
+	_, exists := h.sessions[contentID]
+	if !exists && h.maxSessions > 0 && len(h.sessions) >= h.maxSessions {
+		h.sessionsMu.Unlock()
+		remotePeer := s.Conn().RemotePeer()
+		log.Printf("[Push Protocol] Ingestion rejected from %s: max session capacity reached (%d)", remotePeer, h.maxSessions)
+		_ = WritePushMessage(s, BuildPushError(PushStatusCapacityExceeded, "maximum session capacity reached"))
+		return
+	}
+
+	now := time.Now()
 	h.sessions[contentID] = &PendingSession{
 		ContentID:       contentID,
 		Manifest:        m,
 		ManifestBytes:   manifestData,
 		ExpectedChunks:  expectedMap,
 		CommittedChunks: make(map[core.ChunkID]bool),
-		StartedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		StartedAt:       now,
+		UpdatedAt:       now,
 	}
 	h.sessionsMu.Unlock()
 
@@ -318,3 +366,74 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 		log.Printf("[Push Protocol] Failed to write PUSH_BATCH_COMPLETE_ACK: %v", err)
 	}
 }
+
+// SweepStaleSessions purges sessions inactive longer than sessionTTL.
+func (h *StreamHandler) SweepStaleSessions() int {
+	return h.SweepStaleSessionsBefore(time.Now())
+}
+
+// SweepStaleSessionsBefore purges sessions inactive longer than sessionTTL relative to reference time 'now'.
+func (h *StreamHandler) SweepStaleSessionsBefore(now time.Time) int {
+	if h.sessionTTL <= 0 {
+		return 0
+	}
+
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+
+	var purged []core.ContentID
+	for id, session := range h.sessions {
+		if now.Sub(session.UpdatedAt) >= h.sessionTTL {
+			purged = append(purged, id)
+		}
+	}
+
+	for _, id := range purged {
+		session := h.sessions[id]
+		log.Printf("[Push Protocol] Purging stale push session for ContentID %x (inactive for %v)", id, now.Sub(session.UpdatedAt))
+		delete(h.sessions, id)
+	}
+
+	if len(purged) > 0 {
+		log.Printf("[Push Protocol] Sweeper purged %d stale session(s)", len(purged))
+	}
+	return len(purged)
+}
+
+// StartSweeper starts a background goroutine that periodically purges stale sessions until ctx is canceled.
+func (h *StreamHandler) StartSweeper(ctx context.Context) {
+	interval := h.sweepInterval
+	if interval <= 0 {
+		interval = DefaultSweepInterval
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.SweepStaleSessions()
+			}
+		}
+	}()
+}
+
+// SessionCount returns the current number of active pending push sessions.
+func (h *StreamHandler) SessionCount() int {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+	return len(h.sessions)
+}
+
+// GetSession returns a pending session for the given ContentID if present.
+func (h *StreamHandler) GetSession(contentID core.ContentID) (*PendingSession, bool) {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+	sess, exists := h.sessions[contentID]
+	return sess, exists
+}
+
