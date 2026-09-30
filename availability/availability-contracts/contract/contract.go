@@ -53,8 +53,21 @@ func CreateAvailabilityContract(publisherID, providerID, fileID string, paymentA
 	if paymentAmount <= 0 || duration <= 0 {
 		return "", errors.New("payment amount and duration must be positive")
 	}
+	chunkCountResolver.RLock()
+	resolver := chunkCountResolver.resolver
+	chunkCountResolver.RUnlock()
+	if resolver == nil {
+		return "", errors.New("no chunk count resolver is configured")
+	}
+	totalChunks, err := resolver.ChunkCount(providerID, fileID)
+	if err != nil {
+		return "", fmt.Errorf("resolve file chunk count: %w", err)
+	}
+	if totalChunks <= 0 {
+		return "", errors.New("resolved chunk count must be positive")
+	}
 	randomID := make([]byte, 16)
-	if _, err := rand.Read(randomID); err != nil {
+	if _, err = rand.Read(randomID); err != nil {
 		return "", fmt.Errorf("generate contract ID: %w", err)
 	}
 	contractID := availabilitytypes.ContractID("contract-" + hex.EncodeToString(randomID))
@@ -62,7 +75,7 @@ func CreateAvailabilityContract(publisherID, providerID, fileID string, paymentA
 	contractStore.Lock()
 	defer contractStore.Unlock()
 	contractStore.contracts[contractID] = &availabilitytypes.AvailabilityContract{
-		ID: contractID, PublisherID: publisherID, ProviderID: providerID, FileID: fileID,
+		ID: contractID, PublisherID: publisherID, ProviderID: providerID, FileID: fileID, TotalChunks: totalChunks,
 		PaymentAmount: paymentAmount, Duration: duration, CreatedAt: now, EndsAt: now.Add(duration),
 		State:      availabilitytypes.Proposed,
 		Settlement: availabilitytypes.SettlementState{Status: availabilitytypes.SettlementPending},
@@ -105,17 +118,7 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 		contract.State = availabilitytypes.Expired
 		return "", "", errors.New("contract has expired")
 	}
-	chunkCountResolver.RLock()
-	resolver := chunkCountResolver.resolver
-	chunkCountResolver.RUnlock()
-	if resolver == nil {
-		return "", "", errors.New("no chunk count resolver is configured")
-	}
-	totalChunks, err := resolver.ChunkCount(contract.ProviderID, contract.FileID)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve file chunk count: %w", err)
-	}
-	generated, err := challenge.CreateChallenge(string(contractID), contract.ProviderID, contract.FileID, totalChunks, 0)
+	generated, err := challenge.CreateChallenge(string(contractID), contract.ProviderID, contract.FileID, contract.TotalChunks, 0)
 	if err != nil {
 		return "", "", fmt.Errorf("create availability challenge: %w", err)
 	}

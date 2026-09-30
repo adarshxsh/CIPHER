@@ -30,6 +30,7 @@ type AvailabilityContract struct {
 	PublisherID   string
 	ProviderID    string
 	FileID        string
+	TotalChunks   int
 	PaymentAmount int64
 	FundedAmount  int64
 	Duration      time.Duration

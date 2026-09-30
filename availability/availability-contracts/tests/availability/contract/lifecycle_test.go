@@ -1,1 +1,1 @@
-package contract
+package contract_test
