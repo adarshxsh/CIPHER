@@ -167,7 +167,31 @@ func RecordAvailabilityResult(contractID availabilitytypes.ContractID, challenge
 	result.ChallengeID = challengeID
 	result.RecordedAt = time.Now().UTC()
 	contract.Results = append(contract.Results, result)
+	availabilityStatus := availabilitytypes.AvailabilityFail
+	if result.Succeeded {
+		availabilityStatus = availabilitytypes.AvailabilityPass
+	}
+	contract.AvailabilityResults = append(contract.AvailabilityResults, availabilitytypes.AvailabilityResult{
+		ContractID: contractID, ProviderID: contract.ProviderID,
+		Period: uint64(len(contract.AvailabilityResults) + 1), ChallengeID: challengeID,
+		Result: availabilityStatus, Timestamp: result.RecordedAt,
+	})
 	return contract.State, nil
+}
+
+// GetLatestAvailabilityResult returns the standardized output intended for the
+// separate payment module after RecordAvailabilityResult succeeds.
+func GetLatestAvailabilityResult(contractID availabilitytypes.ContractID) (availabilitytypes.AvailabilityResult, error) {
+	contractStore.RLock()
+	defer contractStore.RUnlock()
+	contract, ok := contractStore.contracts[contractID]
+	if !ok {
+		return availabilitytypes.AvailabilityResult{}, fmt.Errorf("unknown contract: %s", contractID)
+	}
+	if len(contract.AvailabilityResults) == 0 {
+		return availabilitytypes.AvailabilityResult{}, errors.New("contract has no recorded availability result")
+	}
+	return contract.AvailabilityResults[len(contract.AvailabilityResults)-1], nil
 }
 
 // SettleAvailabilityContract proportionally releases the funded amount based

@@ -25,21 +25,29 @@ func (s ContractState) IsTerminal() bool {
 	return s == Completed || s == Expired || s == Terminated || s == Disputed
 }
 
+type AvailabilityStatus string
+
+const (
+	AvailabilityPass AvailabilityStatus = "PASS"
+	AvailabilityFail AvailabilityStatus = "FAIL"
+)
+
 type AvailabilityContract struct {
-	ID            ContractID
-	PublisherID   string
-	ProviderID    string
-	FileID        string
-	TotalChunks   int
-	PaymentAmount int64
-	FundedAmount  int64
-	Duration      time.Duration
-	CreatedAt     time.Time
-	EndsAt        time.Time
-	State         ContractState
-	Challenges    []ChallengeID
-	Results       []ChallengeResult
-	Settlement    SettlementState
+	ID                  ContractID
+	PublisherID         string
+	ProviderID          string
+	FileID              string
+	TotalChunks         int
+	PaymentAmount       int64
+	FundedAmount        int64
+	Duration            time.Duration
+	CreatedAt           time.Time
+	EndsAt              time.Time
+	State               ContractState
+	Challenges          []ChallengeID
+	Results             []ChallengeResult
+	AvailabilityResults []AvailabilityResult
+	Settlement          SettlementState
 }
 
 type EpochStatus string
@@ -87,6 +95,17 @@ type ChallengeResult struct {
 	ChallengeID ChallengeID
 	Succeeded   bool
 	RecordedAt  time.Time
+}
+
+// AvailabilityResult is the stable output consumed by the payment layer after
+// a provider's challenge response has been recorded and verified.
+type AvailabilityResult struct {
+	ContractID  ContractID
+	ProviderID  string
+	Period      uint64
+	ChallengeID ChallengeID
+	Result      AvailabilityStatus
+	Timestamp   time.Time
 }
 
 type SettlementStatus string

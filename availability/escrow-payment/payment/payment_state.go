@@ -29,8 +29,8 @@ func CreatePaymentState(result interfaces.AvailabilityResult, publisherID string
 		return PaymentState{}, errors.New("payment state requires a successful availability result")
 	}
 	return PaymentState{
-		ContractID: result.ContractID, Publisher: publisherID, Provider: result.ProviderID,
+		ContractID: string(result.ContractID), Publisher: publisherID, Provider: result.ProviderID,
 		Sequence: sequence, Period: result.Period, CumulativePayment: cumulativePayment,
-		LastChallengeID: result.ChallengeID, Status: result.Result,
+		LastChallengeID: string(result.ChallengeID), Status: result.Result,
 	}, nil
 }

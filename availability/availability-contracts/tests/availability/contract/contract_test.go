@@ -125,6 +125,10 @@ func TestInitiateAndRecordAvailabilityResult(t *testing.T) {
 	if state != availabilitytypes.Active {
 		t.Fatalf("result state = %s, want %s", state, availabilitytypes.Active)
 	}
+	availabilityResult, err := contract.GetLatestAvailabilityResult(contractID)
+	if err != nil || availabilityResult.ContractID != contractID || availabilityResult.ProviderID != "provider-init" || availabilityResult.Result != availabilitytypes.AvailabilityPass || availabilityResult.Period != 1 {
+		t.Fatalf("GetLatestAvailabilityResult = %+v, %v", availabilityResult, err)
+	}
 	if _, err := contract.RecordAvailabilityResult(contractID, challengeID, availabilitytypes.ChallengeResult{Succeeded: true}); err == nil {
 		t.Fatal("duplicate challenge result succeeded")
 	}

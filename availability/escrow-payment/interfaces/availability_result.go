@@ -1,22 +1,15 @@
 // Package interfaces contains the boundary objects exchanged between modules.
 package interfaces
 
-import "time"
+import availabilitytypes "cipher/availability/availability-contracts/types"
 
-type AvailabilityStatus string
+// These aliases ensure payment consumes the exact boundary object produced by
+// Availability, without duplicating its shape in another module.
+type AvailabilityStatus = availabilitytypes.AvailabilityStatus
 
 const (
-	AvailabilityPass AvailabilityStatus = "PASS"
-	AvailabilityFail AvailabilityStatus = "FAIL"
+	AvailabilityPass = availabilitytypes.AvailabilityPass
+	AvailabilityFail = availabilitytypes.AvailabilityFail
 )
 
-// AvailabilityResult is produced by Availability after a provider response is
-// verified. Payment consumes it without needing proof or network details.
-type AvailabilityResult struct {
-	ContractID  string
-	ProviderID  string
-	Period      uint64
-	ChallengeID string
-	Result      AvailabilityStatus
-	Timestamp   time.Time
-}
+type AvailabilityResult = availabilitytypes.AvailabilityResult

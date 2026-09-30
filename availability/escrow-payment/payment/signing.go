@@ -7,6 +7,20 @@ import (
 	"errors"
 )
 
+// StateSigner allows a coordinator to use the current Ed25519 signer or a
+// future Ethereum-compatible signer without changing payment workflow code.
+type StateSigner interface {
+	Sign(PaymentState) (PaymentState, error)
+}
+
+type Ed25519Signer struct {
+	PrivateKey ed25519.PrivateKey
+}
+
+func (s Ed25519Signer) Sign(paymentState PaymentState) (PaymentState, error) {
+	return SignPaymentState(paymentState, s.PrivateKey)
+}
+
 // SignPaymentState authorizes a cumulative payment state with the publisher's
 // Ed25519 private key.
 func SignPaymentState(paymentState PaymentState, publisherPrivateKey ed25519.PrivateKey) (PaymentState, error) {
