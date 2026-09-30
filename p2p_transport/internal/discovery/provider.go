@@ -3,11 +3,18 @@ package discovery
 import (
 	"cipher/internal/content/core"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+var (
+	ErrNilContext   = errors.New("context cannot be nil")
+	ErrNilDHT       = errors.New("dht cannot be nil")
+	ErrInvalidLimit = errors.New("provider limit must be greater than zero")
 )
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
@@ -21,6 +28,15 @@ var StorageProviderNamespace = core.ContentID{
 
 // Provide announces to the DHT that this node can provide the content identified by the given ContentID.
 func Provide(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if kdht == nil {
+		return ErrNilDHT
+	}
 
 	cid, err := contentIDToCID(id)
 	if err != nil {
@@ -72,9 +88,17 @@ func FindStorageProviders(ctx context.Context, kdht *dht.IpfsDHT, limit int) ([]
 
 // FindProviders searches the DHT for peers that can provide the content identified by the given ContentID.
 func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PROVIDER_LIMIT int) ([]peer.AddrInfo, error) {
-
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if kdht == nil {
+		return nil, ErrNilDHT
+	}
 	if PROVIDER_LIMIT <= 0 {
-		return nil, fmt.Errorf("provider limit must be greater than zero")
+		return nil, ErrInvalidLimit
 	}
 
 	cid, err := contentIDToCID(id)
@@ -82,20 +106,38 @@ func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PR
 		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
 	}
 
-	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+	queryCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	providerCh := kdht.FindProvidersAsync(queryCtx, cid, PROVIDER_LIMIT)
 
 	var providers []peer.AddrInfo
 
-	for p := range providerCh {
-		providers = append(providers, p)
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			go func() {
+				for range providerCh {
+				}
+			}()
+			return nil, ctx.Err()
+		case p, ok := <-providerCh:
+			if !ok {
+				return providers, nil
+			}
+			providers = append(providers, p)
 
-		if len(providers) >= PROVIDER_LIMIT {
-			break
+			if len(providers) >= PROVIDER_LIMIT {
+				cancel()
+				go func() {
+					for range providerCh {
+					}
+				}()
+				return providers, nil
+			}
 		}
 	}
-
-	return providers, nil
-
 }
 
 // StartRepublisher begins a background loop that re-announces all locally available manifests to the DHT.
