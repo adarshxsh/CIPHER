@@ -15,6 +15,7 @@ type PaymentState struct {
 	Period             uint64
 	CumulativePayment  uint64
 	LastChallengeID    string
+	ValidUntil         uint64
 	Status             interfaces.AvailabilityStatus
 	PublisherSignature []byte
 }

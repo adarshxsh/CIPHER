@@ -4,7 +4,10 @@ package coordinator
 import (
 	"errors"
 	"sync"
+	"time"
 
+	availabilitytypes "cipher/availability/availability-contracts/types"
+	bindings "cipher/availability/escrow-payment/bindings"
 	interfaces "cipher/availability/escrow-payment/interfaces"
 	payment "cipher/availability/escrow-payment/payment"
 )
@@ -12,14 +15,14 @@ import (
 // PublisherCoordinator maps Availability identities to their payment/escrow
 // identities. It owns no funds and delegates every release to an adapter.
 type PublisherCoordinator struct {
-	publisherID string
-	signer      payment.StateSigner
-	submitter   payment.EscrowSubmitter
+	publisherID     string
+	signer          payment.StateSigner
+	submitter       payment.EscrowSubmitter
+	paymentStateTTL time.Duration
 
-	mu        sync.Mutex
-	providers map[string]string
-	contracts map[string]string
-	stores    map[string]payment.PaymentStateStore
+	mu       sync.Mutex
+	bindings *bindings.Registry
+	stores   map[string]payment.PaymentStateStore
 }
 
 func NewPublisherCoordinator(publisherID string, signer payment.StateSigner, submitter payment.EscrowSubmitter) (*PublisherCoordinator, error) {
@@ -27,33 +30,33 @@ func NewPublisherCoordinator(publisherID string, signer payment.StateSigner, sub
 		return nil, errors.New("publisher ID, payment signer, and escrow submitter are required")
 	}
 	return &PublisherCoordinator{
-		publisherID: publisherID, signer: signer, submitter: submitter,
-		providers: make(map[string]string), contracts: make(map[string]string), stores: make(map[string]payment.PaymentStateStore),
+		publisherID: publisherID, signer: signer, submitter: submitter, paymentStateTTL: time.Hour,
+		bindings: bindings.NewRegistry(), stores: make(map[string]payment.PaymentStateStore),
 	}, nil
+}
+
+// SetPaymentStateTTL sets the authorization lifetime applied to future payment
+// states. The value should be consistent with the escrow contract's rules.
+func (c *PublisherCoordinator) SetPaymentStateTTL(ttl time.Duration) error {
+	if ttl <= 0 {
+		return errors.New("payment-state TTL must be positive")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.paymentStateTTL = ttl
+	return nil
 }
 
 // RegisterProvider binds an Availability peer ID to the provider identity
 // expected by the payment/escrow path.
-func (c *PublisherCoordinator) RegisterProvider(availabilityProviderID, paymentProviderID string) error {
-	if availabilityProviderID == "" || paymentProviderID == "" {
-		return errors.New("availability and payment provider IDs are required")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.providers[availabilityProviderID] = paymentProviderID
-	return nil
+func (c *PublisherCoordinator) RegisterProvider(availabilityProviderID string, ethereumAddress bindings.EthereumAddress) error {
+	return c.bindings.BindProvider(availabilityProviderID, ethereumAddress)
 }
 
 // RegisterContract binds the Availability contract identifier to the escrow
 // identifier returned by the eventual chain adapter.
-func (c *PublisherCoordinator) RegisterContract(availabilityContractID, escrowContractID string) error {
-	if availabilityContractID == "" || escrowContractID == "" {
-		return errors.New("availability and escrow contract IDs are required")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.contracts[availabilityContractID] = escrowContractID
-	return nil
+func (c *PublisherCoordinator) RegisterContract(availabilityContractID availabilitytypes.ContractID, escrowContractID bindings.EscrowContractID) error {
+	return c.bindings.BindContract(availabilityContractID, escrowContractID)
 }
 
 // ProcessAvailabilityResult creates, signs, stores, and submits the next
@@ -64,31 +67,32 @@ func (c *PublisherCoordinator) ProcessAvailabilityResult(result interfaces.Avail
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	escrowContractID, ok := c.contracts[string(result.ContractID)]
+	escrowContractID, ok := c.bindings.EscrowID(result.ContractID)
 	if !ok {
 		return payment.PaymentState{}, errors.New("no escrow contract is registered for availability contract")
 	}
-	providerID, ok := c.providers[result.ProviderID]
+	providerAddress, ok := c.bindings.ProviderAddress(result.ProviderID)
 	if !ok {
 		return payment.PaymentState{}, errors.New("no payment provider identity is registered")
 	}
-	result.ProviderID = providerID
+	result.ProviderID = providerAddress.String()
 	state, err := payment.CreatePaymentState(result, c.publisherID, cumulativePayment, sequence)
 	if err != nil {
 		return payment.PaymentState{}, err
 	}
-	state.ContractID = escrowContractID
+	state.ContractID = escrowContractID.String()
+	state.ValidUntil = uint64(time.Now().Add(c.paymentStateTTL).Unix())
 	signed, err := c.signer.Sign(state)
 	if err != nil {
 		return payment.PaymentState{}, err
 	}
-	store := c.stores[escrowContractID]
+	store := c.stores[state.ContractID]
 	if err := store.StorePaymentState(signed); err != nil {
 		return payment.PaymentState{}, err
 	}
-	if err := payment.SubmitPaymentState(escrowContractID, signed, c.submitter); err != nil {
+	if err := payment.SubmitPaymentState(state.ContractID, signed, c.submitter); err != nil {
 		return payment.PaymentState{}, err
 	}
-	c.stores[escrowContractID] = store
+	c.stores[state.ContractID] = store
 	return signed, nil
 }

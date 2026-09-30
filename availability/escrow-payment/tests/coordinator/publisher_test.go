@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	availabilitytypes "cipher/availability/availability-contracts/types"
+	bindings "cipher/availability/escrow-payment/bindings"
 	coordinator "cipher/availability/escrow-payment/coordinator"
 	interfaces "cipher/availability/escrow-payment/interfaces"
 	payment "cipher/availability/escrow-payment/payment"
@@ -28,10 +29,18 @@ func TestPublisherCoordinatorProcessesAvailabilityResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPublisherCoordinator returned error: %v", err)
 	}
-	if err := workflow.RegisterProvider("peer-provider", "payment-provider"); err != nil {
+	providerAddress, err := bindings.ParseEthereumAddress("0x1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatalf("ParseEthereumAddress returned error: %v", err)
+	}
+	if err := workflow.RegisterProvider("peer-provider", providerAddress); err != nil {
 		t.Fatalf("RegisterProvider returned error: %v", err)
 	}
-	if err := workflow.RegisterContract("availability-contract", "escrow-contract"); err != nil {
+	escrowID, err := bindings.ParseEscrowContractID("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("ParseEscrowContractID returned error: %v", err)
+	}
+	if err := workflow.RegisterContract("availability-contract", escrowID); err != nil {
 		t.Fatalf("RegisterContract returned error: %v", err)
 	}
 	state, err := workflow.ProcessAvailabilityResult(interfaces.AvailabilityResult{
@@ -41,7 +50,7 @@ func TestPublisherCoordinatorProcessesAvailabilityResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessAvailabilityResult returned error: %v", err)
 	}
-	if state.ContractID != "escrow-contract" || state.Provider != "payment-provider" || submitter.contractID != "escrow-contract" {
+	if state.ContractID != escrowID.String() || state.Provider != providerAddress.String() || submitter.contractID != escrowID.String() {
 		t.Fatalf("mapped payment state = %+v, submitted contract = %q", state, submitter.contractID)
 	}
 	if _, err := workflow.ProcessAvailabilityResult(interfaces.AvailabilityResult{ContractID: "availability-contract", ProviderID: "peer-provider", ChallengeID: "challenge-2", Result: interfaces.AvailabilityFail}, 25, 2); err == nil {

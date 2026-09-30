@@ -1,0 +1,12 @@
+{
+  "name": "cipher-escrow-payment",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test:solidity": "hardhat test"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "5.0.0",
+    "hardhat": "2.28.0"
+  }
+}

@@ -158,10 +158,10 @@ contract EscrowContract is IEscrowQueries {
         emit CollateralSlashed(contractID, amount);
     }
 
-    function getContractState(bytes32 contractID) external view returns (EscrowTypes.ContractState) { return _agreement(contractID).state; }
-    function getPaymentState(bytes32 contractID) external view returns (EscrowTypes.PaymentState memory) { _agreement(contractID); return latestPaymentStates[contractID]; }
-    function getEscrowBalance(bytes32 contractID) external view returns (uint256) { return _agreement(contractID).escrowBalance; }
-    function getCollateral(bytes32 contractID) external view returns (uint256) { return _agreement(contractID).collateral; }
+    function getContractState(bytes32 contractID) external view override returns (EscrowTypes.ContractState) { return _agreement(contractID).state; }
+    function getPaymentState(bytes32 contractID) external view override returns (EscrowTypes.PaymentState memory) { _agreement(contractID); return latestPaymentStates[contractID]; }
+    function getEscrowBalance(bytes32 contractID) external view override returns (uint256) { return _agreement(contractID).escrowBalance; }
+    function getCollateral(bytes32 contractID) external view override returns (uint256) { return _agreement(contractID).collateral; }
 
     function _agreement(bytes32 contractID) private view returns (EscrowTypes.EscrowAgreement storage agreement) {
         agreement = agreements[contractID];
