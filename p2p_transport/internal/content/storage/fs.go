@@ -8,9 +8,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"cipher/internal/content/core"
 )
+
+const (
+	// MinHeaderSize is the binary size of core.ChunkHeader (66 bytes).
+	MinHeaderSize = 66
+	// MaxChunkSize is the maximum permitted payload size for a chunk (2 MiB).
+	MaxChunkSize = 2 * 1024 * 1024
+)
+
+var chunkBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, MaxChunkSize)
+		return &buf
+	},
+}
 
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
@@ -94,23 +109,41 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+
+	if info.Size() < MinHeaderSize {
+		return nil, fmt.Errorf("chunk file too small: %d bytes (minimum %d)", info.Size(), MinHeaderSize)
+	}
+
 	chunk := &core.Chunk{}
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	dataSize := info.Size() - MinHeaderSize
+	if dataSize > MaxChunkSize {
+		return nil, fmt.Errorf("chunk data size exceeds maximum allowed limit (%d > %d)", dataSize, MaxChunkSize)
+	}
+
+	if dataSize == 0 {
+		chunk.Data = nil
+		return chunk, nil
+	}
+
+	bufPtr := chunkBufferPool.Get().(*[]byte)
+	defer chunkBufferPool.Put(bufPtr)
+	buf := *bufPtr
+
+	limitedReader := io.LimitReader(f, MaxChunkSize)
+	n, err := io.ReadFull(limitedReader, buf[:dataSize])
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	chunk.Data = append([]byte(nil), buf[:n]...)
 
 	return chunk, nil
 }
