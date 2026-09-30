@@ -7,6 +7,14 @@ type EscrowSubmitter interface {
 	SubmitPaymentState(contractID string, paymentState PaymentState) error
 }
 
+// EscrowFailureHandler records an Availability failure on the configured
+// escrow agreement. A coordinator may optionally apply a collateral penalty
+// after recording that failure.
+type EscrowFailureHandler interface {
+	MarkFailure(contractID string) error
+	SlashCollateral(contractID string, penalty uint64) error
+}
+
 // PaymentStateStore keeps the provider's latest signed cumulative state. Its
 // zero value is ready to use and never accepts a stale sequence number.
 type PaymentStateStore struct {

@@ -19,10 +19,19 @@ type PublisherCoordinator struct {
 	signer          payment.StateSigner
 	submitter       payment.EscrowSubmitter
 	paymentStateTTL time.Duration
+	failurePenalty  uint64
 
 	mu       sync.Mutex
 	bindings *bindings.Registry
 	stores   map[string]payment.PaymentStateStore
+}
+
+// SetFailurePenalty configures the maximum collateral amount (in wei) to
+// slash after a verified FAIL result. Zero records the failure only.
+func (c *PublisherCoordinator) SetFailurePenalty(penalty uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failurePenalty = penalty
 }
 
 func NewPublisherCoordinator(publisherID string, signer payment.StateSigner, submitter payment.EscrowSubmitter) (*PublisherCoordinator, error) {
@@ -59,17 +68,34 @@ func (c *PublisherCoordinator) RegisterContract(availabilityContractID availabil
 	return c.bindings.BindContract(availabilityContractID, escrowContractID)
 }
 
-// ProcessAvailabilityResult creates, signs, stores, and submits the next
-// cumulative payment state for a successful Availability period.
+// ProcessAvailabilityResult creates a payment state for PASS, or records an
+// on-chain failure for FAIL. A successful FAIL action returns an empty payment
+// state because no payment authorization exists for that result.
 func (c *PublisherCoordinator) ProcessAvailabilityResult(result interfaces.AvailabilityResult, cumulativePayment, sequence uint64) (payment.PaymentState, error) {
-	if result.Result != interfaces.AvailabilityPass {
-		return payment.PaymentState{}, errors.New("failed availability result cannot create a payment state")
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	escrowContractID, ok := c.bindings.EscrowID(result.ContractID)
 	if !ok {
 		return payment.PaymentState{}, errors.New("no escrow contract is registered for availability contract")
+	}
+	if result.Result == interfaces.AvailabilityFail {
+		handler, ok := c.submitter.(payment.EscrowFailureHandler)
+		if !ok {
+			return payment.PaymentState{}, errors.New("escrow submitter does not support failure handling")
+		}
+		contractID := escrowContractID.String()
+		if err := handler.MarkFailure(contractID); err != nil {
+			return payment.PaymentState{}, err
+		}
+		if c.failurePenalty > 0 {
+			if err := handler.SlashCollateral(contractID, c.failurePenalty); err != nil {
+				return payment.PaymentState{}, err
+			}
+		}
+		return payment.PaymentState{}, nil
+	}
+	if result.Result != interfaces.AvailabilityPass {
+		return payment.PaymentState{}, errors.New("availability result has an unknown status")
 	}
 	providerAddress, ok := c.bindings.ProviderAddress(result.ProviderID)
 	if !ok {

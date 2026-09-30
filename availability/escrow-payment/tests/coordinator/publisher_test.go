@@ -2,6 +2,7 @@ package coordinator_test
 
 import (
 	"crypto/ed25519"
+	"fmt"
 	"testing"
 
 	availabilitytypes "cipher/availability/availability-contracts/types"
@@ -14,11 +15,26 @@ import (
 type recordingSubmitter struct {
 	contractID string
 	state      payment.PaymentState
+	failedID   string
+	penalty    uint64
 }
 
 func (s *recordingSubmitter) SubmitPaymentState(contractID string, state payment.PaymentState) error {
 	s.contractID = contractID
 	s.state = state
+	return nil
+}
+
+func (s *recordingSubmitter) MarkFailure(contractID string) error {
+	s.failedID = contractID
+	return nil
+}
+
+func (s *recordingSubmitter) SlashCollateral(contractID string, penalty uint64) error {
+	if contractID != s.failedID {
+		return fmt.Errorf("slash contract %q was not marked failed", contractID)
+	}
+	s.penalty = penalty
 	return nil
 }
 
@@ -53,7 +69,12 @@ func TestPublisherCoordinatorProcessesAvailabilityResult(t *testing.T) {
 	if state.ContractID != escrowID.String() || state.Provider != providerAddress.String() || submitter.contractID != escrowID.String() {
 		t.Fatalf("mapped payment state = %+v, submitted contract = %q", state, submitter.contractID)
 	}
-	if _, err := workflow.ProcessAvailabilityResult(interfaces.AvailabilityResult{ContractID: "availability-contract", ProviderID: "peer-provider", ChallengeID: "challenge-2", Result: interfaces.AvailabilityFail}, 25, 2); err == nil {
-		t.Fatal("ProcessAvailabilityResult accepted a failed availability result")
+	workflow.SetFailurePenalty(7)
+	failed, err := workflow.ProcessAvailabilityResult(interfaces.AvailabilityResult{ContractID: "availability-contract", ProviderID: "peer-provider", ChallengeID: "challenge-2", Result: interfaces.AvailabilityFail}, 25, 2)
+	if err != nil {
+		t.Fatalf("ProcessAvailabilityResult failure path returned error: %v", err)
+	}
+	if failed.ContractID != "" || submitter.failedID != escrowID.String() || submitter.penalty != 7 {
+		t.Fatalf("failure action = state %+v, contract %q, penalty %d", failed, submitter.failedID, submitter.penalty)
 	}
 }

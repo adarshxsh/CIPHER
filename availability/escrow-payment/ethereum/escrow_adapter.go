@@ -16,7 +16,7 @@ import (
 	payment "cipher/availability/escrow-payment/payment"
 )
 
-const escrowABI = `[{"inputs":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"components":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"internalType":"address","name":"publisher","type":"address"},{"internalType":"address","name":"provider","type":"address"},{"internalType":"uint64","name":"sequence","type":"uint64"},{"internalType":"uint64","name":"period","type":"uint64"},{"internalType":"uint256","name":"cumulativePayment","type":"uint256"},{"internalType":"bytes32","name":"lastChallengeID","type":"bytes32"},{"internalType":"uint64","name":"validUntil","type":"uint64"},{"internalType":"uint8","name":"status","type":"uint8"},{"internalType":"bytes","name":"signature","type":"bytes"}],"internalType":"struct EscrowTypes.PaymentState","name":"paymentState","type":"tuple"}],"name":"submitPaymentState","outputs":[],"stateMutability":"nonpayable","type":"function"}]`
+const escrowABI = `[{"inputs":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"components":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"internalType":"address","name":"publisher","type":"address"},{"internalType":"address","name":"provider","type":"address"},{"internalType":"uint64","name":"sequence","type":"uint64"},{"internalType":"uint64","name":"period","type":"uint64"},{"internalType":"uint256","name":"cumulativePayment","type":"uint256"},{"internalType":"bytes32","name":"lastChallengeID","type":"bytes32"},{"internalType":"uint64","name":"validUntil","type":"uint64"},{"internalType":"uint8","name":"status","type":"uint8"},{"internalType":"bytes","name":"signature","type":"bytes"}],"internalType":"struct EscrowTypes.PaymentState","name":"paymentState","type":"tuple"}],"name":"submitPaymentState","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"internalType":"enum EscrowTypes.FailureReason","name":"reason","type":"uint8"}],"name":"markFailure","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"bytes32","name":"contractID","type":"bytes32"},{"internalType":"uint256","name":"penalty","type":"uint256"}],"name":"slashCollateral","outputs":[],"stateMutability":"nonpayable","type":"function"}]`
 
 type solidityPaymentState struct {
 	ContractID        [32]byte
@@ -81,3 +81,26 @@ func (a *EscrowAdapter) SubmitPaymentState(contractID string, state payment.Paym
 }
 
 var _ payment.EscrowSubmitter = (*EscrowAdapter)(nil)
+
+// MarkFailure records a verified Availability failure. The adapter account
+// must be the escrow agreement's publisher, as required by the Solidity contract.
+func (a *EscrowAdapter) MarkFailure(contractID string) error {
+	if a == nil || a.contract == nil || a.auth == nil || common.HexToHash(contractID) == (common.Hash{}) {
+		return errors.New("valid escrow adapter and contract ID are required")
+	}
+	options := *a.auth
+	_, err := a.contract.Transact(&options, "markFailure", common.HexToHash(contractID), uint8(1))
+	return err
+}
+
+// SlashCollateral applies an eligible publisher-authorized penalty in wei.
+func (a *EscrowAdapter) SlashCollateral(contractID string, penalty uint64) error {
+	if a == nil || a.contract == nil || a.auth == nil || common.HexToHash(contractID) == (common.Hash{}) || penalty == 0 {
+		return errors.New("valid escrow adapter, contract ID, and positive penalty are required")
+	}
+	options := *a.auth
+	_, err := a.contract.Transact(&options, "slashCollateral", common.HexToHash(contractID), new(big.Int).SetUint64(penalty))
+	return err
+}
+
+var _ payment.EscrowFailureHandler = (*EscrowAdapter)(nil)
