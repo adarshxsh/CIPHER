@@ -105,3 +105,28 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestReadMessage_PreValidation_OversizedPayload(t *testing.T) {
+	// Construct 7-byte header claiming a 1MB payload for MsgRequestManifest (max allowed is 512)
+	var header [7]byte
+	// Frame length = 1,000,003 (4 bytes LittleEndian)
+	header[0] = 0x03
+	header[1] = 0x24
+	header[2] = 0x0F
+	header[3] = 0x00
+	// Version = 1 (2 bytes LittleEndian)
+	header[4] = 0x01
+	header[5] = 0x00
+	// Type = MsgRequestManifest (0x01)
+	header[6] = byte(chunk.MsgRequestManifest)
+
+	// Note: We deliberately DO NOT write the 1MB payload bytes into buf.
+	// If ReadMessage fails at header validation, it returns an error immediately without reading payload.
+	var buf bytes.Buffer
+	buf.Write(header[:])
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("Expected ReadMessage to reject oversized payload on header validation, got nil error")
+	}
+}
