@@ -46,4 +46,10 @@ func TestInvalidContractTransitions(t *testing.T) {
 	if _, err := contract.Transition(availabilitytypes.Completed, availabilitytypes.Active); err == nil {
 		t.Fatal("terminal state transition succeeded")
 	}
+	if contract.CanTransition(availabilitytypes.Agreed, availabilitytypes.Ready) {
+		t.Fatal("AGREED -> READY should not skip TRANSFERRING")
+	}
+	if contract.CanTransition("UNKNOWN", availabilitytypes.Active) {
+		t.Fatal("unknown state transition should not be allowed")
+	}
 }

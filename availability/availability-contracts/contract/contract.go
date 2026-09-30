@@ -10,6 +10,7 @@ import (
 	"time"
 
 	challenge "cipher/availability/availability-contracts/challenge"
+	settlement "cipher/availability/availability-contracts/settlement"
 	availabilitytypes "cipher/availability/availability-contracts/types"
 )
 
@@ -115,8 +116,8 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 	if !ok {
 		return "", "", fmt.Errorf("unknown contract: %s", contractID)
 	}
-	if contract.State != availabilitytypes.Agreed || contract.FundedAmount != contract.PaymentAmount {
-		return "", "", errors.New("contract must be agreed and fully funded before a challenge starts")
+	if (contract.State != availabilitytypes.Agreed && contract.State != availabilitytypes.Active) || contract.FundedAmount != contract.PaymentAmount {
+		return "", "", errors.New("contract must be agreed or active and fully funded before a challenge starts")
 	}
 	if !time.Now().UTC().Before(contract.EndsAt) {
 		contract.State = availabilitytypes.Expired
@@ -127,10 +128,12 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 		return "", "", fmt.Errorf("create availability challenge: %w", err)
 	}
 	challengeID := generated.ChallengeID
-	for _, nextState := range []availabilitytypes.ContractState{availabilitytypes.Transferring, availabilitytypes.Ready, availabilitytypes.Active} {
-		contract.State, err = Transition(contract.State, nextState)
-		if err != nil {
-			return "", "", err
+	if contract.State == availabilitytypes.Agreed {
+		for _, nextState := range []availabilitytypes.ContractState{availabilitytypes.Transferring, availabilitytypes.Ready, availabilitytypes.Active} {
+			contract.State, err = Transition(contract.State, nextState)
+			if err != nil {
+				return "", "", err
+			}
 		}
 	}
 	contract.Challenges = append(contract.Challenges, challengeID)
@@ -156,6 +159,11 @@ func RecordAvailabilityResult(contractID availabilitytypes.ContractID, challenge
 	if result.ChallengeID != "" && result.ChallengeID != challengeID {
 		return "", errors.New("result challenge ID does not match")
 	}
+	for _, recorded := range contract.Results {
+		if recorded.ChallengeID == challengeID {
+			return "", errors.New("challenge result has already been recorded")
+		}
+	}
 	result.ChallengeID = challengeID
 	result.RecordedAt = time.Now().UTC()
 	contract.Results = append(contract.Results, result)
@@ -178,24 +186,12 @@ func SettleAvailabilityContract(contractID availabilitytypes.ContractID) (availa
 	if len(contract.Results) == 0 {
 		return "", errors.New("cannot settle without recorded challenge results")
 	}
-	contract.Settlement.SuccessfulProofs = 0
-	contract.Settlement.FailedProofs = 0
-	for _, result := range contract.Results {
-		if result.Succeeded {
-			contract.Settlement.SuccessfulProofs++
-		} else {
-			contract.Settlement.FailedProofs++
-		}
+	settlementState, err := settlement.CalculateSettlement(contract.FundedAmount, contract.Results)
+	if err != nil {
+		return "", err
 	}
-	contract.Settlement.ReleasedAmount = contract.FundedAmount * int64(contract.Settlement.SuccessfulProofs) / int64(len(contract.Results))
-	contract.Settlement.WithheldAmount = contract.FundedAmount - contract.Settlement.ReleasedAmount
-	if contract.Settlement.WithheldAmount == 0 {
-		contract.Settlement.Status = availabilitytypes.SettlementCompleted
-	} else {
-		contract.Settlement.Status = availabilitytypes.SettlementWithheld
-	}
+	contract.Settlement = settlementState
 	var nextState availabilitytypes.ContractState
-	var err error
 	if !time.Now().UTC().Before(contract.EndsAt) {
 		nextState, err = Transition(contract.State, availabilitytypes.Expired)
 	} else {

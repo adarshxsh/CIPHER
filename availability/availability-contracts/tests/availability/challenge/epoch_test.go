@@ -45,6 +45,10 @@ func TestEpochSelectionAndReset(t *testing.T) {
 	if nextState.UncoveredChunkCount != 5 || nextState.ChallengeCounter != 0 || nextState.RoundNumber != 1 {
 		t.Fatalf("next epoch state = %+v, want reset chunks, counter zero, round one", nextState)
 	}
+	previousState, err := challenge.GetEpochState(epochID)
+	if err != nil || previousState.EpochStatus != "ENDED" {
+		t.Fatalf("previous epoch state = %+v, error=%v; want ENDED", previousState, err)
+	}
 }
 
 func TestCheckRoundTrigger(t *testing.T) {
