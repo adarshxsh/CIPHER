@@ -18,6 +18,7 @@ import (
 	"cipher/internal/content/verifier"
 	"cipher/internal/discovery"
 	"cipher/internal/protocol"
+	"cipher/internal/protocol/chunk"
 )
 
 type AuthPolicy string
@@ -154,8 +155,34 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
-	expectedMap := make(map[core.ChunkID]struct{})
+	// Manifest chunk count boundary checks
+	manifestChunkCount := uint64(len(m.ChunkIDs))
+	if manifestChunkCount == 0 || manifestChunkCount > chunk.MaxSupportedChunkCount {
+		log.Printf("[Push Protocol] Manifest has invalid chunk count: %d", manifestChunkCount)
+		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "invalid manifest chunk count"))
+		return
+	}
+
+	// Assigned chunk count boundary checks
+	assignedCount := uint64(len(assignedChunkIDs))
+	if assignedCount > manifestChunkCount {
+		log.Printf("[Push Protocol] Assigned chunk count (%d) exceeds manifest chunk count (%d)", assignedCount, manifestChunkCount)
+		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "assigned chunk count exceeds manifest chunk count"))
+		return
+	}
+
+	manifestChunksMap := make(map[core.ChunkID]struct{}, len(m.ChunkIDs))
+	for _, cid := range m.ChunkIDs {
+		manifestChunksMap[cid] = struct{}{}
+	}
+
+	expectedMap := make(map[core.ChunkID]struct{}, len(assignedChunkIDs))
 	for _, cid := range assignedChunkIDs {
+		if _, exists := manifestChunksMap[cid]; !exists {
+			log.Printf("[Push Protocol] Assigned chunk %x not listed in manifest for ContentID %x", cid, contentID)
+			_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "assigned chunk not present in manifest"))
+			return
+		}
 		expectedMap[cid] = struct{}{}
 	}
 

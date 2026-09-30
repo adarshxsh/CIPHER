@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"math"
 	"time"
 
 	"cipher/internal/content/core"
+	"cipher/internal/protocol/chunk"
 )
 
 const (
@@ -119,7 +122,11 @@ func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID
 	buf := new(bytes.Buffer)
 	buf.Write(contentID[:])
 
-	count := uint32(len(assignedChunkIDs))
+	chunkCount := uint64(len(assignedChunkIDs))
+	if chunkCount > chunk.MaxSupportedChunkCount || chunkCount > uint64(math.MaxUint32) {
+		log.Printf("[Push Protocol] Warning: assigned chunk count %d exceeds uint32/chunk bounds", chunkCount)
+	}
+	count := uint32(chunkCount)
 	_ = binary.Write(buf, binary.LittleEndian, count)
 
 	for _, cid := range assignedChunkIDs {
@@ -142,9 +149,19 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 
 	copy(contentID[:], payload[:32])
 	count := binary.LittleEndian.Uint32(payload[32:36])
+	count64 := uint64(count)
 
-	expectedOffset := 36 + int(count)*32
-	if len(payload) < expectedOffset {
+	maxPossibleChunks := (uint64(len(payload)) - 36) / 32
+	if count64 > maxPossibleChunks {
+		return contentID, nil, nil, fmt.Errorf("chunk count %d exceeds payload size bounds (max %d)", count, maxPossibleChunks)
+	}
+
+	if count64 > chunk.MaxSupportedChunkCount {
+		return contentID, nil, nil, fmt.Errorf("chunk count %d exceeds maximum supported limit %d", count, chunk.MaxSupportedChunkCount)
+	}
+
+	expectedOffset := 36 + count64*32
+	if uint64(len(payload)) < expectedOffset {
 		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", len(payload), count)
 	}
 
