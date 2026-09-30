@@ -16,14 +16,28 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host                  host.Host
+	engine                *engine.ContentEngine
+	maxTransactionsStream int
+	maxMessagesStream     int
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+	return NewStreamHandlerWithLimits(h, eng, MaxTransactionsPerStream, MaxMessagesPerStream)
+}
+
+func NewStreamHandlerWithLimits(h host.Host, eng *engine.ContentEngine, maxTx, maxMsg int) *StreamHandler {
+	if maxTx <= 0 {
+		maxTx = MaxTransactionsPerStream
+	}
+	if maxMsg <= 0 {
+		maxMsg = MaxMessagesPerStream
+	}
 	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+		host:                  h,
+		engine:                eng,
+		maxTransactionsStream: maxTx,
+		maxMessagesStream:     maxMsg,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -32,6 +46,9 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+
+	frameCount := 0
+	txCount := 0
 
 	for {
 		msg, err := ReadMessage(s)
@@ -44,21 +61,50 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 
+		frameCount++
+		if frameCount > h.maxMessagesStream {
+			log.Printf("[Chunk Protocol] Stream from %s exceeded max frame limit (%d > %d), resetting stream", s.Conn().RemotePeer(), frameCount, h.maxMessagesStream)
+			_ = s.Reset()
+			return
+		}
+
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			_ = WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
 
 		switch msg.Type {
 		case MsgRequestManifest:
+			txCount++
+			if txCount > h.maxTransactionsStream {
+				log.Printf("[Chunk Protocol] Stream from %s exceeded max transaction limit (%d > %d), resetting stream", s.Conn().RemotePeer(), txCount, h.maxTransactionsStream)
+				_ = s.Reset()
+				return
+			}
 			h.handleRequestManifest(s, msg)
+
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			txCount++
+			if txCount > h.maxTransactionsStream {
+				log.Printf("[Chunk Protocol] Stream from %s exceeded max transaction limit (%d > %d), resetting stream", s.Conn().RemotePeer(), txCount, h.maxTransactionsStream)
+				_ = s.Reset()
+				return
+			}
+			ackRead := h.handleRequestChunk(s, msg)
+			if ackRead {
+				frameCount++
+				if frameCount > h.maxMessagesStream {
+					log.Printf("[Chunk Protocol] Stream from %s exceeded max frame limit (%d > %d), resetting stream", s.Conn().RemotePeer(), frameCount, h.maxMessagesStream)
+					_ = s.Reset()
+					return
+				}
+			}
+
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			_ = WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
 	}
 }
@@ -84,18 +130,18 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) bool {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
-		return
+		return false
 	}
 
 	ctx := context.Background()
 	chunkData, err := h.engine.GetChunk(ctx, chunkID)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
-		return
+		return false
 	}
 
 	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
@@ -107,27 +153,28 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	resp, err := BuildChunk(chunkData)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrInternal, "failed to build chunk message"))
-		return
+		return false
 	}
 
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing CHUNK response: %v", err)
-		return
+		return false
 	}
 
-	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	// Wait for ACK synchronously (sequential protocol requirement)
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
-		return
+		return false
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
-		return
+		return true
 	}
 	if ackMsg.Type != MsgAck {
 		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
-		return
+		return true
 	}
+	return true
 }
