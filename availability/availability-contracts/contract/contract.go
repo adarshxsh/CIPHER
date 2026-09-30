@@ -97,8 +97,12 @@ func FundAvailabilityContract(contractID availabilitytypes.ContractID, paymentAm
 	if paymentAmount != contract.PaymentAmount {
 		return "", errors.New("funding amount must equal the agreed payment amount")
 	}
+	nextState, err := Transition(contract.State, availabilitytypes.Agreed)
+	if err != nil {
+		return "", err
+	}
 	contract.FundedAmount = paymentAmount
-	contract.State = availabilitytypes.Agreed
+	contract.State = nextState
 	return contract.State, nil
 }
 
@@ -123,9 +127,14 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 		return "", "", fmt.Errorf("create availability challenge: %w", err)
 	}
 	challengeID := generated.ChallengeID
+	for _, nextState := range []availabilitytypes.ContractState{availabilitytypes.Transferring, availabilitytypes.Ready, availabilitytypes.Active} {
+		contract.State, err = Transition(contract.State, nextState)
+		if err != nil {
+			return "", "", err
+		}
+	}
 	contract.Challenges = append(contract.Challenges, challengeID)
 	contractStore.challenges[challengeID] = contractID
-	contract.State = availabilitytypes.Active
 	return challengeID, generated.EpochID, nil
 }
 
@@ -185,11 +194,17 @@ func SettleAvailabilityContract(contractID availabilitytypes.ContractID) (availa
 	} else {
 		contract.Settlement.Status = availabilitytypes.SettlementWithheld
 	}
+	var nextState availabilitytypes.ContractState
+	var err error
 	if !time.Now().UTC().Before(contract.EndsAt) {
-		contract.State = availabilitytypes.Expired
+		nextState, err = Transition(contract.State, availabilitytypes.Expired)
 	} else {
-		contract.State = availabilitytypes.Completed
+		nextState, err = Transition(contract.State, availabilitytypes.Completed)
 	}
+	if err != nil {
+		return "", err
+	}
+	contract.State = nextState
 	contract.Settlement.FinalizedAt = time.Now().UTC()
 	return contract.Settlement.Status, nil
 }
@@ -205,7 +220,11 @@ func TerminateAvailabilityContract(contractID availabilitytypes.ContractID) (ava
 	if contract.State.IsTerminal() {
 		return "", fmt.Errorf("contract %s is already terminal", contractID)
 	}
-	contract.State = availabilitytypes.Terminated
+	nextState, err := Transition(contract.State, availabilitytypes.Terminated)
+	if err != nil {
+		return "", err
+	}
+	contract.State = nextState
 	contract.Settlement.Status = availabilitytypes.SettlementTerminated
 	contract.Settlement.FinalizedAt = time.Now().UTC()
 	return contract.State, nil
