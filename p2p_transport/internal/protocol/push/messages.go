@@ -143,9 +143,14 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 	copy(contentID[:], payload[:32])
 	count := binary.LittleEndian.Uint32(payload[32:36])
 
-	expectedOffset := 36 + int(count)*32
-	if len(payload) < expectedOffset {
+	expectedOffset := 36 + uint64(count)*32
+	if uint64(len(payload)) < expectedOffset {
 		return contentID, nil, nil, fmt.Errorf("payload length %d too short for %d assigned chunks", len(payload), count)
+	}
+
+	manifestData := payload[expectedOffset:]
+	if uint32(len(manifestData)) > MaxManifestSize {
+		return contentID, nil, nil, fmt.Errorf("manifest payload size %d exceeds limit %d", len(manifestData), MaxManifestSize)
 	}
 
 	assignedChunkIDs := make([]core.ChunkID, count)
@@ -154,7 +159,6 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 		copy(assignedChunkIDs[i][:], payload[offset:offset+32])
 	}
 
-	manifestData := payload[expectedOffset:]
 	return contentID, assignedChunkIDs, manifestData, nil
 }
 
@@ -210,6 +214,9 @@ func ParsePushChunk(payload []byte) (core.ContentID, *core.Chunk, error) {
 	}
 
 	chunk.Data = make([]byte, buf.Len())
+	if uint32(len(chunk.Data)) > MaxChunkSize {
+		return contentID, nil, fmt.Errorf("chunk data size %d exceeds limit %d", len(chunk.Data), MaxChunkSize)
+	}
 	if _, err := buf.Read(chunk.Data); err != nil && err != io.EOF {
 		return contentID, nil, err
 	}
