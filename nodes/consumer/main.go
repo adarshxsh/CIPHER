@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"cipher/network/content/core"
@@ -17,11 +19,13 @@ import (
 	"cipher/network/content/verifier"
 	"cipher/network/discovery"
 	"cipher/network/identity"
+	"cipher/network/payments"
 	"cipher/network/retrieval"
 	"cipher/network/transfer/manager"
 	"cipher/network/transfer/scheduler"
 	"cipher/network/transport"
 
+	"github.com/ethereum/go-ethereum/common"
 	golog "github.com/ipfs/go-log/v2"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -49,6 +53,14 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+
+	// Payments protocol flags
+	ethRPC := flag.String("eth-rpc", "", "Ethereum JSON-RPC URL (e.g. http://127.0.0.1:8545)")
+	ethKey := flag.String("eth-key", "", "Ethereum private key (hex)")
+	entropyAddr := flag.String("entropy-addr", "", "CommitRevealEntropy contract address (hex)")
+	providerEthAddr := flag.String("provider-eth-addr", "", "Provider Ethereum payout address (hex)")
+	roundID := flag.Int64("round-id", 1, "Payment round ID")
+	roundFaceValue := flag.String("round-face-value", "1000000000000000000", "Round face value in wei (default 1 ETH)")
 
 	flag.Parse()
 
@@ -224,6 +236,65 @@ func main() {
 	// 7. Data Plane: Parallel Swarming Chunk Download
 	log.Printf("Downloading %d chunks from %d provider(s)...", len(m.ChunkIDs), len(targetPeers))
 	tm := manager.NewTransferManager(sm, eng, t)
+
+	// Configure payment ticket generation if Ethereum parameters provided
+	if *ethRPC != "" && *ethKey != "" && *entropyAddr != "" && *providerEthAddr != "" {
+		log.Printf("[Payment] Initializing Ethereum client & EIP-712 ticket signer...")
+		payClient, err := payments.NewPaymentClient(ctx, *ethRPC, *ethKey, payments.ContractAddresses{
+			EntropySource: common.HexToAddress(*entropyAddr),
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize Ethereum payment client: %v", err)
+		}
+		defer payClient.Close()
+
+		faceVal, ok := new(big.Int).SetString(*roundFaceValue, 10)
+		if !ok {
+			log.Fatalf("Invalid round face value: %s", *roundFaceValue)
+		}
+
+		pAddr := common.HexToAddress(*providerEthAddr)
+		rID := big.NewInt(*roundID)
+
+		// Map chunk IDs to local indices in manifest
+		chunkIdxMap := make(map[core.ChunkID]uint64, len(m.ChunkIDs))
+		for idx, cid := range m.ChunkIDs {
+			chunkIdxMap[cid] = uint64(idx)
+		}
+
+		var ticketMu sync.Mutex
+		tm.SetTicketGenerator(func(chunkID core.ChunkID) (*payments.SignedTicket, error) {
+			ticketMu.Lock()
+			defer ticketMu.Unlock()
+
+			idx, exists := chunkIdxMap[chunkID]
+			if !exists {
+				return nil, fmt.Errorf("chunk %x not in manifest", chunkID)
+			}
+
+			ticket := payments.RoundTicket{
+				Sender:      payClient.Address,
+				Recipient:   pAddr,
+				RoundID:     rID,
+				LocalIndex:  new(big.Int).SetUint64(idx),
+				FaceValue:   faceVal,
+				WinProb:     big.NewInt(100000000000000000), // 0.1
+				SenderNonce: big.NewInt(12345),
+			}
+
+			sig, err := payClient.Signer.SignTicket(ticket)
+			if err != nil {
+				return nil, fmt.Errorf("failed to sign ticket for chunk index %d: %w", idx, err)
+			}
+
+			log.Printf("[Payment] Generated & signed ticket for chunk #%d (sig: %x...)", idx, sig[:8])
+			return &payments.SignedTicket{
+				Ticket:    ticket,
+				Signature: sig,
+			}, nil
+		})
+	}
+
 	if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 		log.Fatalf("Download failed: %v", err)
 	}

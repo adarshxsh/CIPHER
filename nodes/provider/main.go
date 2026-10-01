@@ -7,10 +7,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"strings"
 
 	"cipher/network/content/core"
 	"cipher/network/content/crypto"
@@ -19,10 +19,13 @@ import (
 	"cipher/network/content/verifier"
 	"cipher/network/discovery"
 	"cipher/network/identity"
+	"cipher/network/payments"
 	"cipher/network/protocol/chunk"
 	"cipher/network/protocol/push"
 	"cipher/network/transport"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	golog "github.com/ipfs/go-log/v2"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -44,6 +47,12 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+
+	// Payments protocol flags
+	ethRPC := flag.String("eth-rpc", "", "Ethereum JSON-RPC URL (e.g. http://127.0.0.1:8545)")
+	entropyAddr := flag.String("entropy-addr", "", "CommitRevealEntropy contract address (hex)")
+	providerEthKey := flag.String("eth-key", "", "Provider Ethereum private key (hex, optional)")
+	_ = providerEthKey
 
 	flag.Parse()
 
@@ -115,7 +124,39 @@ func main() {
 	}
 
 	// 5. Register Data-Plane Stream Handler (/cipher/chunk/1.0.0)
-	chunk.NewStreamHandler(h, eng)
+	streamHandler := chunk.NewStreamHandler(h, eng)
+	if *ethRPC != "" && *entropyAddr != "" {
+		log.Printf("[Payment] Configuring payment ticket verification against CommitRevealEntropy %s...", *entropyAddr)
+		ethClient, err := ethclient.DialContext(ctx, *ethRPC)
+		if err != nil {
+			log.Fatalf("Failed to dial Ethereum RPC: %v", err)
+		}
+		defer ethClient.Close()
+
+		chainID, err := ethClient.ChainID(ctx)
+		if err != nil {
+			log.Fatalf("Failed to retrieve chain ID: %v", err)
+		}
+
+		verifierSigner := payments.NewTicketSigner(nil, chainID, common.HexToAddress(*entropyAddr))
+
+		var ticketsMu sync.Mutex
+		var storedTickets []*payments.SignedTicket
+
+		streamHandler.SetTicketHandler(func(ticket *payments.SignedTicket) error {
+			ticketsMu.Lock()
+			defer ticketsMu.Unlock()
+
+			if !verifierSigner.Verify(ticket.Ticket, ticket.Signature, ticket.Ticket.Sender) {
+				return fmt.Errorf("invalid ticket signature from %s", ticket.Ticket.Sender.Hex())
+			}
+
+			storedTickets = append(storedTickets, ticket)
+			log.Printf("[Payment] [✓] Received valid ticket #%d (Chunk Index %s, Value %s wei, from %s)",
+				len(storedTickets), ticket.Ticket.LocalIndex.String(), ticket.Ticket.FaceValue.String(), ticket.Ticket.Sender.Hex())
+			return nil
+		})
+	}
 
 	// 6. Register Ingestion Stream Handler (/cipher/push/1.0.0)
 	var allowedPublishersList []peer.ID

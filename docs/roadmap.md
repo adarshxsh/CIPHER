@@ -19,29 +19,39 @@
 ## Phase 4: Decentralization & Scaling
 - [x] Milestone 11: Decentralized Discovery (Kademlia DHT server mode, CID generation, periodic Provider Republisher daemon)
 - [x] Milestone 12: Remote Ingestion & Multi-Provider Replication Protocol (`/cipher/push/1.0.0`, circular placement planner, global replica invariant tracker)
-- [ ] Milestone 13: Provider Selection & Dynamic Scoring Engine (RTT/bandwidth-based scheduler prioritization)
-- [ ] Milestone 14: Provider Reputation & Byzantine Fault Hardening (Corrupt chunk quarantine & peer blacklisting)
-- [ ] Milestone 15: Tiered Caching & Dynamic Edge Replication (LRU RAM cache + demand-driven CDN replication)
-- [ ] Milestone 16: Observability, Metrics & Telemetry Suite (Prometheus metrics & CLI dashboard)
+
+## Phase 5: Economic Incentives & Settlement (Current)
+- [x] Milestone 13: Dual Identity Management (Secp256k1 Ethereum keys alongside libp2p Ed25519 keys)
+- [x] Milestone 14: Foundry Smart Contracts & Go Bindings (`PaymentChannel`, `SettlementEngine`, `CommitRevealEntropy`, `ProviderRegistry`)
+- [x] Milestone 15: Streaming Micro-Payments Protocol (`MsgTicket 0x07` EIP-712 chunk-for-ticket verification)
+- [x] Milestone 16: Live Anvil EVM Integration & Master Workflow (`./test_workflow.sh`)
+- [ ] Milestone 17: Windowed Credit Buffering & Autonomous Background Settlement Daemons
+- [ ] Milestone 18: On-Chain Merkle Dispute Arbitration (`ChunkDisputeResolver`) & Availability Slashing
 
 ---
 
 ### Command Quick-Start Reference
 
 ```bash
+# Execute master end-to-end workflow (Solidity + Go Unit + Wire + Live Anvil Settlement):
+./test_workflow.sh
+
 # Push distribution across remote providers with R=2 replication:
-CGO_ENABLED=0 go run cmd/publisher/main.go \
+go run nodes/publisher/main.go \
   -file test_files/test.mp4 \
   -push \
   -providers "<P1_ADDR>,<P2_ADDR>,<P3_ADDR>" \
   -replication 2 \
-  -bootstrap "<BOOTSTRAP_MULTIADDR>" \
-  -seed=false
+  -bootstrap "<BOOTSTRAP_MULTIADDR>"
 
-# Client swarm download via DHT:
-CGO_ENABLED=0 go run cmd/client/main.go \
+# Consumer download via DHT with streaming EIP-712 payment tickets:
+go run nodes/consumer/main.go \
   -bootstrap "<BOOTSTRAP_MULTIADDR>" \
   -fetch "<CONTENT_ID>" \
   -key "<DECRYPTION_KEY>" \
-  -out downloaded.mp4
+  -out downloaded.mp4 \
+  --eth-rpc "http://127.0.0.1:8545" \
+  --eth-key "<CLIENT_ETH_PRIVKEY>" \
+  --entropy-addr "<ENTROPY_CONTRACT_ADDR>" \
+  --provider-eth-addr "<PROVIDER_ETH_ADDR>"
 ```

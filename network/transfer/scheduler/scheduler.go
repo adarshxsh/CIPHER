@@ -19,9 +19,10 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport       *transport.Transport
+	Engine          *engine.ContentEngine
+	MaxAttempts     int
+	TicketGenerator chunk.TicketGeneratorFunc
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -43,6 +44,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
 			continue
+		}
+		if s.TicketGenerator != nil {
+			client.SetTicketGenerator(s.TicketGenerator)
 		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {

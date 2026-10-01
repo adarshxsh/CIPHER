@@ -10,6 +10,7 @@ import (
 
 	"cipher/network/content/core"
 	"cipher/network/content/engine"
+	"cipher/network/protocol/chunk"
 	"cipher/network/transfer/scheduler"
 	"cipher/network/transport"
 )
@@ -23,9 +24,10 @@ type Progress struct {
 }
 
 type TransferManager struct {
-	SessionManager SessionManager
-	Engine         *engine.ContentEngine
-	Transport      *transport.Transport
+	SessionManager  SessionManager
+	Engine          *engine.ContentEngine
+	Transport       *transport.Transport
+	TicketGenerator chunk.TicketGeneratorFunc
 }
 
 func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
@@ -34,6 +36,10 @@ func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transpo
 		Engine:         eng,
 		Transport:      t,
 	}
+}
+
+func (tm *TransferManager) SetTicketGenerator(fn chunk.TicketGeneratorFunc) {
+	tm.TicketGenerator = fn
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
@@ -113,6 +119,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	// 5. Run Scheduler
 	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched.TicketGenerator = tm.TicketGenerator
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)

@@ -7,7 +7,7 @@ This guide describes how to deploy the relay node on an Ubuntu server (Linux/amd
 ## 1. Build the Binary
 On your development machine or the server, build the binary for Linux AMD64:
 ```bash
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/relay-linux-amd64 ./cmd/relay
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/relay-linux-amd64 ./network/cmd/relay
 ```
 
 Upload the `bin/relay-linux-amd64` binary to your Ubuntu server.

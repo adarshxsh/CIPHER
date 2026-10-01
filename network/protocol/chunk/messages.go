@@ -3,11 +3,13 @@ package chunk
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
 	"cipher/network/content/core"
+	"cipher/network/payments"
 )
 
 const (
@@ -23,6 +25,7 @@ const (
 	MsgChunk           MessageType = 0x04
 	MsgAck             MessageType = 0x05
 	MsgError           MessageType = 0x06
+	MsgTicket          MessageType = 0x07
 )
 
 type ErrorCode uint8
@@ -210,4 +213,30 @@ func ParseError(payload []byte) (ErrorCode, string, error) {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
 	return ErrorCode(payload[0]), string(payload[1:]), nil
+}
+
+func BuildTicket(signedTicket *payments.SignedTicket) (*Message, error) {
+	if signedTicket == nil {
+		return nil, errors.New("cannot build ticket message: signedTicket is nil")
+	}
+	data, err := json.Marshal(signedTicket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ticket payload: %w", err)
+	}
+	return &Message{
+		Version: CurrentMessageVersion,
+		Type:    MsgTicket,
+		Payload: data,
+	}, nil
+}
+
+func ParseTicket(payload []byte) (*payments.SignedTicket, error) {
+	if len(payload) == 0 {
+		return nil, errors.New("empty payload for TICKET")
+	}
+	var ticket payments.SignedTicket
+	if err := json.Unmarshal(payload, &ticket); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal ticket payload: %w", err)
+	}
+	return &ticket, nil
 }

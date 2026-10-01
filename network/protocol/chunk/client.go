@@ -11,16 +11,25 @@ import (
 	"cipher/network/content/core"
 	"cipher/network/content/engine"
 	"cipher/network/content/verifier"
+	"cipher/network/payments"
 	"cipher/network/protocol"
 	"cipher/network/transport"
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
+// TicketGeneratorFunc creates and signs a RoundTicket for a received and verified chunk.
+type TicketGeneratorFunc func(chunkID core.ChunkID) (*payments.SignedTicket, error)
+
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream          network.Stream
+	engine          *engine.ContentEngine
+	digest          core.Digest
+	ticketGenerator TicketGeneratorFunc
+}
+
+func (c *Client) SetTicketGenerator(fn TicketGeneratorFunc) {
+	c.ticketGenerator = fn
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
@@ -127,10 +136,27 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	// Set the expected ChunkID
 	chunk.Header.ID = chunkID
 
-	// Send ACK (optional fire-and-forget)
-	ack := BuildAck(chunkID, 0)
-	if err := WriteMessage(c.stream, ack); err != nil {
-		log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
+	// Send Ticket if generator is configured, otherwise send standard ACK
+	if c.ticketGenerator != nil {
+		signedTicket, err := c.ticketGenerator(chunkID)
+		if err != nil {
+			log.Printf("[Chunk Protocol] Failed to generate ticket for %x: %v", chunkID, err)
+			return nil, fmt.Errorf("failed to generate ticket: %w", err)
+		}
+		ticketMsg, err := BuildTicket(signedTicket)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build ticket message: %w", err)
+		}
+		if err := WriteMessage(c.stream, ticketMsg); err != nil {
+			log.Printf("[Chunk Protocol] Failed to send ticket for %x: %v", chunkID, err)
+			return nil, fmt.Errorf("failed to send ticket message: %w", err)
+		}
+	} else {
+		// Send ACK (optional fire-and-forget)
+		ack := BuildAck(chunkID, 0)
+		if err := WriteMessage(c.stream, ack); err != nil {
+			log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
+		}
 	}
 
 	return chunk, nil

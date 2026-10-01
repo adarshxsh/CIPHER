@@ -78,6 +78,9 @@ const (
 	// Manifest responses can be larger than request payloads but remain bound
 	// by the frame cap.
 	MaxManifestSize = MaxMessagePayloadSize
+
+	// MaxTicketSize limits encoded payment ticket envelopes.
+	MaxTicketSize = 4096
 )
 
 const (
@@ -121,6 +124,9 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 
 	case MsgAck:
 		return HashSize + 1
+
+	case MsgTicket:
+		return MaxTicketSize
 
 	case MsgError:
 		return MaxProtocolErrorSize

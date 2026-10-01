@@ -23,25 +23,29 @@ CIPHER is divided into three independently owned domains:
 Smart contracts stay with the domain that owns their behavior:
 
 - Availability-specific contracts belong in [`availability/contracts/`](availability/contracts/).
-- Payment, escrow, and settlement contracts belong in [`payments/contracts/`](payments/contracts/).
+- Payment, escrow, and settlement contracts belong in [`payments/src/`](payments/src/).
 
 ## Repository layout
 
 ```text
 CIPHER/
 ├── docs/                   Protocol and architecture documentation
-├── network/                Decentralized CDN networking
+├── network/                Decentralized CDN networking & payment bindings
 │   ├── cmd/                Network services (bootstrap, relay, peer)
 │   ├── content/            Chunking, CAS storage, encryption, Merkle verification
 │   ├── discovery/          Kademlia DHT routing & provider discovery
 │   ├── distribution/       Multi-provider replication engine (circular stride)
-│   ├── protocol/           Wire protocols (/cipher/chunk/1.0.0, /cipher/push/1.0.0)
+│   ├── identity/           Ed25519 (P2P) and Secp256k1 (Ethereum) key management
+│   ├── payments/           Go contract bindings (abigen), EIP-712 signer, and client
+│   ├── protocol/           Wire protocols (/cipher/chunk/1.0.0 + MsgTicket, /cipher/push/1.0.0)
 │   ├── transfer/           Worker pool, transfer sessions, work-stealing scheduler
 │   └── transport/          libp2p host, stream, and circuit v2 relay management
 ├── availability/           Availability mechanisms
 │   └── contracts/          Availability-specific smart contracts
-├── payments/               Economic settlement
-│   └── contracts/          Payment and escrow smart contracts
+├── payments/               Economic settlement & smart contracts
+│   ├── src/                Payment, escrow, lottery entropy, and settlement contracts
+│   ├── script/             Deployment, setup, and settlement scripts
+│   └── test/               Foundry Forge test suites
 ├── shared/                 Stable shared definitions and utilities
 ├── nodes/                  Publisher, provider, and consumer applications
 │   ├── publisher/          Content ingestion and remote push distributor
@@ -70,8 +74,14 @@ go build -o bin/relay ./network/cmd/relay
 
 ### 2. Run Tests
 ```bash
-# Run all unit tests
-CGO_ENABLED=0 go test ./network/...
+# Run Master Workflow Test (Solidity, Unit, Adversarial, & Live Anvil P2P Settlement)
+./test_workflow.sh
+
+# Run all Go unit and cryptographic tests
+go test ./network/...
+
+# Run Foundry Solidity smart contract tests
+(cd payments && forge test)
 
 # Run End-to-End Multi-Provider Replication Test
 ./tests/e2e/remote_push_e2e.sh
@@ -91,12 +101,15 @@ CGO_ENABLED=0 go test ./network/...
 # Start Circuit Relay v2 Node
 ./bin/relay
 
-# Start Provider Node
-./bin/provider -p 4101 -store ./p1_store -bootstrap "<BOOTSTRAP_MULTIADDR>" -relay "<RELAY_MULTIADDR>" -allow-push=true
+# Start Storage Provider (with optional EVM ticket verification)
+./bin/provider -p 4101 -store ./p1_store -bootstrap "<BOOTSTRAP_MULTIADDR>" \
+  --eth-rpc "http://127.0.0.1:8545" --entropy-addr "<ENTROPY_CONTRACT_ADDR>"
 
 # Publish & Push Content Across Providers with Replication R=2
 ./bin/publisher -file ./sample.mp4 -bootstrap "<BOOTSTRAP_MULTIADDR>" -replication 2 -push
 
-# Download Content as a Consumer
-./bin/consumer -fetch "<CONTENT_ID>" -key "<KEY>" -out ./downloaded.mp4 -bootstrap "<BOOTSTRAP_MULTIADDR>"
+# Download Content as a Consumer (streaming EIP-712 payment tickets)
+./bin/consumer -fetch "<CONTENT_ID>" -key "<KEY>" -out ./downloaded.mp4 -bootstrap "<BOOTSTRAP_MULTIADDR>" \
+  --eth-rpc "http://127.0.0.1:8545" --eth-key "<CLIENT_ETH_PRIVKEY>" \
+  --entropy-addr "<ENTROPY_CONTRACT_ADDR>" --provider-eth-addr "<PROVIDER_ETH_ADDR>"
 ```

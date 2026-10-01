@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -10,14 +11,23 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 
 	"cipher/network/content/engine"
+	"cipher/network/payments"
 	"cipher/network/protocol"
 )
 
 var TestCorruptProb float64
 
+// TicketHandlerFunc validates and stores a signed ticket received from a consumer.
+type TicketHandlerFunc func(ticket *payments.SignedTicket) error
+
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host          host.Host
+	engine        *engine.ContentEngine
+	ticketHandler TicketHandlerFunc
+}
+
+func (h *StreamHandler) SetTicketHandler(fn TicketHandlerFunc) {
+	h.ticketHandler = fn
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
@@ -115,10 +125,10 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	// 5. Wait for ACK or TICKET synchronously (sequential protocol requirement)
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
-		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
+		log.Printf("[Chunk Protocol] Error reading ACK/Ticket: %v", err)
 		return
 	}
 	if ackMsg.Type == MsgError {
@@ -126,8 +136,21 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
-	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+	if ackMsg.Type == MsgTicket {
+		signedTicket, err := ParseTicket(ackMsg.Payload)
+		if err != nil {
+			log.Printf("[Chunk Protocol] Failed to parse ticket for chunk %x: %v", chunkID, err)
+			return
+		}
+		if h.ticketHandler != nil {
+			if err := h.ticketHandler(signedTicket); err != nil {
+				log.Printf("[Chunk Protocol] Ticket verification rejected for chunk %x: %v", chunkID, err)
+				WriteMessage(s, BuildError(ErrPermissionDenied, fmt.Sprintf("invalid ticket: %v", err)))
+				return
+			}
+		}
+	} else if ackMsg.Type != MsgAck {
+		log.Printf("[Chunk Protocol] Expected ACK or Ticket, got type %d", ackMsg.Type)
 		return
 	}
 }

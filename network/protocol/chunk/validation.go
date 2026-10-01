@@ -79,11 +79,23 @@ func ValidateMessagePayload(messageType MessageType, payload []byte) error {
 		return ValidateChunkPayload(payload)
 	case MsgAck:
 		return ValidateAckPayload(payload)
+	case MsgTicket:
+		return ValidateTicketPayload(payload)
 	case MsgError:
 		return ValidateErrorPayload(payload)
 	default:
 		return fmt.Errorf("message: %w: %d", ErrInvalidMessageType, messageType)
 	}
+}
+
+func ValidateTicketPayload(payload []byte) error {
+	if len(payload) == 0 {
+		return errors.New("ticket payload cannot be empty")
+	}
+	if len(payload) > int(MaxTicketSize) {
+		return fmt.Errorf("ticket payload exceeds maximum size %d", MaxTicketSize)
+	}
+	return nil
 }
 
 func ValidateRequestManifestPayload(payload []byte) error {
