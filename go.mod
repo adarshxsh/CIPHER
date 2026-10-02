@@ -11,6 +11,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/multiformats/go-multihash v0.2.3
 	golang.org/x/crypto v0.53.0
+	proof-of-request v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -135,3 +136,5 @@ require (
 	lukechampine.com/blake3 v1.4.1 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
+
+replace proof-of-request => ./availability/proof-of-request

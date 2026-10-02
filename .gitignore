@@ -41,3 +41,5 @@ challenge-coverage*
 node_modules/
 target/
 .gocache/
+cache/
+

@@ -12,9 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"cipher/integration/availability"
+	payment "cipher/availability/escrow-payment/payment"
 	"cipher/network/content/core"
 	"cipher/network/content/crypto"
 	"cipher/network/content/engine"
+	"cipher/network/content/manifest"
 	"cipher/network/content/storage"
 	"cipher/network/content/verifier"
 	"cipher/network/discovery"
@@ -24,6 +27,8 @@ import (
 	"cipher/network/protocol/push"
 	"cipher/network/transport"
 
+	"crypto/ed25519"
+	"encoding/hex"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	golog "github.com/ipfs/go-log/v2"
@@ -31,6 +36,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 )
+
 
 func main() {
 	golog.SetAllLoggers(golog.LevelWarn)
@@ -48,11 +54,13 @@ func main() {
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
 
-	// Payments protocol flags
+	// Payments and Availability protocol flags
 	ethRPC := flag.String("eth-rpc", "", "Ethereum JSON-RPC URL (e.g. http://127.0.0.1:8545)")
 	entropyAddr := flag.String("entropy-addr", "", "CommitRevealEntropy contract address (hex)")
 	providerEthKey := flag.String("eth-key", "", "Provider Ethereum private key (hex, optional)")
+	enableAvailability := flag.Bool("availability", true, "Enable Availability challenge handler (/cipher/availability/1.0.0)")
 	_ = providerEthKey
+
 
 	flag.Parse()
 
@@ -180,7 +188,49 @@ func main() {
 
 	manifests, _ := store.ListManifests(ctx)
 
+	// 8. Register Availability Protocol Handler (/cipher/availability/1.0.0)
+	if *enableAvailability {
+		rawPriv, err := priv.Raw()
+		if err == nil {
+			var edPriv ed25519.PrivateKey
+			if len(rawPriv) == 64 {
+				edPriv = ed25519.PrivateKey(rawPriv)
+			} else if len(rawPriv) == 32 {
+				edPriv = ed25519.NewKeyFromSeed(rawPriv)
+			}
+
+			if len(edPriv) == ed25519.PrivateKeySize {
+				proofEngine, err := availability.NewProviderProofEngine(h.ID().String(), edPriv, store)
+				if err == nil {
+					// Register all existing manifests in proof engine
+					for _, mid := range manifests {
+						if mData, err := store.GetManifestBytes(ctx, mid); err == nil {
+							if m, err := manifest.Deserialize(mData); err == nil {
+								var rawChunks [][]byte
+								for _, cid := range m.ChunkIDs {
+									if ch, err := store.GetChunk(ctx, cid); err == nil {
+										rawChunks = append(rawChunks, ch.Data)
+									}
+								}
+								if len(rawChunks) > 0 {
+									_, _ = proofEngine.RegisterFileChunks(hex.EncodeToString(m.Descriptor.ID[:]), rawChunks)
+								}
+							}
+						}
+					}
+
+					availability.NewAvailabilityStreamHandler(h, proofEngine, func(voucher payment.PaymentState) {
+						log.Printf("[Availability] [✓] Received signed payment voucher (Seq: %d, Cumulative: %d wei)",
+							voucher.Sequence, voucher.CumulativePayment)
+					})
+					log.Printf("[Availability] Stream handler active on %s", availability.AvailabilityProtocolID)
+				}
+			}
+		}
+	}
+
 	fmt.Println("\n================= CIPHER PROVIDER =================")
+
 	fmt.Printf("Provider Peer ID: %s\n", h.ID().String())
 	fmt.Printf("Store Location  : %s\n", *storePath)
 	fmt.Printf("Hosted Manifests: %d\n", len(manifests))

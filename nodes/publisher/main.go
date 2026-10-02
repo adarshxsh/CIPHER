@@ -5,11 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"encoding/hex"
 	"os"
+
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	availabilitytypes "cipher/availability/availability-contracts/types"
+	verification "cipher/availability/availability-contracts/verification"
+	"cipher/integration/availability"
 
 	"cipher/network/content/core"
 	"cipher/network/content/crypto"
@@ -27,6 +33,7 @@ import (
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
+
 )
 
 func main() {
@@ -46,8 +53,10 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	challengeProviders := flag.Bool("challenge", false, "Issue Availability challenge against remote providers after push")
 
 	flag.Parse()
+
 
 	if *filePath == "" {
 		log.Fatalf("Error: -file <path> is required to publish content")
@@ -224,7 +233,48 @@ func main() {
 
 		log.Printf("[Publisher] [✓] All chunks successfully committed with >= %d replicas across %d remote providers!",
 			effectiveReplication, len(targetPeers))
+
+		if *challengeProviders && len(targetPeers) > 0 {
+			target := targetPeers[0]
+			log.Printf("[Availability] Issuing cryptographic possession challenge to provider %s...", target.String())
+
+			var rawChunks [][]byte
+			for _, cid := range m.ChunkIDs {
+				if ch, err := store.GetChunk(ctx, cid); err == nil {
+					rawChunks = append(rawChunks, ch.Data)
+				}
+			}
+
+			tree, err := availability.BuildMerkleTreeFromChunks(rawChunks)
+			if err == nil {
+				merkleRoot := tree.Root()
+				client := availability.NewAvailabilityClient(h)
+				challenge := availabilitytypes.Challenge{
+					ChallengeID: "challenge-pub-001",
+					ContractID:  "avail-pub-contract",
+					ProviderID:  target.String(),
+					FileID:      hex.EncodeToString(m.Descriptor.ID[:]),
+					ChunkID:     0,
+					Nonce:       []byte("pub-entropy-nonce-999"),
+					CreatedAt:   time.Now().UTC(),
+				}
+
+				resp, err := client.ChallengeProvider(ctx, target, challenge)
+				if err != nil {
+					log.Printf("[Availability] Challenge request failed: %v", err)
+				} else {
+
+					valid := verification.VerifyMerkleProof(resp.ChunkHash, challenge.ChunkID, resp.MerkleProof, merkleRoot)
+					if valid {
+						log.Printf("[Availability] [✓] Provider verified chunk possession (Merkle Proof PASS for chunk %d)", challenge.ChunkID)
+					} else {
+						log.Printf("[Availability] [!] Merkle proof verification failed!")
+					}
+				}
+			}
+		}
 	} else {
+
 		// Traditional direct publisher DHT announcement
 		log.Printf("[DHT] Announcing ContentID %x on DHT...", m.Descriptor.ID)
 		if err := discovery.Provide(ctx, kdht, m.Descriptor.ID); err != nil {
