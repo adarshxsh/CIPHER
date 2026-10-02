@@ -1,7 +1,9 @@
 package availability
 
 import (
+	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,6 +12,8 @@ import (
 	availabilitytypes "cipher/availability/availability-contracts/types"
 	verification "cipher/availability/availability-contracts/verification"
 	"cipher/network/content/core"
+	"cipher/network/content/manifest"
+
 )
 
 // ProviderProofEngine generates cryptographic chunk possession proofs in response
@@ -128,8 +132,40 @@ func (e *ProviderProofEngine) generateResponse(challenge availabilitytypes.Chall
 	e.mu.RUnlock()
 
 	if !ok {
+		// Attempt dynamic on-demand loading from chunkSource / ManifestStore
+		if e.chunkSource != nil {
+			if manifestStore, isStore := e.chunkSource.(core.ManifestStore); isStore {
+				ctx := context.Background()
+				idBytes, err := hex.DecodeString(challenge.FileID)
+				if err == nil && len(idBytes) == 32 {
+					var contentID core.ContentID
+					copy(contentID[:], idBytes)
+					if mData, err := manifestStore.GetManifestBytes(ctx, contentID); err == nil {
+						if m, err := manifest.Deserialize(mData); err == nil {
+							var rawChunks [][]byte
+							for _, cid := range m.ChunkIDs {
+								if ch, err := e.chunkSource.GetChunk(ctx, cid); err == nil {
+									rawChunks = append(rawChunks, ch.Data)
+								}
+							}
+							if len(rawChunks) > 0 {
+								newTree, err := e.RegisterFileChunks(challenge.FileID, rawChunks)
+								if err == nil {
+									tree = newTree
+									ok = true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !ok || tree == nil {
 		return verification.ChallengeResponse{}, fmt.Errorf("file %q not found on provider", challenge.FileID)
 	}
+
 
 	if challenge.ChunkID < 0 || challenge.ChunkID >= tree.LeafCount() {
 		return verification.ChallengeResponse{}, fmt.Errorf("chunk index %d out of bounds [0, %d)", challenge.ChunkID, tree.LeafCount())
