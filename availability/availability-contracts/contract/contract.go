@@ -16,11 +16,20 @@ import (
 
 var contractStore = struct {
 	sync.RWMutex
-	contracts  map[availabilitytypes.ContractID]*availabilitytypes.AvailabilityContract
-	challenges map[availabilitytypes.ChallengeID]availabilitytypes.ContractID
+	contracts    map[availabilitytypes.ContractID]*availabilitytypes.AvailabilityContract
+	challenges   map[availabilitytypes.ChallengeID]availabilitytypes.ContractID
+	activeEpochs map[availabilitytypes.ContractID]activeEpoch
 }{
-	contracts:  make(map[availabilitytypes.ContractID]*availabilitytypes.AvailabilityContract),
-	challenges: make(map[availabilitytypes.ChallengeID]availabilitytypes.ContractID),
+	contracts:    make(map[availabilitytypes.ContractID]*availabilitytypes.AvailabilityContract),
+	challenges:   make(map[availabilitytypes.ChallengeID]availabilitytypes.ContractID),
+	activeEpochs: make(map[availabilitytypes.ContractID]activeEpoch),
+}
+
+// activeEpoch is private contract bookkeeping. The challenge package remains
+// the source of truth for the counter and uncovered chunk collection.
+type activeEpoch struct {
+	id              availabilitytypes.EpochID
+	endAfterCurrent bool
 }
 
 // ChunkCountResolver connects contract initiation to whichever storage/content
@@ -107,8 +116,8 @@ func FundAvailabilityContract(contractID availabilitytypes.ContractID, paymentAm
 	return contract.State, nil
 }
 
-// InitiateAvailabilityChallenge resolves the file chunk count and delegates
-// complete epoch/challenge creation to the challenge module.
+// InitiateAvailabilityChallenge creates the first challenge in an epoch, then
+// continues that epoch until it is exhausted or a round trigger ends it.
 func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (availabilitytypes.ChallengeID, availabilitytypes.EpochID, error) {
 	contractStore.Lock()
 	defer contractStore.Unlock()
@@ -123,9 +132,24 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 		contract.State = availabilitytypes.Expired
 		return "", "", errors.New("contract has expired")
 	}
-	generated, err := challenge.CreateChallenge(string(contractID), contract.ProviderID, contract.FileID, contract.TotalChunks, 0)
+	trackedEpoch, hasActiveEpoch := contractStore.activeEpochs[contractID]
+	generated := availabilitytypes.Challenge{}
+	var err error
+	if hasActiveEpoch {
+		epochState, stateErr := challenge.GetEpochState(trackedEpoch.id)
+		if stateErr != nil {
+			return "", "", fmt.Errorf("get active epoch state: %w", stateErr)
+		}
+		if epochState.EpochStatus == availabilitytypes.EpochActive && epochState.UncoveredChunkCount > 0 && !trackedEpoch.endAfterCurrent {
+			generated, err = challenge.GenerateNextChallenge(string(contractID), contract.ProviderID, contract.FileID, trackedEpoch.id, epochState.ChallengeCounter, epochState.RoundNumber)
+		} else {
+			generated, err = challenge.CreateChallenge(string(contractID), contract.ProviderID, contract.FileID, contract.TotalChunks, epochState.RoundNumber+1)
+		}
+	} else {
+		generated, err = challenge.CreateChallenge(string(contractID), contract.ProviderID, contract.FileID, contract.TotalChunks, 0)
+	}
 	if err != nil {
-		return "", "", fmt.Errorf("create availability challenge: %w", err)
+		return "", "", fmt.Errorf("generate availability challenge: %w", err)
 	}
 	challengeID := generated.ChallengeID
 	if contract.State == availabilitytypes.Agreed {
@@ -138,6 +162,7 @@ func InitiateAvailabilityChallenge(contractID availabilitytypes.ContractID) (ava
 	}
 	contract.Challenges = append(contract.Challenges, challengeID)
 	contractStore.challenges[challengeID] = contractID
+	contractStore.activeEpochs[contractID] = activeEpoch{id: generated.EpochID, endAfterCurrent: generated.TriggerStatus}
 	return challengeID, generated.EpochID, nil
 }
 
