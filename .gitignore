@@ -30,5 +30,14 @@ downloads/
 .finalStore
 temp/
 
-# Go Cache
+# Generated build and test output
+build/
+dist/
+out/
+coverage/
+challenge-coverage*
+
+# Common dependency caches
+node_modules/
+target/
 .gocache/
