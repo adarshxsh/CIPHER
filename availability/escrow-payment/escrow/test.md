@@ -15,14 +15,59 @@
   * Contract state became `Settled`.
 
 **Result:**
+
 `forge test -vv` →
-Ran 4 tests for test/EscrowContract.t.sol:EscrowContractTest
-[PASS] testCreateContract() (gas: 287987)
-[PASS] testDepositCollateralAndActivate() (gas: 457830)
-[PASS] testFundEscrow() (gas: 344284)
-[PASS] testSubmitPaymentStateAndSettle() (gas: 927913)
-Suite result: ok. 4 passed; 0 failed; 0 skipped; finished in 15.45ms (13.26ms CPU time)
 
-Ran 1 test suite in 62.39ms (15.45ms CPU time): 4 tests passed, 0 failed, 0 skipped (4 total tests)
+* `testCreateContract()` — **PASS**
+* `testDepositCollateralAndActivate()` — **PASS**
+* `testFundEscrow()` — **PASS**
+* `testSubmitPaymentStateAndSettle()` — **PASS**
 
-The test confirms the Solidity payment-state signature verification, voucher acceptance, storage, and settlement happy path.
+**4 tests passed, 0 failed, 0 skipped.**
+
+The test confirms Solidity payment-state signature verification, voucher acceptance, payment-state storage, and the settlement happy path.
+
+---
+
+### Failure Lifecycle Tests
+
+**Tested:**
+
+* Created, funded, and activated an escrow contract.
+* Marked an active contract as failed using `AvailabilityFailure`.
+* Verified the contract transitioned from `Active` to `Failed`.
+* Slashed `0.2 ETH` from the provider's collateral.
+* Verified:
+
+  * Provider collateral decreased by the penalty amount.
+  * Publisher received the slashed `0.2 ETH`.
+  * Contract remained in the `Failed` state.
+* Disputed a failure using a valid publisher-signed `PaymentState`.
+* Verified:
+
+  * Contract transitioned from `Failed` back to `Active`.
+  * The signed `PaymentState` was stored correctly.
+  * Sequence and cumulative payment were updated.
+
+**Result:**
+
+`forge test -vv` -
+
+**EscrowFailure.t.sol**
+
+* `testMarkFailure()` - **PASS** - (gas: 887969)
+* `testSlashCollateral()` - **PASS** - (gas: 548275)
+* `testDisputeFailure()` - **PASS** - (gas: 887969)
+* finished in 15.57ms (12.70ms CPU time)
+
+**EscrowContract.t.sol**
+
+* `testCreateContract()` - **PASS** -(gas: 287987)
+* `testDepositCollateralAndActivate()` - **PASS** - (gas: 457830)
+* `testFundEscrow()` - **PASS** - (gas: 344284)
+* `testSubmitPaymentStateAndSettle()` - **PASS**-(gas: 927913)
+* finished in 15.89ms (14.45ms CPU time)
+
+**7 tests passed, 0 failed, 0 skipped.**--Ran 2 test suites in 66.04ms (31.46ms CPU time)
+
+The tests confirm the core escrow payment, settlement, failure, collateral-slashing, and failure-dispute lifecycle.
