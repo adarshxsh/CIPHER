@@ -64,6 +64,14 @@ func TestPaymentStoreAndSubmission(t *testing.T) {
 	if err := store.StorePaymentState(signed); err == nil {
 		t.Fatal("StorePaymentState accepted a stale sequence")
 	}
+
+	// Test Bug 6 fix: Reject non-monotonic cumulative payment (even if sequence is higher).
+	decreasedCumState := signed
+	decreasedCumState.Sequence = signed.Sequence + 1
+	decreasedCumState.CumulativePayment = signed.CumulativePayment - 1
+	if err := store.StorePaymentState(decreasedCumState); err == nil {
+		t.Fatal("StorePaymentState accepted a decreased cumulative payment")
+	}
 	submitter := &recordingSubmitter{}
 	if err := payment.SubmitPaymentState(signed.ContractID, signed, submitter); err != nil {
 		t.Fatalf("SubmitPaymentState returned error: %v", err)

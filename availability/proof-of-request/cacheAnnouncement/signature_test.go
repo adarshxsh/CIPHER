@@ -70,6 +70,19 @@ func TestSignCacheAnnouncementRejectsInvalidAnnouncement(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty file ID")
 	}
+
+	announcementWithEmptyProvider := model.CacheAnnouncement{
+		ProviderID: "",
+		FileID:     "file-1",
+		MerkleRoot: "root-123",
+		Version:    1,
+		Expiry:     time.Now().Add(time.Hour),
+	}
+
+	_, err = SignCacheAnnouncement(announcementWithEmptyProvider, privateKey)
+	if err == nil {
+		t.Fatal("expected error for empty provider ID")
+	}
 }
 
 func TestVerifyCacheAnnouncement(t *testing.T) {
@@ -93,6 +106,32 @@ func TestVerifyCacheAnnouncement(t *testing.T) {
 
 	if !VerifyCacheAnnouncement(signed, publicKey) {
 		t.Fatal("valid signature was rejected")
+	}
+}
+
+func TestVerifyCacheAnnouncementRejectsModifiedProviderID(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	announcement := model.CacheAnnouncement{
+		ProviderID: "provider-1",
+		FileID:     "file-1",
+		MerkleRoot: "root-123",
+		Version:    1,
+		Expiry:     time.Now().Add(time.Hour),
+	}
+
+	signed, err := SignCacheAnnouncement(announcement, privateKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	signed.Announcement.ProviderID = "provider-2"
+
+	if VerifyCacheAnnouncement(signed, publicKey) {
+		t.Fatal("modified ProviderID was accepted")
 	}
 }
 

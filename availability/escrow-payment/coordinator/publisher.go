@@ -8,39 +8,54 @@ import (
 
 	availabilitytypes "cipher/availability/availability-contracts/types"
 	bindings "cipher/availability/escrow-payment/bindings"
-	interfaces "cipher/availability/escrow-payment/interfaces"
 	payment "cipher/availability/escrow-payment/payment"
 )
 
 // PublisherCoordinator maps Availability identities to their payment/escrow
 // identities. It owns no funds and delegates every release to an adapter.
+//paymentStateTTL: 30 * 24 * time.Hour - if you want for 30 days in NewPublisherCoordinator()
+//each payment session will gets its own TTL fo one day for now
 type PublisherCoordinator struct {
 	publisherID     string
 	signer          payment.StateSigner
 	submitter       payment.EscrowSubmitter
 	paymentStateTTL time.Duration
-	failurePenalty  uint64
+
+	// settler is the optional on-chain settlement adapter. When set, the
+	// coordinator can perform the full two-step settlement flow:
+	//   1. submitPaymentState (record the latest voucher on-chain)
+	//   2. settleContract     (distribute funds to provider and publisher)
+	// If nil, only step 1 is available via SubmitLatestPaymentStateOnChain.
+	settler payment.EscrowSettler
+
+	// now is injectable for deterministic tests.
+	// If nil, currentTime() uses time.Now().
+	now func() time.Time
 
 	mu       sync.Mutex
 	bindings *bindings.Registry
 	stores   map[string]payment.PaymentStateStore
 }
 
-// SetFailurePenalty configures the maximum collateral amount (in wei) to
-// slash after a verified FAIL result. Zero records the failure only.
-func (c *PublisherCoordinator) SetFailurePenalty(penalty uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.failurePenalty = penalty
-}
+func NewPublisherCoordinator(
+	publisherID string,
+	signer payment.StateSigner,
+	submitter payment.EscrowSubmitter,
+) (*PublisherCoordinator, error) {
 
-func NewPublisherCoordinator(publisherID string, signer payment.StateSigner, submitter payment.EscrowSubmitter) (*PublisherCoordinator, error) {
 	if publisherID == "" || signer == nil || submitter == nil {
-		return nil, errors.New("publisher ID, payment signer, and escrow submitter are required")
+		return nil, errors.New(
+			"publisher ID, payment signer, and escrow submitter are required",
+		)
 	}
+
 	return &PublisherCoordinator{
-		publisherID: publisherID, signer: signer, submitter: submitter, paymentStateTTL: time.Hour,
-		bindings: bindings.NewRegistry(), stores: make(map[string]payment.PaymentStateStore),
+		publisherID:     publisherID,
+		signer:          signer,
+		submitter:       submitter,
+		paymentStateTTL: 24 * time.Hour,
+		bindings:        bindings.NewRegistry(),
+		stores:          make(map[string]payment.PaymentStateStore),
 	}, nil
 }
 
@@ -50,75 +65,51 @@ func (c *PublisherCoordinator) SetPaymentStateTTL(ttl time.Duration) error {
 	if ttl <= 0 {
 		return errors.New("payment-state TTL must be positive")
 	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.paymentStateTTL = ttl
 	return nil
 }
 
 // RegisterProvider binds an Availability peer ID to the provider identity
 // expected by the payment/escrow path.
-func (c *PublisherCoordinator) RegisterProvider(availabilityProviderID string, ethereumAddress bindings.EthereumAddress) error {
-	return c.bindings.BindProvider(availabilityProviderID, ethereumAddress)
+func (c *PublisherCoordinator) RegisterProvider(
+	availabilityProviderID string,
+	ethereumAddress bindings.EthereumAddress,
+) error {
+	return c.bindings.BindProvider(
+		availabilityProviderID,
+		ethereumAddress,
+	)
 }
 
 // RegisterContract binds the Availability contract identifier to the escrow
 // identifier returned by the eventual chain adapter.
-func (c *PublisherCoordinator) RegisterContract(availabilityContractID availabilitytypes.ContractID, escrowContractID bindings.EscrowContractID) error {
-	return c.bindings.BindContract(availabilityContractID, escrowContractID)
-}
+func (c *PublisherCoordinator) RegisterContract(
+	availabilityContractID availabilitytypes.ContractID,
+	escrowContractID bindings.EscrowContractID,
+) error {
 
-// ProcessAvailabilityResult creates a payment state for PASS, or records an
-// on-chain failure for FAIL. A successful FAIL action returns an empty payment
-// state because no payment authorization exists for that result.
-func (c *PublisherCoordinator) ProcessAvailabilityResult(result interfaces.AvailabilityResult, cumulativePayment, sequence uint64) (payment.PaymentState, error) {
+	if err := c.bindings.BindContract(
+		availabilityContractID,
+		escrowContractID,
+	); err != nil {
+		return err
+	}
+
+	// Initialize the payment-state store for this escrow contract.
+	// Do not overwrite an existing store because it may already contain
+	// the latest signed payment state.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	escrowContractID, ok := c.bindings.EscrowID(result.ContractID)
-	if !ok {
-		return payment.PaymentState{}, errors.New("no escrow contract is registered for availability contract")
+
+	escrowID := escrowContractID.String()
+
+	if _, exists := c.stores[escrowID]; !exists {
+		c.stores[escrowID] = payment.PaymentStateStore{}
 	}
-	if result.Result == interfaces.AvailabilityFail {
-		handler, ok := c.submitter.(payment.EscrowFailureHandler)
-		if !ok {
-			return payment.PaymentState{}, errors.New("escrow submitter does not support failure handling")
-		}
-		contractID := escrowContractID.String()
-		if err := handler.MarkFailure(contractID); err != nil {
-			return payment.PaymentState{}, err
-		}
-		if c.failurePenalty > 0 {
-			if err := handler.SlashCollateral(contractID, c.failurePenalty); err != nil {
-				return payment.PaymentState{}, err
-			}
-		}
-		return payment.PaymentState{}, nil
-	}
-	if result.Result != interfaces.AvailabilityPass {
-		return payment.PaymentState{}, errors.New("availability result has an unknown status")
-	}
-	providerAddress, ok := c.bindings.ProviderAddress(result.ProviderID)
-	if !ok {
-		return payment.PaymentState{}, errors.New("no payment provider identity is registered")
-	}
-	result.ProviderID = providerAddress.String()
-	state, err := payment.CreatePaymentState(result, c.publisherID, cumulativePayment, sequence)
-	if err != nil {
-		return payment.PaymentState{}, err
-	}
-	state.ContractID = escrowContractID.String()
-	state.ValidUntil = uint64(time.Now().Add(c.paymentStateTTL).Unix())
-	signed, err := c.signer.Sign(state)
-	if err != nil {
-		return payment.PaymentState{}, err
-	}
-	store := c.stores[state.ContractID]
-	if err := store.StorePaymentState(signed); err != nil {
-		return payment.PaymentState{}, err
-	}
-	if err := payment.SubmitPaymentState(state.ContractID, signed, c.submitter); err != nil {
-		return payment.PaymentState{}, err
-	}
-	c.stores[state.ContractID] = store
-	return signed, nil
+
+	return nil
 }

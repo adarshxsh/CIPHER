@@ -12,6 +12,10 @@ import (
 func buildSigningPayload(
 	announcement model.CacheAnnouncement,
 ) ([]byte, error) {
+	if announcement.ProviderID == "" {
+		return nil, errors.New("provider ID cannot be empty")
+	}
+
 	if announcement.FileID == "" {
 		return nil, errors.New("file ID cannot be empty")
 	}
@@ -21,6 +25,11 @@ func buildSigningPayload(
 	}
 
 	var buf bytes.Buffer
+
+	// ProviderID
+	if err := writeString(&buf, announcement.ProviderID); err != nil {
+		return nil, err
+	}
 
 	// FileID
 	if err := writeString(&buf, announcement.FileID); err != nil {

@@ -56,22 +56,44 @@ func NewRegistry() *Registry {
 	return &Registry{providers: make(map[string]EthereumAddress), contracts: make(map[availabilitytypes.ContractID]EscrowContractID)}
 }
 
+// BindProvider binds an Availability peer ID to an Ethereum address.
+// Re-binding the same peer ID to the same address is idempotent.
+// Re-binding to a different address is rejected to prevent silent identity hijacking.
 func (r *Registry) BindProvider(peerID string, address EthereumAddress) error {
 	if peerID == "" || address == (EthereumAddress{}) {
 		return errors.New("peer ID and non-zero Ethereum address are required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if existing, ok := r.providers[peerID]; ok {
+		if existing != address {
+			return errors.New("peer ID is already bound to a different Ethereum address")
+		}
+		return nil // Idempotent re-registration
+	}
+
 	r.providers[peerID] = address
 	return nil
 }
 
+// BindContract binds an Availability contract ID to an on-chain escrow ID.
+// Re-binding the same contract ID to the same escrow contract is idempotent.
+// Re-binding to a different escrow ID is rejected to prevent silent rebinding.
 func (r *Registry) BindContract(contractID availabilitytypes.ContractID, escrowContractID EscrowContractID) error {
 	if contractID == "" || escrowContractID == (EscrowContractID{}) {
 		return errors.New("availability contract ID and non-zero escrow contract ID are required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if existing, ok := r.contracts[contractID]; ok {
+		if existing != escrowContractID {
+			return errors.New("contract ID is already bound to a different escrow contract")
+		}
+		return nil // Idempotent re-registration
+	}
+
 	r.contracts[contractID] = escrowContractID
 	return nil
 }

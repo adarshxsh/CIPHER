@@ -101,12 +101,16 @@ func TestAvailabilityPaymentSettlementLive(t *testing.T) {
 	if err := workflow.RegisterContract(availabilityID, escrowBinding); err != nil {
 		t.Fatalf("RegisterContract: %v", err)
 	}
-	state, err := workflow.ProcessAvailabilityResult(interfaces.AvailabilityResult{
+	state, err := workflow.CreateAndSignPaymentState(interfaces.AvailabilityResult{
 		ContractID: availabilityID, ProviderID: "provider-peer", Period: 1,
 		ChallengeID: availabilitytypes.ChallengeID("live-challenge-1"), Result: interfaces.AvailabilityPass,
 	}, reward.Uint64(), 1)
 	if err != nil {
-		t.Fatalf("availability PASS through coordinator/RPC submission: %v", err)
+		t.Fatalf("availability PASS through coordinator signing: %v", err)
+	}
+
+	if err := workflow.SubmitLatestPaymentStateOnChain(escrowBinding.String()); err != nil {
+		t.Fatalf("submit latest payment state on chain: %v", err)
 	}
 
 	transactAndWait(t, ctx, client, contract, providerKey, chainID, nil, "settleContract", escrowID, toSolidityPaymentState(state))

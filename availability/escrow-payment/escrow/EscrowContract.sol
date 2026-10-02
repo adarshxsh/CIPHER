@@ -31,6 +31,12 @@ contract EscrowContract is IEscrowQueries {
     event ContractSettled(bytes32 indexed contractID, uint256 providerPayment, uint256 publisherRefund);
     event FailureMarked(bytes32 indexed contractID, EscrowTypes.FailureReason reason);
     event CollateralSlashed(bytes32 indexed contractID, uint256 penalty);
+    event ContractTerminated(bytes32 indexed contractID);
+    event FailureDisputed(bytes32 indexed contractID, uint64 sequence);
+
+    // Settlement window duration after the active deadline during which the latest
+    // off-chain voucher can be submitted on-chain and settled.
+    uint64 public constant SETTLEMENT_WINDOW = 1 days;
 
     function createContract(
         address provider,
@@ -81,6 +87,7 @@ contract EscrowContract is IEscrowQueries {
     function depositCollateral(bytes32 contractID) external payable {
         EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
         if (msg.sender != agreement.provider || agreement.state != EscrowTypes.ContractState.Funded) revert InvalidState();
+        if (agreement.collateral != 0) revert InvalidState(); // Prevent double-deposit
         if (agreement.collateralRequired == 0 || msg.value != agreement.collateralRequired) revert InvalidInput();
         agreement.collateral = msg.value;
         emit CollateralDeposited(contractID, msg.value);
@@ -97,9 +104,16 @@ contract EscrowContract is IEscrowQueries {
         emit ContractActivated(contractID, agreement.deadline);
     }
 
+    // submitPaymentState records a signed off-chain voucher on-chain.
+    //
+    // In the optimistic model, vouchers accumulate off-chain during the Active
+    // period. After the deadline, there is a SETTLEMENT_WINDOW grace period
+    // during which the provider (or publisher) can submit the latest voucher
+    // on-chain before settling. Without this window, an honest provider who
+    // stored files for the full term would be unable to redeem their payment.
     function submitPaymentState(bytes32 contractID, EscrowTypes.PaymentState calldata paymentState) external {
         EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
-        if (agreement.state != EscrowTypes.ContractState.Active || block.timestamp > agreement.deadline) revert InvalidState();
+        if (agreement.state != EscrowTypes.ContractState.Active || block.timestamp > agreement.deadline + SETTLEMENT_WINDOW) revert InvalidState();
         if (paymentState.contractID != contractID || paymentState.publisher != agreement.publisher || paymentState.provider != agreement.provider || paymentState.validUntil < block.timestamp || !agreement.isNextPaymentState(paymentState)) {
             revert InvalidPaymentState();
         }
@@ -126,6 +140,11 @@ contract EscrowContract is IEscrowQueries {
 
     function refundPublisher(bytes32 contractID) external {
         EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
+        // If contract is Active and past deadline + SETTLEMENT_WINDOW with no payment state, auto-terminate
+        if (agreement.state == EscrowTypes.ContractState.Active && block.timestamp > agreement.deadline + SETTLEMENT_WINDOW && !agreement.hasPaymentState) {
+            agreement.state = EscrowTypes.ContractState.Terminated;
+            emit ContractTerminated(contractID);
+        }
         if (msg.sender != agreement.publisher || (agreement.state != EscrowTypes.ContractState.Failed && agreement.state != EscrowTypes.ContractState.Terminated)) revert InvalidState();
         uint256 refund = agreement.escrowBalance;
         agreement.escrowBalance = 0;
@@ -133,9 +152,24 @@ contract EscrowContract is IEscrowQueries {
         _sendValue(agreement.publisher, refund);
     }
 
+    // returnCollateral returns deposited collateral to the provider.
+    //
+    // Allowed in terminal states once dispute/slashing resolution is complete:
+    //   - Settled: normal end of contract, provider gets full collateral back.
+    //   - Terminated: contract expired without payment, provider gets collateral back.
+    //   - Refunded: publisher has concluded slashing/refund, any remaining un-slashed
+    //               collateral is now safe to return to the provider.
+    //
+    // NOTE: Collateral cannot be withdrawn while in 'Failed' state to prevent
+    // front-running a pending slashCollateral() call by the publisher.
     function returnCollateral(bytes32 contractID) external {
         EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
-        if (agreement.state != EscrowTypes.ContractState.Settled || agreement.collateral == 0) revert InvalidState();
+        if (
+            (agreement.state != EscrowTypes.ContractState.Settled &&
+             agreement.state != EscrowTypes.ContractState.Terminated &&
+             agreement.state != EscrowTypes.ContractState.Refunded)
+            || agreement.collateral == 0
+        ) revert InvalidState();
         uint256 collateral = agreement.collateral;
         agreement.collateral = 0;
         _sendValue(agreement.provider, collateral);
@@ -149,6 +183,44 @@ contract EscrowContract is IEscrowQueries {
         emit FailureMarked(contractID, reason);
     }
 
+    // disputeFailure allows a provider to counter a markFailure on-chain by presenting
+    // a valid publisher-signed PaymentState voucher.
+    //
+    // In the optimistic pipeline, challenges run off-chain to avoid gas costs.
+    // The provider interacts with the blockchain only if a dispute is raised.
+    // If the publisher calls markFailure() erroneously or dishonestly, the provider
+    // submits their latest signed voucher.
+    //
+    // NOTE: The voucher must satisfy isNextPaymentState:
+    //   - sequence > agreement.latestSequence
+    //   - cumulativePayment >= agreement.latestCumulativePayment
+    //   - cumulativePayment <= agreement.reward
+    // This prevents a provider from submitting a stale, lower, or out-of-bounds voucher.
+    function disputeFailure(bytes32 contractID, EscrowTypes.PaymentState calldata paymentState) external {
+        EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
+        if (agreement.state != EscrowTypes.ContractState.Failed) revert InvalidState();
+        if (msg.sender != agreement.provider) revert Unauthorized();
+        if (
+            paymentState.contractID != contractID ||
+            paymentState.publisher != agreement.publisher ||
+            paymentState.provider != agreement.provider ||
+            paymentState.validUntil < block.timestamp ||
+            !agreement.isNextPaymentState(paymentState)
+        ) {
+            revert InvalidPaymentState();
+        }
+        if (_recoverPaymentSigner(paymentState) != agreement.publisher) revert InvalidSignature();
+
+        // Valid voucher proves provider compliance: overturn the failure
+        agreement.failureReason = EscrowTypes.FailureReason.None;
+        agreement.latestSequence = paymentState.sequence;
+        agreement.latestCumulativePayment = paymentState.cumulativePayment;
+        agreement.hasPaymentState = true;
+        latestPaymentStates[contractID] = paymentState;
+        agreement.state = EscrowTypes.ContractState.Active;
+        emit FailureDisputed(contractID, paymentState.sequence);
+    }
+
     function slashCollateral(bytes32 contractID, uint256 penalty) external {
         EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
         if (msg.sender != agreement.publisher || agreement.state != EscrowTypes.ContractState.Failed || penalty == 0) revert InvalidState();
@@ -156,6 +228,22 @@ contract EscrowContract is IEscrowQueries {
         agreement.collateral -= amount;
         _sendValue(agreement.publisher, amount);
         emit CollateralSlashed(contractID, amount);
+    }
+
+    // terminateExpiredContract transitions an Active contract to Terminated
+    // after the settlement window has elapsed if no payment state was ever submitted.
+    //
+    // CRITICAL INVARIANT:
+    // If a voucher was accepted during the settlement window (hasPaymentState == true),
+    // the contract CANNOT be terminated. It must be settled via settleContract()
+    // so the provider receives their earned cumulative payment.
+    function terminateExpiredContract(bytes32 contractID) external {
+        EscrowTypes.EscrowAgreement storage agreement = _agreement(contractID);
+        if (agreement.state != EscrowTypes.ContractState.Active) revert InvalidState();
+        if (block.timestamp <= agreement.deadline + SETTLEMENT_WINDOW) revert InvalidState();
+        if (agreement.hasPaymentState) revert InvalidState(); // Voucher exists; must settle, cannot terminate!
+        agreement.state = EscrowTypes.ContractState.Terminated;
+        emit ContractTerminated(contractID);
     }
 
     function getContractState(bytes32 contractID) external view override returns (EscrowTypes.ContractState) { return _agreement(contractID).state; }
@@ -186,3 +274,4 @@ contract EscrowContract is IEscrowQueries {
         if (!sent) revert TransferFailed();
     }
 }
+
