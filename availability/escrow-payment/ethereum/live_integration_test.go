@@ -112,6 +112,8 @@ func TestAvailabilityPaymentSettlementLive(t *testing.T) {
 	if err := workflow.SubmitLatestPaymentStateOnChain(escrowBinding.String()); err != nil {
 		t.Fatalf("submit latest payment state on chain: %v", err)
 	}
+	t.Logf("Availability result: contract=%s provider=%s challenge=%s status=%s", availabilityID, "provider-peer", "live-challenge-1", interfaces.AvailabilityPass)
+	t.Logf("Escrow payment state: agreement=%s sequence=%d cumulativePayment=%d signatureBytes=%d", state.ContractID, state.Sequence, state.CumulativePayment, len(state.PublisherSignature))
 
 	transactAndWait(t, ctx, client, contract, providerKey, chainID, nil, "settleContract", escrowID, toSolidityPaymentState(state))
 	var stateResult []interface{}
@@ -121,6 +123,7 @@ func TestAvailabilityPaymentSettlementLive(t *testing.T) {
 	if got := *abi.ConvertType(stateResult[0], new(uint8)).(*uint8); got != 4 {
 		t.Fatalf("contract state after settlement = %d, want 4 (Settled)", got)
 	}
+	t.Logf("Escrow settlement: agreement=%s finalState=%d (Settled)", common.BytesToHash(escrowID[:]).Hex(), 4)
 }
 
 func transactAndWait(t *testing.T, ctx context.Context, client *ethclient.Client, contract *bind.BoundContract, key *ecdsa.PrivateKey, chainID *big.Int, value *big.Int, method string, arguments ...interface{}) {

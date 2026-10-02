@@ -91,3 +91,35 @@ func TestCreatePaymentStateRejectsFailure(t *testing.T) {
 		t.Fatal("CreatePaymentState accepted a failed availability result")
 	}
 }
+
+func TestPaymentStoreRejectsDifferentContractAndUnsignedSubmission(t *testing.T) {
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	firstResult := interfaces.AvailabilityResult{ContractID: "contract-one", ProviderID: "provider", ChallengeID: "challenge-one", Result: interfaces.AvailabilityPass}
+	first, err := payment.CreatePaymentState(firstResult, "publisher", 10, 1)
+	if err != nil {
+		t.Fatalf("CreatePaymentState returned error: %v", err)
+	}
+	first, err = payment.SignPaymentState(first, privateKey)
+	if err != nil {
+		t.Fatalf("SignPaymentState returned error: %v", err)
+	}
+	var store payment.PaymentStateStore
+	if err := store.StorePaymentState(first); err != nil {
+		t.Fatalf("StorePaymentState returned error: %v", err)
+	}
+	secondResult := interfaces.AvailabilityResult{ContractID: "contract-two", ProviderID: "provider", ChallengeID: "challenge-two", Result: interfaces.AvailabilityPass}
+	second, err := payment.CreatePaymentState(secondResult, "publisher", 20, 2)
+	if err != nil {
+		t.Fatalf("CreatePaymentState returned error: %v", err)
+	}
+	second, err = payment.SignPaymentState(second, privateKey)
+	if err != nil {
+		t.Fatalf("SignPaymentState returned error: %v", err)
+	}
+	if err := store.StorePaymentState(second); err == nil {
+		t.Fatal("StorePaymentState accepted a state for a different contract")
+	}
+	if err := payment.SubmitPaymentState(first.ContractID, payment.PaymentState{ContractID: first.ContractID}, &recordingSubmitter{}); err == nil {
+		t.Fatal("SubmitPaymentState accepted an unsigned state")
+	}
+}

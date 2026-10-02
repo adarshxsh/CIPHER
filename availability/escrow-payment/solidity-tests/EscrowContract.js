@@ -23,6 +23,19 @@ describe("EscrowContract", function () {
     await escrow.connect(publisher).activateContract(contractID);
   }
 
+  async function signedPaymentState(fixture, { sequence = 1, payment, validUntil } = {}) {
+    const { escrow, publisher, provider, contractID, reward } = fixture;
+    const network = await ethers.provider.getNetwork();
+    const expiry = validUntil ?? BigInt((await ethers.provider.getBlock("latest")).timestamp + 600);
+    const amount = payment ?? reward;
+    const challengeID = ethers.keccak256(ethers.toUtf8Bytes(`challenge-${sequence}`));
+    const digest = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "uint256", "bytes32", "address", "address", "uint64", "uint64", "uint256", "bytes32", "uint64", "uint8"],
+      [await escrow.getAddress(), network.chainId, contractID, publisher.address, provider.address, sequence, sequence, amount, challengeID, expiry, 1]
+    ));
+    return [contractID, publisher.address, provider.address, sequence, sequence, amount, challengeID, expiry, 1, await publisher.signMessage(ethers.getBytes(digest))];
+  }
+
   it("creates, funds, activates, accepts a signed cumulative payment state, and settles", async function () {
     const fixture = await deployAgreement();
     const { escrow, publisher, provider, contractID, reward } = fixture;
@@ -57,5 +70,33 @@ describe("EscrowContract", function () {
     await expect(escrow.connect(publisher).refundPublisher(contractID))
       .to.changeEtherBalances([escrow, publisher], [-reward, reward]);
     expect(await escrow.getContractState(contractID)).to.equal(5n);
+  });
+
+  it("rejects expired, over-reward, and replayed payment states", async function () {
+    const fixture = await deployAgreement();
+    const { escrow, provider, contractID, reward } = fixture;
+    await activateAgreement(fixture);
+
+    const expired = await signedPaymentState(fixture, { validUntil: 1n });
+    await expect(escrow.connect(provider).submitPaymentState(contractID, expired))
+      .to.be.revertedWithCustomError(escrow, "InvalidPaymentState");
+
+    const overReward = await signedPaymentState(fixture, { payment: reward + 1n });
+    await expect(escrow.connect(provider).submitPaymentState(contractID, overReward))
+      .to.be.revertedWithCustomError(escrow, "InvalidPaymentState");
+
+    const valid = await signedPaymentState(fixture, { payment: reward / 2n });
+    await escrow.connect(provider).submitPaymentState(contractID, valid);
+    await expect(escrow.connect(provider).submitPaymentState(contractID, valid))
+      .to.be.revertedWithCustomError(escrow, "InvalidPaymentState");
+  });
+
+  it("does not let a non-publisher record a failure", async function () {
+    const fixture = await deployAgreement();
+    const { escrow, other, contractID } = fixture;
+    await activateAgreement(fixture);
+
+    await expect(escrow.connect(other).markFailure(contractID, 1))
+      .to.be.revertedWithCustomError(escrow, "InvalidState");
   });
 });
