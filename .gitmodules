@@ -1,0 +1,3 @@
+[submodule "availability/escrow-payment/escrow/lib/forge-std"]
+	path = availability/escrow-payment/escrow/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std.git
