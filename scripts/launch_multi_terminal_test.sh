@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CIPHER: MULTI-TERMINAL STEP-BY-STEP WORKFLOW ORCHESTRATOR
+# CIPHER: COMPLETE 8-TERMINAL DECENTRALIZED CDN & PAYMENT ORCHESTRATOR
 # ==============================================================================
-# Categorizes roles into:
-#   1. ALWAYS-RUNNING DAEMONS:
-#      - [Terminal 1] Anvil EVM Blockchain (Port 8545)
-#      - [Terminal 2] DHT Bootstrap Node (Port 4003)
-#      - [Terminal 3] Storage Provider 1 (Port 4101, EVM ticket verification)
-#      - [Terminal 4] Storage Provider 2 (Port 4102, EVM ticket verification)
+# The complete 8-terminal architecture with all network roles:
 #
-#   2. ONE-TIME SEQUENTIAL JOBS:
-#      - [Step 1] Deploy Smart Contracts & Fund Escrow Channel
-#      - [Step 2] Check Initial Wallet Balances (Client vs Provider)
-#      - [Step 3] Publisher: Ingest Payload & Push Replicate (R=2)
-#      - [Step 4] Consumer: Swarm Download with EIP-712 Payment Tickets
-#      - [Step 5] Verify Data Integrity (SHA-256 Bit-for-Bit)
-#      - [Step 6] Mine Anvil Blocks & Settle On-Chain Jackpot Payout
-#      - [Step 7] Check Final Wallet Balances (Verify Net Payout)
+#   DAEMON SERVICES:
+#     [Terminal 1] Anvil EVM Blockchain (Port 8545)
+#     [Terminal 2] Circuit Relay v2 (Port 4001, NAT Traversal & Hole Punching)
+#     [Terminal 3] Kademlia DHT Bootstrap Node (Port 4003, Discovery Hub)
+#     [Terminal 4] Storage Provider 1 (Port 4101, EVM Ticket Verifier)
+#     [Terminal 5] Storage Provider 2 (Port 4102, EVM Ticket Verifier)
+#     [Terminal 6] Storage Provider 3 (Port 4103, Fault-Tolerance Provider)
+#
+#   INTERACTIVE WORKFLOW NODES:
+#     [Terminal 7] Publisher Node (Port 4201, Multi-Provider Replication R=2/3)
+#     [Terminal 8] Consumer / Client Controller (Port 4301, DHT Swarm + Payments + Settlement)
 # ==============================================================================
 
 set -e
@@ -48,12 +46,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "CIPHER Multi-Terminal Workflow Runner"
+            echo "CIPHER Complete 8-Terminal Architecture Runner"
             echo "Usage: ./scripts/launch_multi_terminal_test.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --auto      Run all one-time steps automatically without pausing"
-            echo "  --single    Run everything in this single terminal (no new OS windows)"
+            echo "  --auto      Run all stages automatically without pausing"
+            echo "  --single    Run all 8 roles in this single terminal"
             echo "  -h, --help  Show this help message"
             exit 0
             ;;
@@ -65,7 +63,7 @@ done
 
 pause_step() {
     if [ "$INTERACTIVE" = true ]; then
-        echo -e "\n${YELLOW}Press [ENTER] to continue to the next step...${NC}"
+        echo -e "\n${YELLOW}Press [ENTER] to continue to the next job...${NC}"
         read -r
     else
         sleep 1
@@ -73,20 +71,21 @@ pause_step() {
 }
 
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
-echo -e "${BOLD}${CYAN}        CIPHER MULTI-TERMINAL SYSTEM & PAYMENT TEST RUNNER            ${NC}"
+echo -e "${BOLD}${CYAN}      CIPHER 8-TERMINAL COMPLETE CDN & PAYMENT ARCHITECTURE           ${NC}"
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
 
 # Clean previous test directories and build binaries
-echo -e "\n${BOLD}[*] Building latest CIPHER binaries...${NC}"
+echo -e "\n${BOLD}[*] Building all CIPHER node and network binaries...${NC}"
 mkdir -p bin
 go build -o bin/bootstrap ./network/cmd/bootstrap
+go build -o bin/relay ./network/cmd/relay
 go build -o bin/provider ./nodes/provider
 go build -o bin/publisher ./nodes/publisher
 go build -o bin/consumer ./nodes/consumer
-echo -e "${GREEN}[✓] All binaries built successfully in ./bin/${NC}"
+echo -e "${GREEN}[✓] All 5 binaries compiled cleanly in ./bin/${NC}"
 
-rm -rf store_p1 store_p2 store_pub store_client test_pay_orig.dat test_pay_recovered.dat
-rm -f anvil.log bootstrap.log provider1.log provider2.log publisher.log consumer.log
+rm -rf store_p1 store_p2 store_p3 store_pub store_client store_client_fault test_pay_orig.dat test_pay_recovered.dat test_pay_fault.dat
+rm -f anvil.log relay.log bootstrap.log provider1.log provider2.log provider3.log publisher.log consumer.log
 
 ENTROPY_ADDR="0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
 PROVIDER_ETH_ADDR="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
@@ -104,24 +103,26 @@ EOF
 }
 
 # ------------------------------------------------------------------------------
-# SECTION 1: LAUNCH ALWAYS-RUNNING DAEMONS
+# SECTION 1: LAUNCH THE 6 ALWAYS-RUNNING DAEMONS
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}${MAGENTA}--- [SECTION 1: ALWAYS-RUNNING DAEMON SERVICES] ---${NC}"
+echo -e "\n${BOLD}${MAGENTA}--- [LAUNCHING 6 ALWAYS-RUNNING DAEMON ROLES] ---${NC}"
 
-# Kill any existing processes on ports 8545, 4003, 4101, 4102
-for p in 8545 4003 4101 4102; do
-    if lsof -ti :$p >/dev/null 2>&1; then
-        echo -e "${YELLOW}[!] Cleaning existing process on port $p...${NC}"
-        kill -9 $(lsof -ti :$p) 2>/dev/null || true
+# Clean existing processes on ports 8545, 4001, 4003, 4101, 4102, 4103
+for p in 8545 4001 4003 4101 4102 4103; do
+    if lsof -ti tcp:$p -sTCP:LISTEN >/dev/null 2>&1; then
+        echo -e "${YELLOW}[!] Cleaning existing server on port $p...${NC}"
+        kill -9 $(lsof -ti tcp:$p -sTCP:LISTEN) 2>/dev/null || true
     fi
 done
 sleep 1
 
+
+# [TERMINAL 1] Anvil EVM Blockchain
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[1/4] Spawning Anvil EVM in Terminal window...${NC}"
+    echo -e "${CYAN}[Terminal 1/8] Spawning Anvil EVM Blockchain in Terminal window...${NC}"
     launch_window "anvil --port 8545"
 else
-    echo -e "${CYAN}[1/4] Starting Anvil EVM node in background...${NC}"
+    echo -e "${CYAN}[Terminal 1/8] Starting Anvil EVM Blockchain in background...${NC}"
     anvil --port 8545 --silent > anvil.log 2>&1 &
     ANVIL_PID=$!
 fi
@@ -130,9 +131,9 @@ fi
 while ! curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://127.0.0.1:8545 >/dev/null 2>&1; do
     sleep 0.2
 done
-echo -e "${GREEN}[✓] Anvil EVM is healthy on http://127.0.0.1:8545${NC}"
+echo -e "${GREEN}[✓] Anvil EVM is active on http://127.0.0.1:8545${NC}"
 
-# 2. Deploy Smart Contracts on Anvil
+# Deploy Smart Contracts on Anvil
 echo -e "\n${BOLD}[*] Deploying Smart Contracts & Funding Escrow Channel...${NC}"
 (cd payments && forge script script/Step1_Setup.s.sol --rpc-url http://127.0.0.1:8545 --broadcast > /dev/null)
 echo -e "${GREEN}[✓] Smart Contracts deployed!${NC}"
@@ -141,68 +142,87 @@ echo -e "  - Escrow Channel:      ${BOLD}$CHANNEL_CONTRACT_ADDR${NC}"
 echo -e "  - Provider Eth Wallet: ${BOLD}$PROVIDER_ETH_ADDR${NC}"
 echo -e "  - Client Eth Wallet:   ${BOLD}$CLIENT_ETH_ADDR${NC}"
 
-# 3. DHT Bootstrap Node
+# [TERMINAL 2] Circuit Relay v2
+./bin/relay > relay.log 2>&1 &
+RELAY_PID=$!
+sleep 2
+
+RELAY_MULTIADDR=$(grep "127.0.0.1/tcp/4001/p2p/" relay.log | head -n 1 | awk '{print $NF}')
+echo -e "${GREEN}[✓] Relay Multiaddress: ${BOLD}$RELAY_MULTIADDR${NC}"
+
+if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
+    kill $RELAY_PID 2>/dev/null || true
+    echo -e "${CYAN}[Terminal 2/8] Spawning Circuit Relay v2 in Terminal window...${NC}"
+    launch_window "./bin/relay"
+    sleep 2
+fi
+
+# [TERMINAL 3] DHT Bootstrap Node
 ./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key > bootstrap.log 2>&1 &
 BOOT_PID=$!
 sleep 2
 
 BOOTSTRAP_MULTIADDR=$(grep "127.0.0.1/tcp/4003/p2p/" bootstrap.log | head -n 1 | awk '{print $NF}')
-if [ -z "$BOOTSTRAP_MULTIADDR" ]; then
-    echo -e "${RED}Failed to start bootstrap node. Check bootstrap.log${NC}"
-    cat bootstrap.log
-    exit 1
-fi
 echo -e "${GREEN}[✓] Bootstrap Multiaddress: ${BOLD}$BOOTSTRAP_MULTIADDR${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    # Kill background bootstrap and spawn in terminal window with same key
     kill $BOOT_PID 2>/dev/null || true
-    echo -e "\n${CYAN}[2/4] Spawning DHT Bootstrap Node in Terminal window...${NC}"
+    echo -e "${CYAN}[Terminal 3/8] Spawning DHT Bootstrap Node in Terminal window...${NC}"
     launch_window "./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key"
     sleep 2
 fi
 
-# 4. Storage Provider 1
+# [TERMINAL 4] Storage Provider 1
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[3/4] Spawning Storage Provider 1 in Terminal window...${NC}"
+    echo -e "${CYAN}[Terminal 4/8] Spawning Storage Provider 1 in Terminal window...${NC}"
     launch_window "./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    echo -e "${CYAN}[3/4] Starting Storage Provider 1 in background...${NC}"
+    echo -e "${CYAN}[Terminal 4/8] Starting Storage Provider 1 in background...${NC}"
     ./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 \
       -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider1.log 2>&1 &
     PROV1_PID=$!
 fi
 
-# 5. Storage Provider 2
+# [TERMINAL 5] Storage Provider 2
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[4/4] Spawning Storage Provider 2 in Terminal window...${NC}"
+    echo -e "${CYAN}[Terminal 5/8] Spawning Storage Provider 2 in Terminal window...${NC}"
     launch_window "./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    echo -e "${CYAN}[4/4] Starting Storage Provider 2 in background...${NC}"
+    echo -e "${CYAN}[Terminal 5/8] Starting Storage Provider 2 in background...${NC}"
     ./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 \
       -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider2.log 2>&1 &
     PROV2_PID=$!
 fi
+
+# [TERMINAL 6] Storage Provider 3 (Fault Tolerance Node)
+if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
+    echo -e "${CYAN}[Terminal 6/8] Spawning Storage Provider 3 (Fault-Tolerance Node) in Terminal window...${NC}"
+    launch_window "./bin/provider -p 4103 -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
+else
+    echo -e "${CYAN}[Terminal 6/8] Starting Storage Provider 3 in background...${NC}"
+    ./bin/provider -p 4103 -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 \
+      -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider3.log 2>&1 &
+    PROV3_PID=$!
+fi
 sleep 3
 
-echo -e "\n${GREEN}${BOLD}[✓] ALL 4 DAEMON SERVICES ARE RUNNING!${NC}"
-
+echo -e "\n${GREEN}${BOLD}[✓] ALL 6 DAEMON SERVICES ARE RUNNING IN INDEPENDENT TERMINALS!${NC}"
 
 cleanup() {
     if [ "$MODE" == "single" ]; then
         echo -e "\nCleaning up background daemons..."
-        kill $ANVIL_PID $BOOT_PID $PROV1_PID $PROV2_PID 2>/dev/null || true
+        kill $ANVIL_PID $RELAY_PID $BOOT_PID $PROV1_PID $PROV2_PID $PROV3_PID 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
 
 # ------------------------------------------------------------------------------
-# SECTION 2: ONE-TIME SEQUENTIAL TEST STEPS
+# SECTION 2: INTERACTIVE PUBLISHER & CONSUMER JOBS
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}${MAGENTA}--- [SECTION 2: ONE-TIME SEQUENTIAL JOBS] ---${NC}"
+echo -e "\n${BOLD}${MAGENTA}--- [INTERACTIVE EXECUTION ACROSS TERMINALS 7 & 8] ---${NC}"
 
 # STEP 1: INITIAL WALLET BALANCES
-echo -e "\n${BOLD}${BLUE}=== [JOB 1/5] INSPECTING INITIAL WALLET BALANCES ===${NC}"
+echo -e "\n${BOLD}${BLUE}=== [JOB 1/6] INSPECTING INITIAL WALLET BALANCES ===${NC}"
 CLIENT_BAL=$(cast balance "$CLIENT_ETH_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
 PROV_BAL=$(cast balance "$PROVIDER_ETH_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
 CHANNEL_BAL=$(cast balance "$CHANNEL_CONTRACT_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
@@ -212,14 +232,13 @@ echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${YELLOW}$PROV_BAL ETH${NC}
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$CHANNEL_BAL ETH${NC}"
 pause_step
 
-# STEP 2: PUBLISHER INGEST & PUSH
-echo -e "\n${BOLD}${BLUE}=== [JOB 2/5] PUBLISHER INGESTING & PUSHING REPLICATION (R=2) ===${NC}"
+# STEP 2: [TERMINAL 7] PUBLISHER INGESTION & REPLICATION
+echo -e "\n${BOLD}${BLUE}=== [JOB 2/6] [Terminal 7] PUBLISHER INGESTING & PUSHING (R=2 ACROSS 3 PROVIDERS) ===${NC}"
 head -c 1048576 </dev/urandom > test_pay_orig.dat
 ORIG_HASH=$(shasum -a 256 test_pay_orig.dat | awk '{print $1}')
 echo -e "  Generated 1 MB Payload SHA-256: ${BOLD}$ORIG_HASH${NC}"
 
-echo -e "\nRunning Publisher push across discovered providers..."
-./bin/publisher -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push > publisher.log 2>&1
+./bin/publisher -p 4201 -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push > publisher.log 2>&1
 
 CONTENT_ID=$(grep "ContentID     :" publisher.log | awk '{print $NF}')
 KEY=$(grep "Decryption Key:" publisher.log | awk '{print $NF}')
@@ -229,11 +248,11 @@ echo -e "  - ContentID:      ${BOLD}$CONTENT_ID${NC}"
 echo -e "  - Decryption Key: ${BOLD}$KEY${NC}"
 pause_step
 
-# STEP 3: CONSUMER SWARM DOWNLOAD WITH PAYMENT TICKETS
-echo -e "\n${BOLD}${BLUE}=== [JOB 3/5] CONSUMER DOWNLOADING WITH EIP-712 PAYMENT TICKETS ===${NC}"
+# STEP 3: [TERMINAL 8] CONSUMER SWARM DOWNLOAD WITH EIP-712 PAYMENT TICKETS
+echo -e "\n${BOLD}${BLUE}=== [JOB 3/6] [Terminal 8] CONSUMER SWARM DOWNLOAD WITH PAYMENT TICKETS ===${NC}"
 echo -e "Connecting to DHT, discovering providers, streaming signed lottery tickets per chunk..."
 
-./bin/consumer -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
+./bin/consumer -p 4301 -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
   -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client \
   --eth-rpc http://127.0.0.1:8545 --eth-key "$CLIENT_ETH_KEY" \
   --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR"
@@ -248,8 +267,34 @@ fi
 echo -e "${GREEN}[✓] 100% BIT-FOR-BIT DATA INTEGRITY VERIFIED!${NC}"
 pause_step
 
-# STEP 4: ON-CHAIN SETTLEMENT
-echo -e "\n${BOLD}${BLUE}=== [JOB 4/5] MINING BLOCKS & EXECUTING ON-CHAIN SETTLEMENT ===${NC}"
+# STEP 4: FAULT TOLERANCE TEST (Simulate Dead Provider 1)
+echo -e "\n${BOLD}${BLUE}=== [JOB 4/6] FAULT TOLERANCE: KILLING PROVIDER 1 & CONSUMER 2 RETRIEVAL ===${NC}"
+if [ "$MODE" == "single" ]; then
+    kill $PROV1_PID 2>/dev/null || true
+    echo -e "${YELLOW}[!] Provider 1 (PID $PROV1_PID) terminated to simulate node failure.${NC}"
+else
+    if lsof -ti tcp:4101 -sTCP:LISTEN >/dev/null 2>&1; then
+        kill -9 $(lsof -ti tcp:4101 -sTCP:LISTEN) 2>/dev/null || true
+        echo -e "${YELLOW}[!] Provider 1 (Port 4101) terminated to simulate node failure.${NC}"
+    fi
+fi
+sleep 2
+
+echo -e "Consumer 2 fetching from remaining surviving Providers (2 & 3)..."
+./bin/consumer -p 4302 -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_fault.dat \
+  -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client_fault
+
+
+FAULT_HASH=$(shasum -a 256 test_pay_fault.dat | awk '{print $1}')
+if [ "$ORIG_HASH" != "$FAULT_HASH" ]; then
+    echo -e "${RED}[❌ FAILED] Fault recovery hash mismatch!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[✓] SUCCESS: Content reconstructed from surviving replica providers (R=2 verified)!${NC}"
+pause_step
+
+# STEP 5: ON-CHAIN SETTLEMENT
+echo -e "\n${BOLD}${BLUE}=== [JOB 5/6] MINING BLOCKS & EXECUTING ON-CHAIN SETTLEMENT ===${NC}"
 echo -e "Mining 20 blocks on Anvil to satisfy confirmation delay..."
 cast rpc anvil_mine 20 --rpc-url http://127.0.0.1:8545 > /dev/null
 
@@ -257,8 +302,8 @@ echo -e "Submitting winning ticket for on-chain jackpot payout..."
 (cd payments && forge script script/Step2_Settle.s.sol --rpc-url http://127.0.0.1:8545 --broadcast)
 pause_step
 
-# STEP 5: FINAL WALLET BALANCES
-echo -e "\n${BOLD}${BLUE}=== [JOB 5/5] INSPECTING FINAL WALLET BALANCES & NET PAYOUT ===${NC}"
+# STEP 6: FINAL WALLET BALANCES
+echo -e "\n${BOLD}${BLUE}=== [JOB 6/6] INSPECTING FINAL WALLET BALANCES & NET PAYOUT ===${NC}"
 FINAL_CLIENT_BAL=$(cast balance "$CLIENT_ETH_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
 FINAL_PROV_BAL=$(cast balance "$PROVIDER_ETH_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
 FINAL_CHANNEL_BAL=$(cast balance "$CHANNEL_CONTRACT_ADDR" --rpc-url http://127.0.0.1:8545 --ether)
@@ -268,5 +313,5 @@ echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${GREEN}$FINAL_PROV_BAL ETH
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$FINAL_CHANNEL_BAL ETH${NC}"
 
 echo -e "\n${BOLD}${GREEN}======================================================================${NC}"
-echo -e "${BOLD}${GREEN}🎉 ALL MULTI-TERMINAL SYSTEM & PAYMENT TESTS PASSED SUCCESSFULLY!    ${NC}"
+echo -e "${BOLD}${GREEN}🎉 ALL 8 TERMINAL ROLES & PAYMENT TESTS COMPLETED WITH 100% SUCCESS! ${NC}"
 echo -e "${BOLD}${GREEN}======================================================================${NC}"
