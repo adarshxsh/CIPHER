@@ -1,0 +1,14 @@
+{
+  "name": "cipher-escrow-payment",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test:solidity": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy-local.js --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "5.0.0",
+    "hardhat": "2.28.0"
+  }
+}
