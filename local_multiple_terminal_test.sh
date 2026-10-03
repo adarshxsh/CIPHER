@@ -19,7 +19,12 @@
 
 set -e
 
-ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if [ -f "$SCRIPT_DIR/go.mod" ]; then
+    ROOT="$SCRIPT_DIR"
+else
+    ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+fi
 cd "$ROOT"
 
 # Terminal ANSI styling
@@ -47,7 +52,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --help|-h)
             echo "CIPHER Complete 8-Terminal Architecture Runner"
-            echo "Usage: ./scripts/launch_multi_terminal_test.sh [OPTIONS]"
+            echo "Usage: ./local_multiple_terminal_test.sh [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --auto      Run all stages automatically without pausing"
@@ -60,6 +65,7 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
 
 pause_step() {
     if [ "$INTERACTIVE" = true ]; then
