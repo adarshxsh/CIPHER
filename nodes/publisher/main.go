@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
-	"log"
-	"encoding/hex"
 	"os"
-
 	"os/signal"
 	"strings"
 	"syscall"
@@ -28,16 +26,18 @@ import (
 	"cipher/network/identity"
 	"cipher/network/protocol/chunk"
 	"cipher/network/transport"
+	"cipher/shared/logger"
 
 	golog "github.com/ipfs/go-log/v2"
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
-
 )
 
 func main() {
 	golog.SetAllLoggers(golog.LevelWarn)
+
+	log := logger.Publisher
 
 	filePath := flag.String("file", "", "Path to the file to ingest and publish (required)")
 	port := flag.Int("p", 4005, "Port for the publisher to listen on (TCP)")
@@ -56,7 +56,6 @@ func main() {
 	challengeProviders := flag.Bool("challenge", false, "Issue Availability challenge against remote providers after push")
 
 	flag.Parse()
-
 
 	if *filePath == "" {
 		log.Fatalf("Error: -file <path> is required to publish content")
@@ -94,7 +93,7 @@ func main() {
 		if err := discovery.Bootstrap(ctx, kdht, h, []peer.AddrInfo{*bootstrapInfo}); err != nil {
 			log.Fatalf("Failed to bootstrap DHT: %v", err)
 		}
-		log.Printf("[DHT] Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
+		log.Sub("DHT").Success("Bootstrap complete. Routing table has %d peers", len(kdht.RoutingTable().ListPeers()))
 	}
 
 	// Connect to relay if specified
@@ -102,11 +101,11 @@ func main() {
 		relayInfo, err := peer.AddrInfoFromString(*relayAddr)
 		if err == nil {
 			if err := h.Connect(ctx, *relayInfo); err != nil {
-				log.Printf("Warning: Failed to connect to relay: %v", err)
+				log.Warn("Failed to connect to relay: %v", err)
 			} else {
 				if res, err := client.Reserve(ctx, h, *relayInfo); err == nil {
 					h.ConnManager().Protect(relayInfo.ID, "relay")
-					log.Printf("[✓] Connected to relay and reserved slot (expires: %s)", res.Expiration.String())
+					log.Success("Connected to relay and reserved slot (expires: %s)", res.Expiration.String())
 				}
 			}
 		}
@@ -127,7 +126,7 @@ func main() {
 	chunk.NewStreamHandler(h, eng)
 
 	// 5. Ingest Content
-	log.Printf("Ingesting source file: %s", *filePath)
+	log.Sub("Ingest").Info("Ingesting source file: %s", *filePath)
 	f, err := os.Open(*filePath)
 	if err != nil {
 		log.Fatalf("Failed to open file for ingest: %v", err)
@@ -161,14 +160,14 @@ func main() {
 				}
 				addrInfo, err := t.Connect(ctx, pAddrStr)
 				if err != nil {
-					log.Printf("[Publisher] Warning: Failed to connect to provider %s: %v", pAddrStr, err)
+					log.Warn("Failed to connect to provider %s: %v", pAddrStr, err)
 					continue
 				}
 				targetPeers = append(targetPeers, addrInfo.ID)
 			}
 		} else {
 			// Automated Kademlia DHT Storage Provider Discovery
-			log.Printf("[Publisher] No -providers specified. Querying Kademlia DHT for active storage providers...")
+			log.Info("No -providers specified. Querying Kademlia DHT for active storage providers...")
 
 			for attempt := 1; attempt <= 3; attempt++ {
 				dhtCtx, dhtCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -191,10 +190,10 @@ func main() {
 					}
 
 					if err := h.Connect(ctx, prov); err != nil {
-						log.Printf("[Publisher] Warning: Failed to connect to discovered provider %s: %v", prov.ID, err)
+						log.Warn("Failed to connect to discovered provider %s: %v", prov.ID, err)
 						continue
 					}
-					log.Printf("[Publisher] [✓] Discovered active storage provider via DHT: %s", prov.ID)
+					log.Success("Discovered active storage provider via DHT: %s", prov.ID)
 					targetPeers = append(targetPeers, prov.ID)
 				}
 
@@ -202,7 +201,7 @@ func main() {
 					break
 				}
 				if attempt < 3 {
-					log.Printf("[Publisher] Retrying DHT provider lookup (attempt %d/3)...", attempt+1)
+					log.Info("Retrying DHT provider lookup (attempt %d/3)...", attempt+1)
 					time.Sleep(1 * time.Second)
 				}
 			}
@@ -215,7 +214,7 @@ func main() {
 		effectiveReplication := *replication
 		if effectiveReplication > len(targetPeers) {
 			effectiveReplication = len(targetPeers)
-			log.Printf("[Publisher] Notice: Reduced replication to %d to match available provider count", effectiveReplication)
+			log.Info("Notice: Reduced replication to %d to match available provider count", effectiveReplication)
 		}
 
 		plan, err := distribution.PlanPlacement(m, targetPeers, effectiveReplication)
@@ -231,12 +230,12 @@ func main() {
 			log.Fatalf("Push distribution failed to satisfy replication invariant: %v", err)
 		}
 
-		log.Printf("[Publisher] [✓] All chunks successfully committed with >= %d replicas across %d remote providers!",
+		log.Success("All chunks successfully committed with >= %d replicas across %d remote providers!",
 			effectiveReplication, len(targetPeers))
 
 		if *challengeProviders && len(targetPeers) > 0 {
 			target := targetPeers[0]
-			log.Printf("[Availability] Issuing cryptographic possession challenge to provider %s...", target.String())
+			log.Sub("Availability").Info("Issuing cryptographic possession challenge to provider %s...", target.String())
 
 			var rawChunks [][]byte
 			for _, cid := range m.ChunkIDs {
@@ -261,58 +260,60 @@ func main() {
 
 				resp, err := client.ChallengeProvider(ctx, target, challenge)
 				if err != nil {
-					log.Printf("[Availability] Challenge request failed: %v", err)
+					log.Sub("Availability").Warn("Challenge request failed: %v", err)
 				} else {
-
 					valid := verification.VerifyMerkleProof(resp.ChunkHash, challenge.ChunkID, resp.MerkleProof, merkleRoot)
 					if valid {
-						log.Printf("[Availability] [✓] Provider verified chunk possession (Merkle Proof PASS for chunk %d)", challenge.ChunkID)
+						log.Sub("Availability").Success("Provider verified chunk possession (Merkle Proof PASS for chunk %d)", challenge.ChunkID)
 					} else {
-						log.Printf("[Availability] [!] Merkle proof verification failed!")
+						log.Sub("Availability").Error("Merkle proof verification failed!")
 					}
 				}
 			}
 		}
 	} else {
-
 		// Traditional direct publisher DHT announcement
-		log.Printf("[DHT] Announcing ContentID %x on DHT...", m.Descriptor.ID)
+		log.Sub("DHT").Info("Announcing ContentID %x on DHT...", m.Descriptor.ID)
 		if err := discovery.Provide(ctx, kdht, m.Descriptor.ID); err != nil {
-			log.Printf("[DHT] Warning: Could not advertise on DHT: %v (ensure bootstrap node is active)", err)
+			log.Sub("DHT").Warn("Could not advertise on DHT: %v (ensure bootstrap node is active)", err)
 		} else {
-			log.Printf("[DHT] Successfully announced ContentID on DHT")
+			log.Sub("DHT").Success("Successfully announced ContentID on DHT")
 		}
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
 
-	fmt.Println("\n================ CIPHER PUBLISHER ================")
-	fmt.Printf("File Ingested : %s\n", *filePath)
-	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
-	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
-	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
-	fmt.Println("Addresses:")
-	for _, addr := range h.Addrs() {
-		fmt.Printf("  - %s/p2p/%s\n", addr.String(), h.ID().String())
+	fields := []logger.Field{
+		{Key: "File Ingested ", Value: *filePath},
+		{Key: "ContentID     ", Value: fmt.Sprintf("%x", m.Descriptor.ID)},
+		{Key: "Decryption Key", Value: fmt.Sprintf("%x", key)},
+		{Key: "Chunks Total  ", Value: fmt.Sprintf("%d (%d KB per chunk)", len(m.ChunkIDs), *chunkSizeKB)},
+		{Key: "Publisher ID  ", Value: h.ID().String()},
+		{Key: "", Value: "Listening Multiaddresses:"},
 	}
-	fmt.Println("===================================================")
+	for _, addr := range h.Addrs() {
+		fields = append(fields, logger.Field{Key: "", Value: fmt.Sprintf("  - %s/p2p/%s", addr.String(), h.ID().String())})
+	}
+
+	log.Banner("CIPHER PUBLISHER NODE", fields...)
+
 
 	if *push || !*seed {
 		if *push {
-			log.Println("[Publisher] Remote push complete, exiting.")
+			log.Info("Remote push complete, exiting.")
 		} else {
-			log.Println("Seeding flag is false, exiting publisher.")
+			log.Info("Seeding flag is false, exiting publisher.")
 		}
 		return
 	}
 
-	log.Println("\n[Publisher] Seeding content over /cipher/chunk/1.0.0. Press Ctrl+C to stop.")
+	log.Success("Seeding content over /cipher/chunk/1.0.0. Press Ctrl+C to stop.")
 
 	// Wait for OS shutdown signal
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 
-	log.Println("Shutting down publisher...")
+	log.Warn("Shutting down publisher...")
 }
+
