@@ -54,6 +54,7 @@ func main() {
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
 	challengeProviders := flag.Bool("challenge", false, "Issue Availability challenge against remote providers after push")
+	roleName := flag.String("role-name", "Ingestion & Replication Engine", "Human-readable role name for this publisher node")
 
 	flag.Parse()
 
@@ -284,6 +285,7 @@ func main() {
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
 
 	fields := []logger.Field{
+		{Key: "Publisher Role", Value: *roleName},
 		{Key: "File Ingested ", Value: *filePath},
 		{Key: "ContentID     ", Value: fmt.Sprintf("%x", m.Descriptor.ID)},
 		{Key: "Decryption Key", Value: fmt.Sprintf("%x", key)},
@@ -295,7 +297,7 @@ func main() {
 		fields = append(fields, logger.Field{Key: "", Value: fmt.Sprintf("  - %s/p2p/%s", addr.String(), h.ID().String())})
 	}
 
-	log.Banner("CIPHER PUBLISHER NODE", fields...)
+	log.Banner(fmt.Sprintf("CIPHER PUBLISHER: %s", strings.ToUpper(*roleName)), fields...)
 
 
 	if *push || !*seed {

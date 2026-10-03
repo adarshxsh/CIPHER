@@ -60,6 +60,7 @@ func main() {
 	entropyAddr := flag.String("entropy-addr", "", "CommitRevealEntropy contract address (hex)")
 	providerEthKey := flag.String("eth-key", "", "Provider Ethereum private key (hex, optional)")
 	enableAvailability := flag.Bool("availability", true, "Enable Availability challenge handler (/cipher/availability/1.0.0)")
+	roleName := flag.String("role-name", "Core Storage Provider", "Human-readable role name for this provider node")
 	_ = providerEthKey
 
 	flag.Parse()
@@ -230,6 +231,7 @@ func main() {
 	}
 
 	fields := []logger.Field{
+		{Key: "Provider Role   ", Value: *roleName},
 		{Key: "Provider Peer ID", Value: h.ID().String()},
 		{Key: "Store Location  ", Value: *storePath},
 		{Key: "Hosted Manifests", Value: fmt.Sprintf("%d", len(manifests))},
@@ -241,8 +243,8 @@ func main() {
 
 	}
 
-	log.Banner("CIPHER STORAGE PROVIDER NODE", fields...)
-	log.Success("Provider is ready and serving content. Press Ctrl+C to stop.")
+	log.Banner(fmt.Sprintf("CIPHER PROVIDER: %s", strings.ToUpper(*roleName)), fields...)
+	log.Success("Provider [%s] is ready and serving content. Press Ctrl+C to stop.", *roleName)
 
 	// Wait for OS shutdown signal
 	ch := make(chan os.Signal, 1)

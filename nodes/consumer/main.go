@@ -63,6 +63,7 @@ func main() {
 	providerEthAddr := flag.String("provider-eth-addr", "", "Provider Ethereum payout address (hex)")
 	roundID := flag.Int64("round-id", 1, "Payment round ID")
 	roundFaceValue := flag.String("round-face-value", "1000000000000000000", "Round face value in wei (default 1 ETH)")
+	roleName := flag.String("role-name", "Swarm Consumer Client", "Human-readable role name for this consumer node")
 
 	flag.Parse()
 
@@ -137,6 +138,14 @@ func main() {
 	}
 	defer h.Close()
 	defer kdht.Close()
+
+	fields := []logger.Field{
+		{Key: "Consumer Role   ", Value: *roleName},
+		{Key: "Consumer Peer ID", Value: h.ID().String()},
+		{Key: "Target ContentID", Value: targetContentIDHex},
+		{Key: "Cache Directory ", Value: *storePath},
+	}
+	log.Banner(fmt.Sprintf("CIPHER CONSUMER: %s", strings.ToUpper(*roleName)), fields...)
 
 	if *bootstrapAddr != "" {
 		bootstrapInfo, err := peer.AddrInfoFromString(*bootstrapAddr)

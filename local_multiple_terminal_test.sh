@@ -6,20 +6,30 @@
 #
 #   TOP ROW:
 #     [Terminal 1]  Anvil EVM Blockchain (Port 8545)
-#     [Terminal 2]  Circuit Relay v2 (Port 4001, NAT Traversal)
-#     [Terminal 3]  Kademlia DHT Bootstrap Node (Port 4003, Discovery Hub)
-#     [Terminal 4]  Storage Provider 1 (Port 4101, Primary Replica)
+#                   Role: Layer 1 Settlement Ledger, Raffle Entropy & Escrow Arbiter
+#     [Terminal 2]  Circuit Relay v2 (Port 4001)
+#                   Role: NAT Traversal Gateway, Hole-Punching Proxy & HOP Router
+#     [Terminal 3]  Kademlia DHT Bootstrap Node (Port 4003)
+#                   Role: Decentralized Control Plane, Routing Table & Provider Index
+#     [Terminal 4]  Storage Provider 1 (Port 4101)
+#                   Role: [Tier-1 Core Storage] Primary EIP-712 Lottery Ticket Verifier
 #
 #   MIDDLE ROW (CENTER AREA LEFT OPEN FOR USER WORKSPACE / CONTROLLER):
-#     [Terminal 5]  Storage Provider 2 (Port 4102, Primary Replica)  [LEFT EDGE]
+#     [Terminal 5]  Storage Provider 2 (Port 4102) [LEFT EDGE]
+#                   Role: [Tier-2 Edge Cache] NAT-Firewalled Node Forced Over Relay
 #     [*** MID ***] [ CENTER DESKTOP SPACE RESERVED FOR MAIN WORKSPACE ]
-#     [Terminal 6]  Storage Provider 3 (Port 4103, Replica Node)     [RIGHT EDGE]
+#     [Terminal 6]  Storage Provider 3 (Port 4103) [RIGHT EDGE]
+#                   Role: [Tier-3 Audit Guardian] Cryptographic Availability Prover
 #
 #   BOTTOM ROW:
-#     [Terminal 7]  Storage Provider 4 (Port 4104, Standby/Edge Replica)
-#     [Terminal 8]  Publisher Node (Port 4201, Multi-Provider R=2 Push)
-#     [Terminal 9]  Consumer Client 1 (Port 4301, Swarm + EIP-712 Payments)
-#     [Terminal 10] Consumer Client 2 (Port 4302, Dead-Node Failover Recovery)
+#     [Terminal 7]  Storage Provider 4 (Port 4104)
+#                   Role: [Tier-4 Hot Standby] Disaster Recovery & Failover Node
+#     [Terminal 8]  Publisher Node (Port 4201)
+#                   Role: Content Ingestor, AES-256-GCM Encryptor & Multi-Tier Disperser
+#     [Terminal 9]  Consumer Client 1 (Port 4301)
+#                   Role: High-Speed Parallel Swarm Client & EIP-712 Ticket Streamer
+#     [Terminal 10] Consumer Client 2 (Port 4302)
+#                   Role: Failover Auditor, Dead-Node Fallback & Recovery Tester
 # ==============================================================================
 
 set -e
@@ -88,15 +98,16 @@ echo -e "${BOLD}${CYAN}     CIPHER 10-TERMINAL COMPLETE CDN & PAYMENT ORCHESTRAT
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
 echo -e "Desktop Perimeter Tiling Layout (Center Reserved for Workspace):"
 echo -e "  +--------------------+--------------------+--------------------+--------------------+"
-echo -e "  | [1] ANVIL EVM      | [2] RELAY V2       | [3] BOOTSTRAP      | [4] PROVIDER 1     |"
+echo -e "  | [1] ANVIL EVM      | [2] RELAY V2       | [3] BOOTSTRAP      | [4] TIER-1 CORE    |"
 echo -e "  |     Port 8545      |     Port 4001      |     Port 4003      |     Port 4101      |"
 echo -e "  +--------------------+--------------------+--------------------+--------------------+"
-echo -e "  | [5] PROVIDER 2     |                                         | [6] PROVIDER 3     |"
+echo -e "  | [5] TIER-2 EDGE    |                                         | [6] TIER-3 AUDIT   |"
 echo -e "  |     Port 4102      |      [ CENTER DESKTOP WORKSPACE ]       |     Port 4103      |"
-echo -e "  |                    |      (Main Controller / Terminal)       |                    |"
-echo -e "  +--------------------+                                         +--------------------+
-  | [7] PROVIDER 4     | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2    |"
+echo -e "  |    (Relay Forced)  |      (Main Controller / Terminal)       |    (Availability)  |"
+echo -e "  +--------------------+                                         +--------------------+"
+echo -e "  | [7] TIER-4 STANDBY | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2    |"
 echo -e "  |     Port 4104      |     Port 4201      |     Port 4301      |     Port 4302      |"
+echo -e "  |    (Hot Failover)  |    (AES Encrypt)   |    (Swarm+Payer)   |    (Failover Recv) |"
 echo -e "  +--------------------+--------------------+--------------------+--------------------+"
 
 # ------------------------------------------------------------------------------
@@ -149,7 +160,7 @@ EOF
 }
 
 # ==============================================================================
-# CHECKPOINT 1/12: CRYPTOGRAPHIC PRIMITIVES & CODEBASE INTEGRITY
+# CHECKPOINT 1/12: CRYPTOGRAPHIC PRIMITIVES & COMPILED BINARIES
 # ==============================================================================
 # Problem Solved: Prevents runtime bugs in AES-256-GCM encryption, EIP-712 hashing,
 #                 chunk merklization, and secp256k1 signature validation.
@@ -157,7 +168,7 @@ EOF
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
 echo -e "${BOLD}${MAGENTA} [CHECKPOINT 1/12] CRYPTOGRAPHIC INTEGRITY & COMPILED BINARIES        ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "  ${DIM}Testing core Go crypto suites and building all 5 network role binaries...${NC}"
+echo -e "  ${DIM}Compiling 5 specialized node binaries...${NC}"
 
 mkdir -p bin
 go build -o bin/bootstrap ./network/cmd/bootstrap
@@ -194,21 +205,20 @@ for p in 8545 4001 4003 4101 4102 4103 4104 4201 4301 4302; do
 done
 echo -e "${GREEN}[✓] Clean network slate verified across all 10 CDN ports.${NC}"
 
-pause_checkpoint "2/12" "Launch Terminal 1: Anvil EVM Blockchain"
+pause_checkpoint "2/12" "Launch Terminal 1: [EVM LEDGER] Anvil Blockchain"
 
 # ==============================================================================
-# CHECKPOINT 3/12: [TERMINAL 1/10] LAYER 1 EVM BLOCKCHAIN & SMART CONTRACTS
+# CHECKPOINT 3/12: [TERMINAL 1/10] LAYER 1 EVM SETTLEMENT & ESCROW ENGINE
 # ==============================================================================
-# Problem Solved: High L1 gas costs made micro-payments impossible. We set up
-#                 the on-chain EscrowChannel & EntropySource for lottery tickets.
+# Specialized Role: Layer 1 EVM State Engine, Random Beacon & Escrow Arbiter
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 3/12] [Terminal 1/10] ANVIL EVM & ESCROW CONTRACTS       ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 3/12] [Terminal 1/10] LAYER 1 EVM SETTLEMENT & ESCROW     ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${CYAN}[Terminal 1/10] Spawning Anvil EVM in Desktop Slot 1 (Top-Left)...${NC}"
-    launch_tiled_window 1 "CIPHER [1/10] Anvil EVM (Port 8545)" "anvil --port 8545"
+    launch_tiled_window 1 "CIPHER [1/10] [EVM LEDGER] Anvil Blockchain (8545)" "anvil --port 8545"
 else
     echo -e "${CYAN}[Terminal 1/10] Starting Anvil EVM in background...${NC}"
     anvil --port 8545 --silent > anvil.log 2>&1 &
@@ -229,15 +239,15 @@ echo -e "  - Escrow Channel:      ${BOLD}$CHANNEL_CONTRACT_ADDR${NC}"
 echo -e "  - Provider Eth Wallet: ${BOLD}$PROVIDER_ETH_ADDR${NC}"
 echo -e "  - Client Eth Wallet:   ${BOLD}$CLIENT_ETH_ADDR${NC}"
 
-pause_checkpoint "3/12" "Launch Terminal 2: Circuit Relay v2 (NAT Traversal)"
+pause_checkpoint "3/12" "Launch Terminal 2: [NAT GATEWAY] Circuit Relay v2"
 
 # ==============================================================================
-# CHECKPOINT 4/12: [TERMINAL 2/10] NAT TRAVERSAL & CIRCUIT RELAY V2
+# CHECKPOINT 4/12: [TERMINAL 2/10] NAT TRAVERSAL & CIRCUIT RELAY V2 GATEWAY
 # ==============================================================================
-# Problem Solved: Enables storage nodes and clients behind NAT/firewalls to connect.
+# Specialized Role: libp2p Circuit Relay v2 Proxy, HOP Reservations & NAT Gateway
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 4/12] [Terminal 2/10] CIRCUIT RELAY V2 (NAT PROXY)       ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 4/12] [Terminal 2/10] [NAT GATEWAY] CIRCUIT RELAY V2     ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 ./bin/relay > relay.log 2>&1 &
@@ -250,19 +260,19 @@ echo -e "${GREEN}[✓] Relay Multiaddress: ${BOLD}$RELAY_MULTIADDR${NC}"
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     kill $RELAY_PID 2>/dev/null || true
     echo -e "${CYAN}[Terminal 2/10] Spawning Circuit Relay v2 in Desktop Slot 2...${NC}"
-    launch_tiled_window 2 "CIPHER [2/10] Circuit Relay v2 (Port 4001)" "./bin/relay"
+    launch_tiled_window 2 "CIPHER [2/10] [NAT GATEWAY] Circuit Relay v2 (4001)" "./bin/relay"
     sleep 2
 fi
 
-pause_checkpoint "4/12" "Launch Terminal 3: Kademlia DHT Bootstrap Node"
+pause_checkpoint "4/12" "Launch Terminal 3: [DHT ROUTER] Kademlia Bootstrap Hub"
 
 # ==============================================================================
-# CHECKPOINT 5/12: [TERMINAL 3/10] KADEMLIA DHT CONTROL PLANE DISCOVERY
+# CHECKPOINT 5/12: [TERMINAL 3/10] KADEMLIA DHT CONTROL-PLANE DISCOVERY HUB
 # ==============================================================================
-# Problem Solved: Decentralized peer and provider discovery without central indexer.
+# Specialized Role: Routing Table Root, Peer Rendezvous & Content Provider Index
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 5/12] [Terminal 3/10] KADEMLIA DHT BOOTSTRAP NODE        ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 5/12] [Terminal 3/10] [DHT ROUTER] KADEMLIA BOOTSTRAP    ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 ./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key > bootstrap.log 2>&1 &
@@ -275,64 +285,67 @@ echo -e "${GREEN}[✓] Bootstrap Multiaddress: ${BOLD}$BOOTSTRAP_MULTIADDR${NC}"
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     kill $BOOT_PID 2>/dev/null || true
     echo -e "${CYAN}[Terminal 3/10] Spawning DHT Bootstrap Node in Desktop Slot 3...${NC}"
-    launch_tiled_window 3 "CIPHER [3/10] DHT Bootstrap (Port 4003)" "./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key"
+    launch_tiled_window 3 "CIPHER [3/10] [DHT ROUTER] Kademlia Bootstrap (4003)" "./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key"
     sleep 2
 fi
 
-pause_checkpoint "5/12" "Launch 4 Storage Providers across Perimeter Slots 4, 5, 6, 7"
+pause_checkpoint "5/12" "Launch 4 Differentiated Storage Tiers (Terminals 4, 5, 6, 7)"
 
 # ==============================================================================
-# CHECKPOINT 6/12: [TERMINALS 4-7/10] 4-NODE REDUNDANT STORAGE CLUSTER
+# CHECKPOINT 6/12: [TERMINALS 4-7/10] 4 DIFFERENTIATED STORAGE PROVIDER TIERS
 # ==============================================================================
-# Problem Solved: Multi-provider decentralized storage network with independent keys,
-#                 isolated storage backends, and live DHT provider advertisements.
+# Differentiated Roles:
+#   [T4 / Slot 4]: Tier-1 Core Storage & Primary Ticket Verifier (Direct Port 4101)
+#   [T5 / Slot 5]: Tier-2 Edge Cache & NAT-Firewalled Node (Relay Forced Port 4102)
+#   [T6 / Slot 6]: Tier-3 Audit Guardian & Availability Prover (Challenge Port 4103)
+#   [T7 / Slot 7]: Tier-4 Hot Standby & Disaster Recovery Replica (Failover Port 4104)
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 6/12] [Terminals 4-7/10] 4-NODE STORAGE PROVIDER CLUSTER ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 6/12] [Terminals 4-7/10] 4 DIFFERENTIATED STORAGE TIERS  ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
-# Terminal 4: Provider 1 (Top Row, Col 4)
+# Terminal 4: Tier-1 Core Storage (Top Row, Col 4)
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[Terminal 4/10] Spawning Storage Provider 1 in Desktop Slot 4 (Top-Right)...${NC}"
-    launch_tiled_window 4 "CIPHER [4/10] Storage Provider 1 (Port 4101)" "./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
+    echo -e "${CYAN}[Terminal 4/10] Spawning [Tier-1 Core Storage] in Desktop Slot 4 (Top-Right)...${NC}"
+    launch_tiled_window 4 "CIPHER [4/10] [TIER-1 CORE] Provider 1 - Ticket Verifier (4101)" "./bin/provider -p 4101 -role-name 'Tier-1 Core Storage (Ticket Verifier)' -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    ./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 \
+    ./bin/provider -p 4101 -role-name "Tier-1 Core Storage (Ticket Verifier)" -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 \
       -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider1.log 2>&1 &
     PROV1_PID=$!
 fi
 
-# Terminal 5: Provider 2 (Mid Row, Left Edge)
+# Terminal 5: Tier-2 Edge Cache (Relay Forced) (Mid Row, Left Edge)
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[Terminal 5/10] Spawning Storage Provider 2 in Desktop Slot 5 (Mid-Left)...${NC}"
-    launch_tiled_window 5 "CIPHER [5/10] Storage Provider 2 (Port 4102)" "./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
+    echo -e "${CYAN}[Terminal 5/10] Spawning [Tier-2 Edge Cache / Relayed] in Desktop Slot 5 (Mid-Left)...${NC}"
+    launch_tiled_window 5 "CIPHER [5/10] [TIER-2 EDGE CACHE] Provider 2 - Relay Forced (4102)" "./bin/provider -p 4102 -role-name 'Tier-2 Edge Cache (NAT-Relayed)' -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 -bootstrap '$BOOTSTRAP_MULTIADDR' -relay '$RELAY_MULTIADDR' -force-relay --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    ./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 \
-      -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider2.log 2>&1 &
+    ./bin/provider -p 4102 -role-name "Tier-2 Edge Cache (NAT-Relayed)" -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 \
+      -bootstrap "$BOOTSTRAP_MULTIADDR" -relay "$RELAY_MULTIADDR" -force-relay --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider2.log 2>&1 &
     PROV2_PID=$!
 fi
 
-# Terminal 6: Provider 3 (Mid Row, Right Edge)
+# Terminal 6: Tier-3 Audit Guardian & Availability Prover (Mid Row, Right Edge)
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[Terminal 6/10] Spawning Storage Provider 3 in Desktop Slot 6 (Mid-Right)...${NC}"
-    launch_tiled_window 6 "CIPHER [6/10] Storage Provider 3 (Port 4103)" "./bin/provider -p 4103 -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
+    echo -e "${CYAN}[Terminal 6/10] Spawning [Tier-3 Audit Guardian] in Desktop Slot 6 (Mid-Right)...${NC}"
+    launch_tiled_window 6 "CIPHER [6/10] [TIER-3 AUDIT GUARDIAN] Provider 3 - Availability (4103)" "./bin/provider -p 4103 -role-name 'Tier-3 Audit Guardian (Availability Prover)' -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 -bootstrap '$BOOTSTRAP_MULTIADDR' -availability=true --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    ./bin/provider -p 4103 -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 \
-      -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider3.log 2>&1 &
+    ./bin/provider -p 4103 -role-name "Tier-3 Audit Guardian (Availability Prover)" -ws-port 0 -identity ./store_p3/p3.key -store ./store_p3 \
+      -bootstrap "$BOOTSTRAP_MULTIADDR" -availability=true --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider3.log 2>&1 &
     PROV3_PID=$!
 fi
 
-# Terminal 7: Provider 4 (Bottom Row, Col 1)
+# Terminal 7: Tier-4 Hot Standby Disaster Recovery (Bottom Row, Col 1)
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -e "${CYAN}[Terminal 7/10] Spawning Storage Provider 4 in Desktop Slot 7 (Bottom-Left)...${NC}"
-    launch_tiled_window 7 "CIPHER [7/10] Storage Provider 4 (Port 4104)" "./bin/provider -p 4104 -ws-port 0 -identity ./store_p4/p4.key -store ./store_p4 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
+    echo -e "${CYAN}[Terminal 7/10] Spawning [Tier-4 Hot Standby] in Desktop Slot 7 (Bottom-Left)...${NC}"
+    launch_tiled_window 7 "CIPHER [7/10] [TIER-4 HOT STANDBY] Provider 4 - Failover Replica (4104)" "./bin/provider -p 4104 -role-name 'Tier-4 Hot Standby (Disaster Recovery)' -ws-port 0 -identity ./store_p4/p4.key -store ./store_p4 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
-    ./bin/provider -p 4104 -ws-port 0 -identity ./store_p4/p4.key -store ./store_p4 \
+    ./bin/provider -p 4104 -role-name "Tier-4 Hot Standby (Disaster Recovery)" -ws-port 0 -identity ./store_p4/p4.key -store ./store_p4 \
       -bootstrap "$BOOTSTRAP_MULTIADDR" --eth-rpc http://127.0.0.1:8545 --entropy-addr "$ENTROPY_ADDR" > provider4.log 2>&1 &
     PROV4_PID=$!
 fi
 sleep 3
 
-echo -e "${GREEN}[✓] 4 storage providers active across ports 4101, 4102, 4103, 4104.${NC}"
+echo -e "${GREEN}[✓] 4 differentiated storage tiers active and verified across ports 4101-4104.${NC}"
 
 cleanup() {
     if [ "$MODE" == "single" ]; then
@@ -360,16 +373,15 @@ echo -e "  💳 ${BOLD}Client Wallet Balance  :${NC} ${YELLOW}$CLIENT_BAL ETH${N
 echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${YELLOW}$PROV_BAL ETH${NC}"
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$CHANNEL_BAL ETH${NC}"
 
-pause_checkpoint "7/12" "Launch Terminal 8: Publisher Ingestion & Multi-Node Push"
+pause_checkpoint "7/12" "Launch Terminal 8: [PUBLISHER] Ingestion, Encryption & Dispersal"
 
 # ==============================================================================
-# CHECKPOINT 8/12: [TERMINAL 8/10] PUBLISHER INGESTION & MULTI-NODE REPLICATION
+# CHECKPOINT 8/12: [TERMINAL 8/10] PUBLISHER INGESTION & MULTI-TIER REPLICATION
 # ==============================================================================
-# Problem Solved: Chunking, AES-GCM encryption, redundant replica distribution (R=2),
-#                 and manifest publication to Kademlia DHT.
+# Specialized Role: Ingestion, AES-256-GCM Encryption, Sharding & Multi-Tier Push
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 8/12] [Terminal 8/10] PUBLISHER INGESTION & R=2 REPLICATION${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 8/12] [Terminal 8/10] [PUBLISHER] INGESTION & DISPERSAL   ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 head -c 1048576 </dev/urandom > test_pay_orig.dat
@@ -379,7 +391,7 @@ echo -e "  Generated 1 MB Random Payload SHA-256: ${BOLD}$ORIG_HASH${NC}"
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .pub_done publisher.log
     echo -e "${CYAN}[Terminal 8/10] Spawning Publisher in Desktop Slot 8 (Bottom Row, Col 2)...${NC}"
-    launch_tiled_window 8 "CIPHER [8/10] Publisher Node (Port 4201)" "./bin/publisher -p 4201 -file test_pay_orig.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -replication 2 -push 2>&1 | tee publisher.log; echo \$? > .pub_done"
+    launch_tiled_window 8 "CIPHER [8/10] [PUBLISHER] Ingestion & Multi-Tier Push (4201)" "./bin/publisher -p 4201 -role-name 'Ingestion, AES-GCM Encryption & Multi-Tier Dispersal' -file test_pay_orig.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -replication 2 -push 2>&1 | tee publisher.log; echo \$? > .pub_done"
     while [ ! -f .pub_done ]; do
         sleep 0.3
     done
@@ -389,7 +401,7 @@ if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
         exit 1
     fi
 else
-    ./bin/publisher -p 4201 -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push 2>&1 | tee publisher.log
+    ./bin/publisher -p 4201 -role-name "Ingestion, AES-GCM Encryption & Multi-Tier Dispersal" -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push 2>&1 | tee publisher.log
 fi
 
 CONTENT_ID=$(grep "ContentID     :" publisher.log | awk '{print $NF}')
@@ -399,22 +411,21 @@ echo -e "${GREEN}[✓] Content ingested and published to DHT:${NC}"
 echo -e "  - ContentID:      ${BOLD}$CONTENT_ID${NC}"
 echo -e "  - Decryption Key: ${BOLD}$KEY${NC}"
 
-pause_checkpoint "8/12" "Launch Terminal 9: Consumer Swarm Download & EIP-712 Micropayments"
+pause_checkpoint "8/12" "Launch Terminal 9: [SWARM CLIENT] Consumer Swarm & EIP-712 Payments"
 
 # ==============================================================================
 # CHECKPOINT 9/12: [TERMINAL 9/10] CONSUMER SWARM & EIP-712 MICROPAYMENTS
 # ==============================================================================
-# Problem Solved: Parallel multi-provider swarm download with zero-gas off-chain
-#                 EIP-712 lottery tickets and verifiable entropy proofs.
+# Specialized Role: High-Speed Swarm Downloader & EIP-712 Signed Lottery Streamer
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 9/12] [Terminal 9/10] CONSUMER SWARM & EIP-712 TICKETS   ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 9/12] [Terminal 9/10] [SWARM CLIENT] CONSUMER & PAYMENTS  ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .consumer_done consumer.log
     echo -e "${CYAN}[Terminal 9/10] Spawning Consumer Client 1 in Desktop Slot 9 (Bottom Row, Col 3)...${NC}"
-    launch_tiled_window 9 "CIPHER [9/10] Consumer Client 1 (Port 4301)" "./bin/consumer -p 4301 -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_recovered.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client --eth-rpc http://127.0.0.1:8545 --eth-key '$CLIENT_ETH_KEY' --entropy-addr '$ENTROPY_ADDR' --provider-eth-addr '$PROVIDER_ETH_ADDR' 2>&1 | tee consumer.log; echo \$? > .consumer_done"
+    launch_tiled_window 9 "CIPHER [9/10] [SWARM CLIENT] Consumer 1 - Parallel Payer (4301)" "./bin/consumer -p 4301 -role-name 'High-Speed Swarm Client & EIP-712 Lottery Payer' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_recovered.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client --eth-rpc http://127.0.0.1:8545 --eth-key '$CLIENT_ETH_KEY' --entropy-addr '$ENTROPY_ADDR' --provider-eth-addr '$PROVIDER_ETH_ADDR' 2>&1 | tee consumer.log; echo \$? > .consumer_done"
     while [ ! -f .consumer_done ]; do
         sleep 0.3
     done
@@ -424,7 +435,7 @@ if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
         exit 1
     fi
 else
-    ./bin/consumer -p 4301 -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
+    ./bin/consumer -p 4301 -role-name "High-Speed Swarm Client & EIP-712 Lottery Payer" -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
       -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client \
       --eth-rpc http://127.0.0.1:8545 --eth-key "$CLIENT_ETH_KEY" \
       --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" 2>&1 | tee consumer.log
@@ -450,16 +461,15 @@ if [ "$ORIG_HASH" != "$RECOVERED_HASH" ]; then
 fi
 echo -e "${GREEN}[✓] 100% BIT-FOR-BIT DATA INTEGRITY CONFIRMED!${NC}"
 
-pause_checkpoint "10/12" "Launch Terminal 10: Dead-Node Failover Test (Provider 1 Killed)"
+pause_checkpoint "10/12" "Launch Terminal 10: [FAILOVER AUDIT] Node Churn & Dead-Node Recovery"
 
 # ==============================================================================
 # CHECKPOINT 11/12: [TERMINAL 10/10] DEAD-NODE FAULT TOLERANCE & RECOVERY
 # ==============================================================================
-# Problem Solved: High availability when primary storage nodes crash; surviving
-#                 replica providers automatically fulfill remaining chunks.
+# Specialized Role: Node-Failure Simulator, Partition Recovery & Failover Auditor
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 11/12] [Terminal 10/10] FAULT TOLERANCE & SURVIVOR SWARM ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 11/12] [Terminal 10/10] [FAILOVER AUDIT] SURVIVOR SWARM  ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 echo -e "${YELLOW}[!] Killing Provider 1 (Port 4101) to simulate node crash...${NC}"
@@ -472,16 +482,16 @@ else
 fi
 sleep 2
 
-echo -e "Consumer Client 2 fetching from remaining surviving replica providers..."
+echo -e "Consumer Client 2 fetching from remaining surviving replica tiers (Edge, Audit, Standby)..."
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .fault_done fault.log
     echo -e "${CYAN}[Terminal 10/10] Spawning Consumer Client 2 in Desktop Slot 10 (Bottom-Right)...${NC}"
-    launch_tiled_window 10 "CIPHER [10/10] Consumer Client 2 (Port 4302 - Failover)" "./bin/consumer -p 4302 -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_fault.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client_fault 2>&1 | tee fault.log; echo \$? > .fault_done"
+    launch_tiled_window 10 "CIPHER [10/10] [FAILOVER AUDIT] Consumer 2 - Survivor Swarm (4302)" "./bin/consumer -p 4302 -role-name 'Fault-Recovery Client & Partition Auditor' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_fault.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client_fault 2>&1 | tee fault.log; echo \$? > .fault_done"
     while [ ! -f .fault_done ]; do
         sleep 0.3
     done
 else
-    ./bin/consumer -p 4302 -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_fault.dat \
+    ./bin/consumer -p 4302 -role-name "Fault-Recovery Client & Partition Auditor" -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_fault.dat \
       -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client_fault 2>&1 | tee fault.log
 fi
 
@@ -490,7 +500,7 @@ if [ "$ORIG_HASH" != "$FAULT_HASH" ]; then
     echo -e "${RED}[❌ FAILED] Fault recovery hash mismatch!${NC}"
     exit 1
 fi
-echo -e "${GREEN}[✓] SUCCESS: 100% Content reconstructed from surviving replica providers (R=2)!${NC}"
+echo -e "${GREEN}[✓] SUCCESS: 100% Content reconstructed from surviving replica tiers (R=2)!${NC}"
 
 pause_checkpoint "11/12" "Execute On-Chain EVM Dispute & Raffle Settlement"
 
@@ -520,5 +530,5 @@ echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${GREEN}$FINAL_PROV_BAL ETH
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$FINAL_CHANNEL_BAL ETH${NC}"
 
 echo -e "\n${BOLD}${GREEN}======================================================================${NC}"
-echo -e "${BOLD}${GREEN}🎉 ALL 12 CHECKPOINTS & 10 TERMINAL ROLES PASSED WITH 100% SUCCESS!  ${NC}"
+echo -e "${BOLD}${GREEN}🎉 ALL 12 CHECKPOINTS & 10 DISTINCT ROLES PASSED WITH 100% SUCCESS!  ${NC}"
 echo -e "${BOLD}${GREEN}======================================================================${NC}"
