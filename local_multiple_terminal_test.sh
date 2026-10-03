@@ -514,6 +514,10 @@ else
 fi
 sleep 2
 
+echo -e "\n${BOLD}[*] 2-3 Clients searching Kademlia DHT for ContentID $CONTENT_ID while Provider 1 is down...${NC}"
+echo -e "${CYAN}[*] Measuring search query pressure, detecting dropped provider, and broadcasting demand alert...${NC}"
+./bin/dht-inspect -bootstrap "$BOOTSTRAP_MULTIADDR" -find-cid "$CONTENT_ID" -track-demand -demand-count 3
+
 echo -e "Consumer Client 3 fetching from remaining surviving replica tiers (Edge, Audit, Standby)..."
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .fault_done fault.log

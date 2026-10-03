@@ -234,6 +234,38 @@ func main() {
 		log.Success("All chunks successfully committed with >= %d replicas across %d remote providers!",
 			effectiveReplication, len(targetPeers))
 
+		fmt.Println("\n+---------------------------------------------------------------------------------------------------------+")
+		fmt.Println("|                                 PUBLISHER DISPERSAL & PLACEMENT TABLE                                   |")
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		fmt.Println("| Storage Provider Peer ID           | Replicas (Qty)| Share (%)   | Volume (KB)   | Status               |")
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		totalReplicas := 0
+		for _, pID := range targetPeers {
+			chunksAssigned := len(plan.ProviderChunks[pID])
+			totalReplicas += chunksAssigned
+			pct := 0.0
+			if len(m.ChunkIDs)*effectiveReplication > 0 {
+				pct = float64(chunksAssigned) / float64(len(m.ChunkIDs)*effectiveReplication) * 100
+			}
+			volKB := float64(chunksAssigned * 32)
+			fmt.Printf("| %-34s | %-13s | %-11s | %-13s | %-20s |\n",
+				pID.String(),
+				fmt.Sprintf("%d chunks", chunksAssigned),
+				fmt.Sprintf("%.1f%%", pct),
+				fmt.Sprintf("%.1f KB", volKB),
+				"COMMITTED [✓]",
+			)
+		}
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		fmt.Printf("| TOTAL CLUSTER REPLICATION (R=%d)    | %-13s | %-11s | %-13s | Invariant: %-10s |\n",
+			effectiveReplication,
+			fmt.Sprintf("%d replicas", totalReplicas),
+			"100.0%",
+			fmt.Sprintf("%.1f KB", float64(totalReplicas*32)),
+			"SATISFIED [✓]",
+		)
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+\n")
+
 		if *challengeProviders && len(targetPeers) > 0 {
 			target := targetPeers[0]
 			log.Sub("Availability").Info("Issuing cryptographic possession challenge to provider %s...", target.String())
