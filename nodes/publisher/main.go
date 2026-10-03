@@ -27,6 +27,7 @@ import (
 	"cipher/network/distribution"
 	"cipher/network/identity"
 	"cipher/network/protocol/chunk"
+	"cipher/network/retrieval"
 	"cipher/network/transport"
 	"cipher/shared/logger"
 
@@ -59,12 +60,13 @@ func main() {
 	challengeInterval := flag.Duration("challenge-interval", 5*time.Second, "Interval between periodic Availability challenges (default: 5s)")
 	challengeRounds := flag.Int("challenge-rounds", 1, "Number of challenge rounds to execute (default: 1; set >1 or use with -challenge-loop)")
 	challengeLoop := flag.Bool("challenge-loop", false, "Continuously challenge providers at -challenge-interval in background")
+	challengeCID := flag.String("challenge-cid", "", "Specific ContentID hex to challenge providers for without re-encrypting")
 	roleName := flag.String("role-name", "Ingestion & Replication Engine", "Human-readable role name for this publisher node")
 
 	flag.Parse()
 
-	if *filePath == "" {
-		log.Fatalf("Error: -file <path> is required to publish content")
+	if *filePath == "" && *challengeCID == "" {
+		log.Fatalf("Error: -file <path> or -challenge-cid <hex> is required")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -131,30 +133,59 @@ func main() {
 	// Register chunk protocol stream handler for initial seeding
 	chunk.NewStreamHandler(h, eng)
 
-	// 5. Ingest Content
-	log.Sub("Ingest").Info("Ingesting source file: %s", *filePath)
-	f, err := os.Open(*filePath)
-	if err != nil {
-		log.Fatalf("Failed to open file for ingest: %v", err)
-	}
-	defer f.Close()
+	// 5. Ingest Content or Resolve Manifest for -challenge-cid
+	var m *manifest.Manifest
+	if *challengeCID != "" {
+		cIDBytes, err := hex.DecodeString(*challengeCID)
+		if err != nil || len(cIDBytes) != 32 {
+			log.Fatalf("Invalid -challenge-cid format (must be 32-byte hex)")
+		}
+		var cid core.ContentID
+		copy(cid[:], cIDBytes)
 
-	m, err := eng.Ingest(ctx, f, manifest.TypeFile)
-	if err != nil {
-		log.Fatalf("Failed to ingest file: %v", err)
+		// Try loading from local engine store first
+		if mBytes, err := store.GetManifestBytes(ctx, cid); err == nil {
+			m, _ = manifest.Deserialize(mBytes)
+		}
+
+		if m == nil {
+			t := transport.NewTransport(h)
+			provs, _ := discovery.FindProviders(ctx, kdht, cid, 16)
+			var pIDs []peer.ID
+			for _, p := range provs {
+				pIDs = append(pIDs, p.ID)
+			}
+			m, err = retrieval.ResolveManifest(ctx, cid, kdht, t, eng, pIDs)
+			if err != nil {
+				log.Fatalf("Failed to resolve manifest for challenge-cid %x: %v", cid, err)
+			}
+		}
+		log.Sub("Availability").Success("Loaded manifest for ContentID: %x (Total Chunks: %d)", m.Descriptor.ID, len(m.ChunkIDs))
+	} else {
+		log.Sub("Ingest").Info("Ingesting source file: %s", *filePath)
+		f, err := os.Open(*filePath)
+		if err != nil {
+			log.Fatalf("Failed to open file for ingest: %v", err)
+		}
+		defer f.Close()
+
+		m, err = eng.Ingest(ctx, f, manifest.TypeFile)
+		if err != nil {
+			log.Fatalf("Failed to ingest file: %v", err)
+		}
+
+		// Persist manifest in engine
+		mBytes, err := m.Serialize()
+		if err != nil {
+			log.Fatalf("Failed to serialize manifest: %v", err)
+		}
+		if err := eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes); err != nil {
+			log.Fatalf("Failed to store manifest: %v", err)
+		}
 	}
 
-	// Persist manifest in engine
-	mBytes, err := m.Serialize()
-	if err != nil {
-		log.Fatalf("Failed to serialize manifest: %v", err)
-	}
-	if err := eng.PutManifestBytes(ctx, m.Descriptor.ID, mBytes); err != nil {
-		log.Fatalf("Failed to store manifest: %v", err)
-	}
-
-	// 6. Execute Remote Push if requested
-	if *push {
+	// 6. Execute Remote Push / Availability Challenges if requested
+	if *push || *challengeProviders {
 		t := transport.NewTransport(h)
 		var targetPeers []peer.ID
 
@@ -228,16 +259,18 @@ func main() {
 			log.Fatalf("Failed to plan chunk placement: %v", err)
 		}
 
-		tracker := distribution.NewGlobalReplicaTracker(effectiveReplication)
-		pushCtx, pushCancel := context.WithTimeout(ctx, *pushTimeout)
-		defer pushCancel()
+		if *push {
+			tracker := distribution.NewGlobalReplicaTracker(effectiveReplication)
+			pushCtx, pushCancel := context.WithTimeout(ctx, *pushTimeout)
+			defer pushCancel()
 
-		if err := distribution.Distribute(pushCtx, t, eng, plan, tracker, distribution.DefaultUploaderConfig); err != nil {
-			log.Fatalf("Push distribution failed to satisfy replication invariant: %v", err)
+			if err := distribution.Distribute(pushCtx, t, eng, plan, tracker, distribution.DefaultUploaderConfig); err != nil {
+				log.Fatalf("Push distribution failed to satisfy replication invariant: %v", err)
+			}
+
+			log.Success("All chunks successfully committed with >= %d replicas across %d remote providers!",
+				effectiveReplication, len(targetPeers))
 		}
-
-		log.Success("All chunks successfully committed with >= %d replicas across %d remote providers!",
-			effectiveReplication, len(targetPeers))
 
 		fmt.Println("\n+---------------------------------------------------------------------------------------------------------+")
 		fmt.Println("|                                 PUBLISHER DISPERSAL & PLACEMENT TABLE                                   |")
@@ -387,9 +420,11 @@ func main() {
 	log.Banner(fmt.Sprintf("CIPHER PUBLISHER: %s", strings.ToUpper(*roleName)), fields...)
 
 
-	if *push || !*seed {
+	if *push || *challengeProviders || !*seed {
 		if *push {
 			log.Info("Remote push complete, exiting.")
+		} else if *challengeProviders {
+			log.Info("Availability challenge audit complete, exiting.")
 		} else {
 			log.Info("Seeding flag is false, exiting publisher.")
 		}
