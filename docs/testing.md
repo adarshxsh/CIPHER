@@ -33,9 +33,10 @@ All test suites and orchestrators run locally across macOS, Linux, and Windows (
 
 ```bash
 # 1. [COMPLETE 13-STEP ORCHESTRATOR] 10-Role Desktop Tiling & Full Pipeline Test
-./local_multiple_terminal_test.sh                  # macOS 10-window desktop tiled layout
-./local_multiple_terminal_test.sh --single --auto   # Universal automated single-terminal mode (Linux/macOS/WSL)
-./local_multiple_terminal_test.sh --single          # Step-by-step checkpoint mode
+./local_multiple_terminal_test.sh --auto            # Option 1: macOS 10-window desktop tiled layout (Automated non-stop)
+./local_multiple_terminal_test.sh                  # Option 2: macOS 10-window desktop tiled layout (Interactive step-by-step)
+./local_multiple_terminal_test.sh --single --auto   # Option 3: Universal single-terminal mode (Automated non-stop CI - Linux, macOS, WSL2)
+./local_multiple_terminal_test.sh --single          # Option 4: Universal single-terminal mode (Interactive step-by-step)
 
 # 2. [MASTER WORKFLOW] Run entire verification pipeline (Solidity + Go Unit + Adversarial Wire + Live Anvil Settlement)
 ./test_workflow.sh

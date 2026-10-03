@@ -87,13 +87,16 @@ All test commands should be executed from the repository root:
 
 ### 1. Complete 13-Checkpoint Architecture Orchestrator
 ```bash
-# Mode A: 10-Window Desktop Tiled Matrix (Interactive step-by-step)
+# Option 1: macOS 10-Window Desktop Tiled Layout (Automated non-stop execution)
+./local_multiple_terminal_test.sh --auto
+
+# Option 2: macOS 10-Window Desktop Tiled Layout (Interactive step-by-step with checkpoints)
 ./local_multiple_terminal_test.sh
 
-# Mode B: Single-Terminal Automated Mode (Headless / Non-stop execution)
+# Option 3: Universal Single-Terminal Mode (Automated non-stop CI)
 ./local_multiple_terminal_test.sh --single --auto
 
-# Mode C: Single-Terminal Step-by-Step Mode (Pauses between checkpoints)
+# Option 4: Universal Single-Terminal Mode (Interactive step-by-step with checkpoints)
 ./local_multiple_terminal_test.sh --single
 ```
 

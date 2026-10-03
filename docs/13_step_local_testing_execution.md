@@ -45,13 +45,16 @@ The test runner [`local_multiple_terminal_test.sh`](../local_multiple_terminal_t
 
 ### Execution Modes
 ```bash
-# Mode A: macOS 10-Window Desktop Tiled Layout (Interactive step-by-step with checkpoints)
+# Option 1: macOS 10-Window Desktop Tiled Layout (Automated non-stop execution)
+./local_multiple_terminal_test.sh --auto
+
+# Option 2: macOS 10-Window Desktop Tiled Layout (Interactive step-by-step with checkpoints)
 ./local_multiple_terminal_test.sh
 
-# Mode B: Single Terminal Headless / CI Pipeline (Automated execution - Linux, macOS, WSL2)
+# Option 3: Universal Single-Terminal Mode (Automated non-stop CI - Linux, macOS, WSL2)
 ./local_multiple_terminal_test.sh --single --auto
 
-# Mode C: Single Terminal Step-by-Step (Pauses at every checkpoint - Universal)
+# Option 4: Universal Single-Terminal Mode (Interactive step-by-step with checkpoints)
 ./local_multiple_terminal_test.sh --single
 ```
 
