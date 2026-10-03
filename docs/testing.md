@@ -9,27 +9,34 @@ This document provides a modern, fast, and structured guide to testing the CIPHE
 All tests can be run locally on your development machine:
 
 ```bash
-# 1. [MASTER WORKFLOW] Run entire verification pipeline (Solidity + Go Unit + Adversarial Wire + Live Anvil Settlement)
+# 1. [COMPLETE 13-STEP ORCHESTRATOR] 10-Role Desktop Tiling & Full Pipeline Test
+./local_multiple_terminal_test.sh                  # Interactive 10-window desktop tiled layout
+./local_multiple_terminal_test.sh --single --auto   # Single terminal automated CI mode
+
+# 2. [MASTER WORKFLOW] Run entire verification pipeline (Solidity + Go Unit + Adversarial Wire + Live Anvil Settlement)
 ./test_workflow.sh
 
-# 2. Run all Go unit, identity, payment, and wire protocol tests
+# 3. Run all Go unit, identity, payment, and wire protocol tests
 go test ./network/...
 
-# 3. Run Foundry Solidity smart contract test suites (46 tests)
+# 4. Run Foundry Solidity smart contract test suites (46 tests)
 (cd payments && forge test)
 
-# 4. Run Live Anvil P2P Transfer & On-Chain Settlement E2E Test
+# 5. Run Live Anvil P2P Transfer & On-Chain Settlement E2E Test
 ./tests/e2e/payment_transfer_anvil_e2e.sh
 
-# 5. Run Remote Ingestion & Multi-Provider Replication Test (3 Providers, R=2, Fault Kill)
+# 6. Run Remote Ingestion & Multi-Provider Replication Test (3 Providers, R=2, Fault Kill)
 ./tests/e2e/remote_push_e2e.sh
 
-# 6. Run Role-Based DHT Swarming Test (Publisher, Provider, Consumer, Bootstrap)
+# 7. Run Role-Based DHT Swarming Test (Publisher, Provider, Consumer, Bootstrap)
 ./tests/e2e/roles_e2e.sh
 
-# 7. Run Provider Persistence & Independence Test
+# 8. Run Provider Persistence & Independence Test
 ./tests/e2e/provider_lifecycle_e2e.sh
 ```
+
+> [!NOTE]
+> For the complete technical breakdown of the 10-node layout and all 13 checkpoints, see the dedicated [13-Step Local Testing Execution Guide](13_step_local_testing_execution.md).
 
 ---
 

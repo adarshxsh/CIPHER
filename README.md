@@ -74,7 +74,11 @@ go build -o bin/relay ./network/cmd/relay
 
 ### 2. Run Tests
 ```bash
-# Run Master Workflow Test (Solidity, Unit, Adversarial, & Live Anvil P2P Settlement)
+# Complete 13-Step 10-Role Architecture Runner (Desktop Tiled or Headless CI)
+./local_multiple_terminal_test.sh                  # Interactive 10-window desktop tiled layout
+./local_multiple_terminal_test.sh --single --auto   # Single terminal automated CI mode
+
+# Master Workflow Test (Solidity, Unit, Adversarial, & Live Anvil P2P Settlement)
 ./test_workflow.sh
 
 # Run all Go unit and cryptographic tests
@@ -92,6 +96,8 @@ go test ./network/...
 # Run Provider Persistence & Independence Test
 ./tests/e2e/provider_lifecycle_e2e.sh
 ```
+
+See [`docs/13_step_local_testing_execution.md`](docs/13_step_local_testing_execution.md) for detailed terminal outputs, logs, and cryptographic explanations across all 13 checkpoints.
 
 ### 3. Running Nodes in Production / Staging
 ```bash
