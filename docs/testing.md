@@ -1,17 +1,30 @@
 # CIPHER Testing Strategy & Quick Start Guide
 
-This document provides a modern, fast, and structured guide to testing the CIPHER decentralized content delivery network. It covers unit testing, adversarial wire testing, automated end-to-end role validation, multi-provider replication, physical multi-laptop setups, and live EVM micropayment settlement on Anvil.
+This document provides a comprehensive technical guide to testing the CIPHER decentralized content delivery network. It covers unit testing, adversarial wire testing, automated end-to-end role validation, multi-provider replication, physical multi-laptop setups, and live EVM micropayment settlement on Anvil.
+
+> [!IMPORTANT]
+> **Notice for Local Testing:**
+> All local multi-terminal testing, role simulations, and verification suites must be executed against the **`local`** branch of the repository:
+> 👉 **[https://github.com/devlup-labs/CIPHER/tree/local](https://github.com/devlup-labs/CIPHER/tree/local)**
+>
+> To clone and prepare the test environment locally (macOS, Linux, Windows WSL2 / Git Bash):
+> ```bash
+> git clone https://github.com/devlup-labs/CIPHER.git
+> cd CIPHER
+> git checkout local
+> ```
 
 ---
 
 ## ⚡ Quick Start: Fast Automated Testing
 
-All tests can be run locally on your development machine:
+All test suites and orchestrators run locally across macOS, Linux, and Windows (WSL2 / Git Bash):
 
 ```bash
 # 1. [COMPLETE 13-STEP ORCHESTRATOR] 10-Role Desktop Tiling & Full Pipeline Test
-./local_multiple_terminal_test.sh                  # Interactive 10-window desktop tiled layout
-./local_multiple_terminal_test.sh --single --auto   # Single terminal automated CI mode
+./local_multiple_terminal_test.sh                  # macOS 10-window desktop tiled layout
+./local_multiple_terminal_test.sh --single --auto   # Universal automated single-terminal mode (Linux/macOS/WSL)
+./local_multiple_terminal_test.sh --single          # Step-by-step checkpoint mode
 
 # 2. [MASTER WORKFLOW] Run entire verification pipeline (Solidity + Go Unit + Adversarial Wire + Live Anvil Settlement)
 ./test_workflow.sh
@@ -44,11 +57,11 @@ go test ./network/...
 
 | Role | Source Path | Responsibilities |
 | :--- | :--- | :--- |
-| **Publisher** | `nodes/publisher/main.go` | Ingests source file, chunks & encrypts via XChaCha20, creates manifest, plans placement, pushes to remote providers via `/cipher/push/1.0.0` with replication $R$, and exits. |
-| **Provider** | `nodes/provider/main.go` | Standalone daemon hosting Content-Addressed Storage (CAS). Accepts uploads, announces to DHT, serves chunks (`/cipher/chunk/1.0.0`), cryptographically verifies EIP-712 payment tickets, and settles rounds on-chain. |
-| **Consumer** | `nodes/consumer/main.go` | Discovers candidate providers via DHT (or direct dial `-d`), resolves manifest, swarms chunks concurrently via worker pool, verifies ciphertext hashes, signs & streams EIP-712 payment tickets, decrypts, and reassembles payload. |
-| **Bootstrap** | `network/cmd/bootstrap/main.go` | Kademlia DHT bootstrap routing node for decentralized provider discovery. |
-| **Relay** | `network/cmd/relay/main.go` | Circuit v2 Relay node for NAT traversal and DCUtR hole punching coordination. |
+| **Publisher** | [`nodes/publisher/main.go`](../nodes/publisher/main.go) | Ingests source file, chunks & encrypts via XChaCha20, creates manifest, plans placement, pushes to remote providers via `/cipher/push/1.0.0` with replication $R$, and exits. |
+| **Provider** | [`nodes/provider/main.go`](../nodes/provider/main.go) | Standalone daemon hosting Content-Addressed Storage (CAS). Accepts uploads, announces to DHT, serves chunks (`/cipher/chunk/1.0.0`), cryptographically verifies EIP-712 payment tickets, and settles rounds on-chain. |
+| **Consumer** | [`nodes/consumer/main.go`](../nodes/consumer/main.go) | Discovers candidate providers via DHT (or direct dial `-d`), resolves manifest, swarms chunks concurrently via worker pool, verifies ciphertext hashes, signs & streams EIP-712 payment tickets, decrypts, and reassembles payload. |
+| **Bootstrap** | [`network/cmd/bootstrap/main.go`](../network/cmd/bootstrap/main.go) | Kademlia DHT bootstrap routing node for decentralized provider discovery. |
+| **Relay** | [`network/cmd/relay/main.go`](../network/cmd/relay/main.go) | Circuit v2 Relay node for NAT traversal and DCUtR hole punching coordination. |
 
 ---
 

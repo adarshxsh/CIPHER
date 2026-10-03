@@ -53,7 +53,48 @@ BLUE="\033[1;34m"
 DIM="\033[2m"
 NC="\033[0m"
 
-MODE="windows" # default to macOS tiled windows
+# ------------------------------------------------------------------------------
+# CROSS-PLATFORM PORTABILITY HELPERS (macOS / Linux / Windows WSL2 & Git Bash)
+# ------------------------------------------------------------------------------
+compute_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        echo "Error: No SHA-256 tool found (install sha256sum, shasum, or openssl)" >&2
+        return 1
+    fi
+}
+
+kill_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        local pids
+        pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || lsof -ti :"$port" 2>/dev/null || true)
+        if [ -n "$pids" ]; then
+            kill -9 $pids 2>/dev/null || true
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -n tcp "$port" >/dev/null 2>&1 || fuser -k "$port"/tcp >/dev/null 2>&1 || true
+    fi
+}
+
+# Operating System Detection
+IS_MACOS=false
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    IS_MACOS=true
+fi
+
+# Mode initialization: on macOS default to desktop tiled windows; on Linux/Windows default to single terminal
+if [ "$IS_MACOS" = true ]; then
+    MODE="windows"
+else
+    MODE="single"
+fi
 INTERACTIVE=true
 
 while [[ $# -gt 0 ]]; do
@@ -96,60 +137,71 @@ pause_checkpoint() {
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
 echo -e "${BOLD}${CYAN}     CIPHER 10-TERMINAL COMPLETE CDN & PAYMENT ORCHESTRATOR           ${NC}"
 echo -e "${BOLD}${CYAN}======================================================================${NC}"
-echo -e "Desktop Perimeter Tiling Layout (Center Reserved for Workspace):"
-echo -e "  +--------------------+--------------------+--------------------+--------------------+"
-echo -e "  | [1] ANVIL EVM      | [2] RELAY V2       | [3] BOOTSTRAP      | [4] TIER-1 CORE    |"
-echo -e "  |     Port 8545      |     Port 4001      |     Port 4003      |     Port 4101      |"
-echo -e "  +--------------------+--------------------+--------------------+--------------------+"
-echo -e "  | [5] TIER-2 EDGE    |                                         | [6] TIER-3 AUDIT   |"
-echo -e "  |     Port 4102      |      [ CENTER DESKTOP WORKSPACE ]       |     Port 4103      |"
-echo -e "  |    (Relay Forced)  |      (Main Controller / Terminal)       |    (Availability)  |"
-echo -e "  +--------------------+                                         +--------------------+"
-echo -e "  | [7] TIER-4 STANDBY | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2/3  |"
-echo -e "  |     Port 4104      |     Port 4201      |     Port 4301      |     Port 4302/4303 |"
-echo -e "  |    (Hot Failover)  |    (Demand Audit)  |    (Honest Swarm)  |    (Fraud Defense) |"
-echo -e "  +--------------------+--------------------+--------------------+--------------------+"
+echo -e "${YELLOW}[!] NOTICE FOR LOCAL TESTING:${NC}"
+echo -e "    Local testing and multi-role simulation must be performed against the"
+echo -e "    ${BOLD}'local'${NC} branch of ${BOLD}devlup-labs/CIPHER${NC}:"
+echo -e "    ${CYAN}https://github.com/devlup-labs/CIPHER/tree/local${NC}"
+echo -e "----------------------------------------------------------------------"
+if [ "$IS_MACOS" = true ] && [ "$MODE" == "windows" ]; then
+    echo -e "Desktop Perimeter Tiling Layout (Center Reserved for Workspace):"
+    echo -e "  +--------------------+--------------------+--------------------+--------------------+"
+    echo -e "  | [1] ANVIL EVM      | [2] RELAY V2       | [3] BOOTSTRAP      | [4] TIER-1 CORE    |"
+    echo -e "  |     Port 8545      |     Port 4001      |     Port 4003      |     Port 4101      |"
+    echo -e "  +--------------------+--------------------+--------------------+--------------------+"
+    echo -e "  | [5] TIER-2 EDGE    |                                         | [6] TIER-3 AUDIT   |"
+    echo -e "  |     Port 4102      |      [ CENTER DESKTOP WORKSPACE ]       |     Port 4103      |"
+    echo -e "  |    (Relay Forced)  |      (Main Controller / Terminal)       |    (Availability)  |"
+    echo -e "  +--------------------+                                         +--------------------+"
+    echo -e "  | [7] TIER-4 STANDBY | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2/3  |"
+    echo -e "  |     Port 4104      |     Port 4201      |     Port 4301      |     Port 4302/4303 |"
+    echo -e "  |    (Hot Failover)  |    (Demand Audit)  |    (Honest Swarm)  |    (Fraud Defense) |"
+    echo -e "  +--------------------+--------------------+--------------------+--------------------+"
+else
+    echo -e "${GREEN}[*] Execution Mode: Single-Terminal Orchestrator (${OSTYPE})${NC}"
+    echo -e "    Spawning background daemons with real-time checkpoint logging & audits."
+fi
 
 # ------------------------------------------------------------------------------
 # WINDOW TILING ENGINE (macOS Terminal.app - 10-Slot Perimeter Layout)
 # ------------------------------------------------------------------------------
-RAW_BOUNDS=$(osascript -e 'tell application "Finder" to get bounds of window of desktop' 2>/dev/null || echo "0, 0, 1710, 1112")
-SCREEN_W=$(echo "$RAW_BOUNDS" | awk -F', ' '{print $3}')
-SCREEN_H=$(echo "$RAW_BOUNDS" | awk -F', ' '{print $4}')
-[ -z "$SCREEN_W" ] || [ "$SCREEN_W" -eq 0 ] && SCREEN_W=1680
-[ -z "$SCREEN_H" ] || [ "$SCREEN_H" -eq 0 ] && SCREEN_H=1050
+if [ "$IS_MACOS" = true ]; then
+    RAW_BOUNDS=$(osascript -e 'tell application "Finder" to get bounds of window of desktop' 2>/dev/null || echo "0, 0, 1710, 1112")
+    SCREEN_W=$(echo "$RAW_BOUNDS" | awk -F', ' '{print $3}')
+    SCREEN_H=$(echo "$RAW_BOUNDS" | awk -F', ' '{print $4}')
+    [ -z "$SCREEN_W" ] || [ "$SCREEN_W" -eq 0 ] && SCREEN_W=1680
+    [ -z "$SCREEN_H" ] || [ "$SCREEN_H" -eq 0 ] && SCREEN_H=1050
 
-TOP_BAR=30
-BOTTOM_MARGIN=60
-USABLE_H=$((SCREEN_H - TOP_BAR - BOTTOM_MARGIN))
-USABLE_W=$SCREEN_W
+    TOP_BAR=30
+    BOTTOM_MARGIN=60
+    USABLE_H=$((SCREEN_H - TOP_BAR - BOTTOM_MARGIN))
+    USABLE_W=$SCREEN_W
 
-COL_W=$((USABLE_W / 4))
-ROW_H=$((USABLE_H / 3))
+    COL_W=$((USABLE_W / 4))
+    ROW_H=$((USABLE_H / 3))
 
-launch_tiled_window() {
-    local slot="$1" # 1 to 10
-    local title="$2"
-    local cmd="$3"
+    launch_tiled_window() {
+        local slot="$1" # 1 to 10
+        local title="$2"
+        local cmd="$3"
 
-    local x1 y1 x2 y2
-    case $slot in
-        # Top Row (Slots 1-4)
-        1) x1=0; y1=$TOP_BAR; x2=$COL_W; y2=$((TOP_BAR + ROW_H)) ;;
-        2) x1=$COL_W; y1=$TOP_BAR; x2=$((2 * COL_W)); y2=$((TOP_BAR + ROW_H)) ;;
-        3) x1=$((2 * COL_W)); y1=$TOP_BAR; x2=$((3 * COL_W)); y2=$((TOP_BAR + ROW_H)) ;;
-        4) x1=$((3 * COL_W)); y1=$TOP_BAR; x2=$USABLE_W; y2=$((TOP_BAR + ROW_H)) ;;
-        # Middle Row: Left Edge (Slot 5), Center Empty, Right Edge (Slot 6)
-        5) x1=0; y1=$((TOP_BAR + ROW_H)); x2=$COL_W; y2=$((TOP_BAR + 2 * ROW_H)) ;;
-        6) x1=$((3 * COL_W)); y1=$((TOP_BAR + ROW_H)); x2=$USABLE_W; y2=$((TOP_BAR + 2 * ROW_H)) ;;
-        # Bottom Row (Slots 7-10)
-        7) x1=0; y1=$((TOP_BAR + 2 * ROW_H)); x2=$COL_W; y2=$((TOP_BAR + 3 * ROW_H)) ;;
-        8) x1=$COL_W; y1=$((TOP_BAR + 2 * ROW_H)); x2=$((2 * COL_W)); y2=$((TOP_BAR + 3 * ROW_H)) ;;
-        9) x1=$((2 * COL_W)); y1=$((TOP_BAR + 2 * ROW_H)); x2=$((3 * COL_W)); y2=$((TOP_BAR + 3 * ROW_H)) ;;
-        10) x1=$((3 * COL_W)); y1=$((TOP_BAR + 2 * ROW_H)); x2=$USABLE_W; y2=$((TOP_BAR + 3 * ROW_H)) ;;
-    esac
+        local x1 y1 x2 y2
+        case $slot in
+            # Top Row (Slots 1-4)
+            1) x1=0; y1=$TOP_BAR; x2=$COL_W; y2=$((TOP_BAR + ROW_H)) ;;
+            2) x1=$COL_W; y1=$TOP_BAR; x2=$((2 * COL_W)); y2=$((TOP_BAR + ROW_H)) ;;
+            3) x1=$((2 * COL_W)); y1=$TOP_BAR; x2=$((3 * COL_W)); y2=$((TOP_BAR + ROW_H)) ;;
+            4) x1=$((3 * COL_W)); y1=$TOP_BAR; x2=$USABLE_W; y2=$((TOP_BAR + ROW_H)) ;;
+            # Middle Row: Left Edge (Slot 5), Center Empty, Right Edge (Slot 6)
+            5) x1=0; y1=$((TOP_BAR + ROW_H)); x2=$COL_W; y2=$((TOP_BAR + 2 * ROW_H)) ;;
+            6) x1=$((3 * COL_W)); y1=$((TOP_BAR + ROW_H)); x2=$USABLE_W; y2=$((TOP_BAR + 2 * ROW_H)) ;;
+            # Bottom Row (Slots 7-10)
+            7) x1=0; y1=$((TOP_BAR + 2 * ROW_H)); x2=$COL_W; y2=$((TOP_BAR + 3 * ROW_H)) ;;
+            8) x1=$COL_W; y1=$((TOP_BAR + 2 * ROW_H)); x2=$((2 * COL_W)); y2=$((TOP_BAR + 3 * ROW_H)) ;;
+            9) x1=$((2 * COL_W)); y1=$((TOP_BAR + 2 * ROW_H)); x2=$((3 * COL_W)); y2=$((TOP_BAR + 3 * ROW_H)) ;;
+            10) x1=$((3 * COL_W)); y1=$((TOP_BAR + 2 * ROW_H)); x2=$USABLE_W; y2=$((TOP_BAR + 3 * ROW_H)) ;;
+        esac
 
-    osascript <<EOF >/dev/null 2>&1
+        osascript <<EOF >/dev/null 2>&1
 tell application "Terminal"
     set newTab to do script "cd \"$ROOT\" && $cmd"
     set targetWin to first window whose tabs contains newTab
@@ -157,7 +209,8 @@ tell application "Terminal"
     set custom title of targetWin to "$title"
 end tell
 EOF
-}
+    }
+fi
 
 # ==============================================================================
 # CHECKPOINT 1/13: CRYPTOGRAPHIC INTEGRITY & COMPILED BINARIES
@@ -201,10 +254,7 @@ echo -e "\n${BOLD}${MAGENTA}====================================================
 echo -e "${BOLD}${MAGENTA} [CHECKPOINT 2/13] PROCESS ISOLATION & CLEAN NETWORK STATE            ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 for p in 8545 4001 4003 4101 4102 4103 4104 4201 4301 4302 4303; do
-    if lsof -ti tcp:$p -sTCP:LISTEN >/dev/null 2>&1; then
-        echo -e "${YELLOW}[!] Cleaning existing process on port $p...${NC}"
-        kill -9 $(lsof -ti tcp:$p -sTCP:LISTEN) 2>/dev/null || true
-    fi
+    kill_port "$p"
 done
 echo -e "${GREEN}[✓] Clean network slate verified across all 10 CDN ports.${NC}"
 
@@ -392,7 +442,7 @@ echo -e "${BOLD}${MAGENTA} [CHECKPOINT 8/13] [Terminal 8/10] PUBLISHER INGESTION
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 head -c 1048576 </dev/urandom > test_pay_orig.dat
-ORIG_HASH=$(shasum -a 256 test_pay_orig.dat | awk '{print $1}')
+ORIG_HASH=$(compute_sha256 test_pay_orig.dat)
 echo -e "  Generated 1 MB Random Payload SHA-256: ${BOLD}$ORIG_HASH${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
@@ -452,7 +502,7 @@ else
       --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" 2>&1 | tee consumer.log
 fi
 
-RECOVERED_HASH=$(shasum -a 256 test_pay_recovered.dat | awk '{print $1}')
+RECOVERED_HASH=$(compute_sha256 test_pay_recovered.dat)
 echo -e "  Original Payload SHA-256 : ${BOLD}$ORIG_HASH${NC}"
 echo -e "  Downloaded File  SHA-256 : ${BOLD}$RECOVERED_HASH${NC}"
 
@@ -510,9 +560,7 @@ echo -e "${YELLOW}[!] Killing Provider 1 (Port 4101) to simulate node crash...${
 if [ "$MODE" == "single" ]; then
     kill $PROV1_PID 2>/dev/null || true
 else
-    if lsof -ti tcp:4101 -sTCP:LISTEN >/dev/null 2>&1; then
-        kill -9 $(lsof -ti tcp:4101 -sTCP:LISTEN) 2>/dev/null || true
-    fi
+    kill_port 4101
 fi
 sleep 2
 
@@ -533,7 +581,7 @@ else
       -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client_fault 2>&1 | tee fault.log
 fi
 
-FAULT_HASH=$(shasum -a 256 test_pay_fault.dat | awk '{print $1}')
+FAULT_HASH=$(compute_sha256 test_pay_fault.dat)
 if [ "$ORIG_HASH" != "$FAULT_HASH" ]; then
     echo -e "${RED}[❌ FAILED] Fault recovery hash mismatch!${NC}"
     exit 1

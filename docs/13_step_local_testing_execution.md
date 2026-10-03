@@ -1,12 +1,28 @@
 # CIPHER: 13-Step Local Testing & Architecture Execution Guide
 
-This document specifies the end-to-end local test orchestration for the CIPHER decentralized content delivery network (CDN) and probabilistic micropayment architecture. It details the 10-node perimeter tiling matrix, role differentiation, cryptographic verification phases, and live terminal outputs across all 13 checkpoints executed by [`local_multiple_terminal_test.sh`](file:///Users/adarsh/Projects/devlup/SOC/CIPHER/local_multiple_terminal_test.sh).
+This document specifies the end-to-end local test orchestration for the CIPHER decentralized content delivery network (CDN) and probabilistic micropayment architecture. It details the 10-node perimeter tiling matrix, role differentiation, cryptographic verification phases, and live terminal outputs across all 13 checkpoints executed by [`local_multiple_terminal_test.sh`](../local_multiple_terminal_test.sh).
+
+> [!IMPORTANT]
+> **Notice for Local Testing:**
+> All local multi-terminal testing, role simulations, and verification suites must be executed against the **`local`** branch of the repository:
+> 👉 **[https://github.com/devlup-labs/CIPHER/tree/local](https://github.com/devlup-labs/CIPHER/tree/local)**
+>
+> To clone and prepare the test environment locally:
+> ```bash
+> git clone https://github.com/devlup-labs/CIPHER.git
+> cd CIPHER
+> git checkout local
+> ```
 
 ---
 
-## 1. Desktop Perimeter Tiling Matrix
+## 1. Desktop Perimeter Tiling Matrix & Cross-Platform Execution
 
-When executed on macOS (`Terminal.app`), the test orchestrator tiles 10 specialized terminal windows around the perimeter of the screen, reserving the center area for the primary workspace and orchestration controller:
+The test runner [`local_multiple_terminal_test.sh`](../local_multiple_terminal_test.sh) is engineered to run seamlessly across **macOS**, **Linux** (Ubuntu/Debian/Fedora/Arch), and **Windows** (WSL2 / Git Bash / MSYS2).
+
+### Operating System Support
+* **macOS**: Spawns 10 dedicated `Terminal.app` windows tiled around the screen perimeter (leaving the center area clear for the controller/IDE).
+* **Linux / Windows (WSL2 / Git Bash)**: Automatically runs in unified single-terminal mode (`--single`), orchestrating all 10 background daemons with full real-time checkpoint logging and cryptographic audits.
 
 ```text
 +---------------------+---------------------+---------------------+---------------------+
@@ -27,13 +43,13 @@ When executed on macOS (`Terminal.app`), the test orchestrator tiles 10 speciali
 
 ### Execution Modes
 ```bash
-# Mode A: 10-Window Desktop Tiled Layout (Interactive step-by-step with checkpoints)
+# Mode A: macOS 10-Window Desktop Tiled Layout (Interactive step-by-step with checkpoints)
 ./local_multiple_terminal_test.sh
 
-# Mode B: Single Terminal Headless / CI Pipeline (Automated execution)
+# Mode B: Single Terminal Headless / CI Pipeline (Automated execution - Linux, macOS, WSL2)
 ./local_multiple_terminal_test.sh --single --auto
 
-# Mode C: Single Terminal Step-by-Step (Pauses at every checkpoint)
+# Mode C: Single Terminal Step-by-Step (Pauses at every checkpoint - Universal)
 ./local_multiple_terminal_test.sh --single
 ```
 

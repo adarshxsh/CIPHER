@@ -62,6 +62,17 @@ CIPHER/
 
 ## Quick Start
 
+> [!IMPORTANT]
+> **Notice for Local Testing:**
+> Local multi-terminal testing, role simulations, and verification suites must be executed against the **`local`** branch of the repository:
+> 👉 **[https://github.com/devlup-labs/CIPHER/tree/local](https://github.com/devlup-labs/CIPHER/tree/local)**
+>
+> ```bash
+> git clone https://github.com/devlup-labs/CIPHER.git
+> cd CIPHER
+> git checkout local
+> ```
+
 ### 1. Build Binaries
 ```bash
 # Build all nodes and network services
@@ -74,9 +85,9 @@ go build -o bin/relay ./network/cmd/relay
 
 ### 2. Run Tests
 ```bash
-# Complete 13-Step 10-Role Architecture Runner (Desktop Tiled or Headless CI)
-./local_multiple_terminal_test.sh                  # Interactive 10-window desktop tiled layout
-./local_multiple_terminal_test.sh --single --auto   # Single terminal automated CI mode
+# Complete 13-Step 10-Role Architecture Runner (Desktop Tiled or Universal Single Terminal)
+./local_multiple_terminal_test.sh                  # macOS 10-window desktop tiled layout
+./local_multiple_terminal_test.sh --single --auto   # Universal automated single-terminal mode (Linux, macOS, WSL2)
 
 # Master Workflow Test (Solidity, Unit, Adversarial, & Live Anvil P2P Settlement)
 ./test_workflow.sh
