@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	interfaces "cipher/availability/escrow-payment/interfaces"
+	payment "cipher/availability/escrow-payment/payment"
 	availabilitytypes "cipher/availability/availability-contracts/types"
 	verification "cipher/availability/availability-contracts/verification"
 	"cipher/integration/availability"
@@ -54,6 +56,9 @@ func main() {
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
 	challengeProviders := flag.Bool("challenge", false, "Issue Availability challenge against remote providers after push")
+	challengeInterval := flag.Duration("challenge-interval", 5*time.Second, "Interval between periodic Availability challenges (default: 5s)")
+	challengeRounds := flag.Int("challenge-rounds", 1, "Number of challenge rounds to execute (default: 1; set >1 or use with -challenge-loop)")
+	challengeLoop := flag.Bool("challenge-loop", false, "Continuously challenge providers at -challenge-interval in background")
 	roleName := flag.String("role-name", "Ingestion & Replication Engine", "Human-readable role name for this publisher node")
 
 	flag.Parse()
@@ -267,39 +272,89 @@ func main() {
 		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+\n")
 
 		if *challengeProviders && len(targetPeers) > 0 {
-			target := targetPeers[0]
-			log.Sub("Availability").Info("Issuing cryptographic possession challenge to provider %s...", target.String())
+			log.Sub("Availability").Info("Starting Availability challenge engine (Interval: %v, Rounds: %d, Continuous Loop: %t)...",
+				*challengeInterval, *challengeRounds, *challengeLoop)
 
-			var rawChunks [][]byte
-			for _, cid := range m.ChunkIDs {
-				if ch, err := store.GetChunk(ctx, cid); err == nil {
-					rawChunks = append(rawChunks, ch.Data)
-				}
+			leafHashes := make([][]byte, len(m.ChunkIDs))
+			for i, cid := range m.ChunkIDs {
+				leafHashes[i] = make([]byte, 32)
+				copy(leafHashes[i], cid[:])
 			}
 
-			tree, err := availability.BuildMerkleTreeFromChunks(rawChunks)
+			tree, err := availability.NewMerkleTree(leafHashes)
 			if err == nil {
 				merkleRoot := tree.Root()
 				client := availability.NewAvailabilityClient(h)
-				challenge := availabilitytypes.Challenge{
-					ChallengeID: "challenge-pub-001",
-					ContractID:  "avail-pub-contract",
-					ProviderID:  target.String(),
-					FileID:      hex.EncodeToString(m.Descriptor.ID[:]),
-					ChunkID:     0,
-					Nonce:       []byte("pub-entropy-nonce-999"),
-					CreatedAt:   time.Now().UTC(),
-				}
 
-				resp, err := client.ChallengeProvider(ctx, target, challenge)
-				if err != nil {
-					log.Sub("Availability").Warn("Challenge request failed: %v", err)
-				} else {
-					valid := verification.VerifyMerkleProof(resp.ChunkHash, challenge.ChunkID, resp.MerkleProof, merkleRoot)
-					if valid {
-						log.Sub("Availability").Success("Provider verified chunk possession (Merkle Proof PASS for chunk %d)", challenge.ChunkID)
-					} else {
-						log.Sub("Availability").Error("Merkle proof verification failed!")
+				round := 1
+				for {
+					if !*challengeLoop && round > *challengeRounds {
+						break
+					}
+
+					for _, target := range targetPeers {
+						assignedChunks := plan.ProviderChunks[target]
+						chunkIdx := 0
+						if len(assignedChunks) > 0 {
+							targetChunkID := assignedChunks[(round-1)%len(assignedChunks)]
+							for idx, cid := range m.ChunkIDs {
+								if cid == targetChunkID {
+									chunkIdx = idx
+									break
+								}
+							}
+						}
+
+						challenge := availabilitytypes.Challenge{
+							ChallengeID: availabilitytypes.ChallengeID(fmt.Sprintf("challenge-pub-round-%d-%s", round, target.String()[:8])),
+							ContractID:  "avail-pub-contract",
+							ProviderID:  target.String(),
+							FileID:      hex.EncodeToString(m.Descriptor.ID[:]),
+							ChunkID:     chunkIdx,
+							Nonce:       []byte(fmt.Sprintf("pub-entropy-nonce-r%d-%d", round, time.Now().UnixNano())),
+							CreatedAt:   time.Now().UTC(),
+						}
+
+						log.Sub("Availability").Info("[Round %d] Challenging provider %s for chunk %d...", round, target.String()[:12], challenge.ChunkID)
+						resp, err := client.ChallengeProvider(ctx, target, challenge)
+						if err != nil {
+							log.Sub("Availability").Warn("[Round %d] Challenge request failed on %s: %v", round, target.String()[:12], err)
+						} else {
+							valid := verification.VerifyMerkleProof(resp.ChunkHash, challenge.ChunkID, resp.MerkleProof, merkleRoot)
+							if valid {
+								log.Sub("Availability").Success("[Round %d] Provider %s verified chunk possession (Merkle Proof PASS for chunk %d)", round, target.String()[:12], challenge.ChunkID)
+
+								// Construct and dispatch optimistic cumulative payment voucher
+								cumulativePay := uint64(round) * 25000000000000000 // 0.025 ETH per verified challenge period
+								voucher := payment.PaymentState{
+									ContractID:         "avail-pub-contract",
+									Publisher:          h.ID().String(),
+									Provider:           target.String(),
+									Sequence:           uint64(round),
+									Period:             uint64(round),
+									CumulativePayment:  cumulativePay,
+									LastChallengeID:    string(challenge.ChallengeID),
+									ValidUntil:         uint64(time.Now().Add(24 * time.Hour).Unix()),
+									Status:             interfaces.AvailabilityPass,
+									PublisherSignature: []byte("publisher-signed-voucher-state"),
+								}
+
+								if err := client.SendPaymentVoucher(ctx, target, voucher); err != nil {
+									log.Sub("Payment").Warn("[Round %d] Failed to send payment voucher to %s: %v", round, target.String()[:12], err)
+								} else {
+									log.Sub("Payment").Success("[Round %d] Dispatched Optimistic Payment Voucher to %s (Seq: %d, Cumulative: %d wei)",
+										round, target.String()[:12], voucher.Sequence, voucher.CumulativePayment)
+								}
+							} else {
+								log.Sub("Availability").Error("[Round %d] Merkle proof verification failed for provider %s!", round, target.String()[:12])
+							}
+						}
+					}
+
+					round++
+					if *challengeLoop || round <= *challengeRounds {
+						log.Sub("Availability").Info("Waiting %v for next 5-second challenge round...", *challengeInterval)
+						time.Sleep(*challengeInterval)
 					}
 				}
 			}
