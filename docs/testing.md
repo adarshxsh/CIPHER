@@ -16,6 +16,17 @@ This document provides a comprehensive technical guide to testing the CIPHER dec
 
 ---
 
+## 📖 Dedicated Platform Guides
+
+Detailed installation instructions, system permissions, external dependencies, and OS-specific run commands are available in dedicated platform guides:
+
+* 🌐 **[General Architecture & Verification Strategy](testing/general.md)**
+* 🪟 **[Windows Testing Guide (WSL2 / Git Bash)](testing/windows.md)**
+* 🐧 **[Linux Testing Guide (Ubuntu, Debian, Fedora, Arch)](testing/linux.md)**
+* 🍏 **[macOS Testing Guide (Apple Silicon & Intel)](testing/mac.md)**
+
+---
+
 ## ⚡ Quick Start: Fast Automated Testing
 
 All test suites and orchestrators run locally across macOS, Linux, and Windows (WSL2 / Git Bash):

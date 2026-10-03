@@ -21,8 +21,10 @@ This document specifies the end-to-end local test orchestration for the CIPHER d
 The test runner [`local_multiple_terminal_test.sh`](../local_multiple_terminal_test.sh) is engineered to run seamlessly across **macOS**, **Linux** (Ubuntu/Debian/Fedora/Arch), and **Windows** (WSL2 / Git Bash / MSYS2).
 
 ### Operating System Support
-* **macOS**: Spawns 10 dedicated `Terminal.app` windows tiled around the screen perimeter (leaving the center area clear for the controller/IDE).
-* **Linux / Windows (WSL2 / Git Bash)**: Automatically runs in unified single-terminal mode (`--single`), orchestrating all 10 background daemons with full real-time checkpoint logging and cryptographic audits.
+* **macOS**: Spawns 10 dedicated `Terminal.app` windows tiled around the screen perimeter (see [macOS Testing Guide](testing/mac.md)).
+* **Linux**: Automatically runs in unified single-terminal background orchestrator mode (see [Linux Testing Guide](testing/linux.md)).
+* **Windows (WSL2 / Git Bash)**: Automatically runs in unified single-terminal background orchestrator mode (see [Windows Testing Guide](testing/windows.md)).
+* **General Architecture & Verification Strategy**: See [General Testing Guide](testing/general.md).
 
 ```text
 +---------------------+---------------------+---------------------+---------------------+
