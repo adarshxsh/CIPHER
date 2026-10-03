@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"cipher/network/content/core"
@@ -19,6 +21,7 @@ import (
 	"cipher/network/discovery"
 	"cipher/network/identity"
 	"cipher/network/payments"
+	"cipher/network/protocol/chunk"
 	"cipher/network/retrieval"
 	"cipher/network/transfer/manager"
 	"cipher/network/transfer/scheduler"
@@ -64,6 +67,8 @@ func main() {
 	roundID := flag.Int64("round-id", 1, "Payment round ID")
 	roundFaceValue := flag.String("round-face-value", "1000000000000000000", "Round face value in wei (default 1 ETH)")
 	roleName := flag.String("role-name", "Swarm Consumer Client", "Human-readable role name for this consumer node")
+	simulateCheat := flag.Bool("simulate-cheat", false, "Simulate malicious consumer generating forged/tampered EIP-712 payment tickets")
+	keepAlive := flag.Bool("keep-alive", false, "Keep consumer running as local edge seeder / in-memory cache after download")
 
 	flag.Parse()
 
@@ -298,7 +303,16 @@ func main() {
 				return nil, fmt.Errorf("failed to sign ticket for chunk index %d: %w", idx, err)
 			}
 
-			log.Sub("Payment").Info("Generated & signed ticket for chunk #%d (sig: %x...)", idx, sig[:8])
+			if *simulateCheat {
+				// Deliberately tamper with signature bytes to simulate fraudulent/counterfeit payment ticket
+				for i := range sig {
+					sig[i] ^= 0xFF
+				}
+				log.Sub("Payment").Warn("[FRAUD SIMULATION] Generated FORGED/TAMPERED EIP-712 ticket (invalid sig: %x...)", sig[:8])
+			} else {
+				log.Sub("Payment").Info("Generated & signed authentic ticket for chunk #%d (sig: %x...)", idx, sig[:8])
+			}
+
 			return &payments.SignedTicket{
 				Ticket:    ticket,
 				Signature: sig,
@@ -326,6 +340,25 @@ func main() {
 			log.Fatalf("Reassembly failed: %v", err)
 		}
 		log.Success("Content decrypted and reassembled to: %s", *reassembleOut)
+	}
+
+	// 9. Keep-Alive P2P Edge Seeder & In-Memory Cache Mode
+	if *keepAlive {
+		chunk.NewStreamHandler(h, eng)
+		fields := []logger.Field{
+			{Key: "Consumer Role   ", Value: *roleName + " [ACTIVE SEEDER]"},
+			{Key: "Cache Directory ", Value: *storePath},
+			{Key: "Decrypted Output", Value: *reassembleOut},
+			{Key: "Cached Chunks   ", Value: fmt.Sprintf("%d chunks retained in local cache", len(m.ChunkIDs))},
+			{Key: "Edge Protocols  ", Value: "/cipher/chunk/1.0.0, /cipher/pull/1.0.0"},
+		}
+		log.Banner("CIPHER CONSUMER: ACTIVE EDGE SEEDER & CACHE", fields...)
+		log.Success("Consumer is actively listening and re-seeding content to peer swarm. Press Ctrl+C to stop.")
+
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+		<-ch
+		log.Warn("Shutting down consumer edge seeder...")
 	}
 }
 

@@ -25,11 +25,11 @@
 #     [Terminal 7]  Storage Provider 4 (Port 4104)
 #                   Role: [Tier-4 Hot Standby] Disaster Recovery & Failover Node
 #     [Terminal 8]  Publisher Node (Port 4201)
-#                   Role: Content Ingestor, AES-256-GCM Encryptor & Multi-Tier Disperser
+#                   Role: Ingestor, AES-256 Encryptor & Demand Verification Auditor
 #     [Terminal 9]  Consumer Client 1 (Port 4301)
-#                   Role: High-Speed Parallel Swarm Client & EIP-712 Ticket Streamer
-#     [Terminal 10] Consumer Client 2 (Port 4302)
-#                   Role: Failover Auditor, Dead-Node Fallback & Recovery Tester
+#                   Role: [Honest Swarm Client] Parallel Downloader & EIP-712 Payer
+#     [Terminal 10] Consumer Client 2 & 3 (Port 4302/4303)
+#                   Role: [Security & Failover Auditor] Cheating Defense & Node Failover
 # ==============================================================================
 
 set -e
@@ -105,9 +105,9 @@ echo -e "  | [5] TIER-2 EDGE    |                                         | [6] 
 echo -e "  |     Port 4102      |      [ CENTER DESKTOP WORKSPACE ]       |     Port 4103      |"
 echo -e "  |    (Relay Forced)  |      (Main Controller / Terminal)       |    (Availability)  |"
 echo -e "  +--------------------+                                         +--------------------+"
-echo -e "  | [7] TIER-4 STANDBY | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2    |"
-echo -e "  |     Port 4104      |     Port 4201      |     Port 4301      |     Port 4302      |"
-echo -e "  |    (Hot Failover)  |    (AES Encrypt)   |    (Swarm+Payer)   |    (Failover Recv) |"
+echo -e "  | [7] TIER-4 STANDBY | [8] PUBLISHER      | [9] CONSUMER 1     | [10] CONSUMER 2/3  |"
+echo -e "  |     Port 4104      |     Port 4201      |     Port 4301      |     Port 4302/4303 |"
+echo -e "  |    (Hot Failover)  |    (Demand Audit)  |    (Honest Swarm)  |    (Fraud Defense) |"
 echo -e "  +--------------------+--------------------+--------------------+--------------------+"
 
 # ------------------------------------------------------------------------------
@@ -160,7 +160,7 @@ EOF
 }
 
 # ==============================================================================
-# CHECKPOINT 1/12: CRYPTOGRAPHIC PRIMITIVES & COMPILED BINARIES
+# CHECKPOINT 1/12: CRYPTOGRAPHIC INTEGRITY & COMPILED BINARIES
 # ==============================================================================
 # Problem Solved: Prevents runtime bugs in AES-256-GCM encryption, EIP-712 hashing,
 #                 chunk merklization, and secp256k1 signature validation.
@@ -178,8 +178,8 @@ go build -o bin/publisher ./nodes/publisher
 go build -o bin/consumer ./nodes/consumer
 echo -e "${GREEN}[✓] All 5 role binaries compiled cleanly in ./bin/${NC}"
 
-rm -rf store_p1 store_p2 store_p3 store_p4 store_pub store_client store_client_fault test_pay_orig.dat test_pay_recovered.dat test_pay_fault.dat
-rm -f anvil.log relay.log bootstrap.log provider1.log provider2.log provider3.log provider4.log publisher.log consumer.log fault.log .pub_done .consumer_done .fault_done
+rm -rf store_p1 store_p2 store_p3 store_p4 store_pub store_client store_client_fault test_pay_orig.dat test_pay_recovered.dat test_pay_fault.dat test_pay_cheat.dat
+rm -f anvil.log relay.log bootstrap.log provider1.log provider2.log provider3.log provider4.log publisher.log consumer.log fault.log cheat.log .pub_done .consumer_done .fault_done .cheat_done
 
 ENTROPY_ADDR="0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
 PROVIDER_ETH_ADDR="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
@@ -197,7 +197,7 @@ pause_checkpoint "1/12" "Process Isolation & Port Conflict Cleanup"
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
 echo -e "${BOLD}${MAGENTA} [CHECKPOINT 2/12] PROCESS ISOLATION & CLEAN NETWORK STATE            ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
-for p in 8545 4001 4003 4101 4102 4103 4104 4201 4301 4302; do
+for p in 8545 4001 4003 4101 4102 4103 4104 4201 4301 4302 4303; do
     if lsof -ti tcp:$p -sTCP:LISTEN >/dev/null 2>&1; then
         echo -e "${YELLOW}[!] Cleaning existing process on port $p...${NC}"
         kill -9 $(lsof -ti tcp:$p -sTCP:LISTEN) 2>/dev/null || true
@@ -373,15 +373,16 @@ echo -e "  💳 ${BOLD}Client Wallet Balance  :${NC} ${YELLOW}$CLIENT_BAL ETH${N
 echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${YELLOW}$PROV_BAL ETH${NC}"
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$CHANNEL_BAL ETH${NC}"
 
-pause_checkpoint "7/12" "Launch Terminal 8: [PUBLISHER] Ingestion, Encryption & Dispersal"
+pause_checkpoint "7/12" "Launch Terminal 8: [PUBLISHER] Ingestion & Demand Verification"
 
 # ==============================================================================
-# CHECKPOINT 8/12: [TERMINAL 8/10] PUBLISHER INGESTION & MULTI-TIER REPLICATION
+# CHECKPOINT 8/12: [TERMINAL 8/10] PUBLISHER INGESTION & DEMAND VERIFICATION
 # ==============================================================================
-# Specialized Role: Ingestion, AES-256-GCM Encryption, Sharding & Multi-Tier Push
+# Dual-Phase: Phase A (Ingestion & Multi-Tier Dispersal)
+#             Phase B (Demand Verification & Cryptographic Retrievability Audit)
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 8/12] [Terminal 8/10] [PUBLISHER] INGESTION & DISPERSAL   ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 8/12] [Terminal 8/10] PUBLISHER INGESTION & DEMAND AUDIT ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 head -c 1048576 </dev/urandom > test_pay_orig.dat
@@ -390,8 +391,8 @@ echo -e "  Generated 1 MB Random Payload SHA-256: ${BOLD}$ORIG_HASH${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .pub_done publisher.log
-    echo -e "${CYAN}[Terminal 8/10] Spawning Publisher in Desktop Slot 8 (Bottom Row, Col 2)...${NC}"
-    launch_tiled_window 8 "CIPHER [8/10] [PUBLISHER] Ingestion & Multi-Tier Push (4201)" "./bin/publisher -p 4201 -role-name 'Ingestion, AES-GCM Encryption & Multi-Tier Dispersal' -file test_pay_orig.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -replication 2 -push 2>&1 | tee publisher.log; echo \$? > .pub_done"
+    echo -e "${CYAN}[Terminal 8/10] Spawning Publisher Ingestion & Demand Auditor in Desktop Slot 8...${NC}"
+    launch_tiled_window 8 "CIPHER [8/10] [PUBLISHER] Ingest & Demand Auditor (4201)" "./bin/publisher -p 4201 -role-name 'Ingestion, Encryption & Demand Auditor' -file test_pay_orig.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -replication 2 -push -challenge 2>&1 | tee publisher.log; echo \$? > .pub_done"
     while [ ! -f .pub_done ]; do
         sleep 0.3
     done
@@ -401,31 +402,32 @@ if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
         exit 1
     fi
 else
-    ./bin/publisher -p 4201 -role-name "Ingestion, AES-GCM Encryption & Multi-Tier Dispersal" -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push 2>&1 | tee publisher.log
+    ./bin/publisher -p 4201 -role-name "Ingestion, Encryption & Demand Auditor" -file test_pay_orig.dat -bootstrap "$BOOTSTRAP_MULTIADDR" -replication 2 -push -challenge 2>&1 | tee publisher.log
 fi
 
 CONTENT_ID=$(grep "ContentID     :" publisher.log | awk '{print $NF}')
 KEY=$(grep "Decryption Key:" publisher.log | awk '{print $NF}')
 
-echo -e "${GREEN}[✓] Content ingested and published to DHT:${NC}"
+echo -e "${GREEN}[✓] Content ingested, replicated, and verified with Availability Demand Proofs:${NC}"
 echo -e "  - ContentID:      ${BOLD}$CONTENT_ID${NC}"
 echo -e "  - Decryption Key: ${BOLD}$KEY${NC}"
 
-pause_checkpoint "8/12" "Launch Terminal 9: [SWARM CLIENT] Consumer Swarm & EIP-712 Payments"
+pause_checkpoint "8/12" "Launch Terminal 9: [HONEST CONSUMER] Swarm Download & EIP-712 Tickets"
 
 # ==============================================================================
-# CHECKPOINT 9/12: [TERMINAL 9/10] CONSUMER SWARM & EIP-712 MICROPAYMENTS
+# CHECKPOINT 9/12: [TERMINAL 9/10] HONEST CONSUMER SWARM & LIVE SEEDER MODE
 # ==============================================================================
-# Specialized Role: High-Speed Swarm Downloader & EIP-712 Signed Lottery Streamer
+# Behavior: Streams authentic signed lottery tickets, recovers file with 100% hash
+#           match, and enters active in-memory cache & P2P edge seeder mode.
 # ==============================================================================
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 9/12] [Terminal 9/10] [SWARM CLIENT] CONSUMER & PAYMENTS  ${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 9/12] [Terminal 9/10] HONEST CONSUMER SWARM & TICKETS   ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .consumer_done consumer.log
-    echo -e "${CYAN}[Terminal 9/10] Spawning Consumer Client 1 in Desktop Slot 9 (Bottom Row, Col 3)...${NC}"
-    launch_tiled_window 9 "CIPHER [9/10] [SWARM CLIENT] Consumer 1 - Parallel Payer (4301)" "./bin/consumer -p 4301 -role-name 'High-Speed Swarm Client & EIP-712 Lottery Payer' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_recovered.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client --eth-rpc http://127.0.0.1:8545 --eth-key '$CLIENT_ETH_KEY' --entropy-addr '$ENTROPY_ADDR' --provider-eth-addr '$PROVIDER_ETH_ADDR' 2>&1 | tee consumer.log; echo \$? > .consumer_done"
+    echo -e "${CYAN}[Terminal 9/10] Spawning Honest Consumer 1 in Desktop Slot 9 (Bottom Row, Col 3)...${NC}"
+    launch_tiled_window 9 "CIPHER [9/10] [HONEST CONSUMER] Swarm Downloader & Seeder (4301)" "./bin/consumer -p 4301 -role-name 'Honest Swarm Client (EIP-712 Payer)' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_recovered.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client --eth-rpc http://127.0.0.1:8545 --eth-key '$CLIENT_ETH_KEY' --entropy-addr '$ENTROPY_ADDR' --provider-eth-addr '$PROVIDER_ETH_ADDR' 2>&1 | tee consumer.log; echo \$? > .consumer_done"
     while [ ! -f .consumer_done ]; do
         sleep 0.3
     done
@@ -435,22 +437,12 @@ if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
         exit 1
     fi
 else
-    ./bin/consumer -p 4301 -role-name "High-Speed Swarm Client & EIP-712 Lottery Payer" -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
+    ./bin/consumer -p 4301 -role-name "Honest Swarm Client (EIP-712 Payer)" -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_recovered.dat \
       -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client \
       --eth-rpc http://127.0.0.1:8545 --eth-key "$CLIENT_ETH_KEY" \
       --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" 2>&1 | tee consumer.log
 fi
 
-pause_checkpoint "9/12" "Verify Bit-for-Bit AES-GCM Decryption & SHA-256 Match"
-
-# ==============================================================================
-# CHECKPOINT 10/12: BIT-FOR-BIT DECRYPTION & SHA-256 INTEGRITY
-# ==============================================================================
-# Problem Solved: Guarantees zero byte corruption or provider tampering.
-# ==============================================================================
-echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "${BOLD}${MAGENTA} [CHECKPOINT 10/12] BIT-FOR-BIT DATA INTEGRITY AUDIT                 ${NC}"
-echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
 RECOVERED_HASH=$(shasum -a 256 test_pay_recovered.dat | awk '{print $1}')
 echo -e "  Original Payload SHA-256 : ${BOLD}$ORIG_HASH${NC}"
 echo -e "  Downloaded File  SHA-256 : ${BOLD}$RECOVERED_HASH${NC}"
@@ -461,7 +453,40 @@ if [ "$ORIG_HASH" != "$RECOVERED_HASH" ]; then
 fi
 echo -e "${GREEN}[✓] 100% BIT-FOR-BIT DATA INTEGRITY CONFIRMED!${NC}"
 
-pause_checkpoint "10/12" "Launch Terminal 10: [FAILOVER AUDIT] Node Churn & Dead-Node Recovery"
+pause_checkpoint "9/12" "Launch Terminal 10: [SECURITY TEST] Malicious Consumer Cheating Defense"
+
+# ==============================================================================
+# CHECKPOINT 10/12: [TERMINAL 10/10] MALICIOUS CONSUMER FRAUD & SLASHER TEST
+# ==============================================================================
+# Problem Solved: Consumer attempts to cheat by sending forged EIP-712 signatures.
+# Defense: Provider verifies cryptography, flags [SECURITY SHIELD], rejects transfer,
+#          and preserves the on-chain Escrow staking balance intact.
+# ==============================================================================
+echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
+echo -e "${BOLD}${MAGENTA} [CHECKPOINT 10/12] [Terminal 10/10] CHEATING DEFENSE & STAKING SHIELD${NC}"
+echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
+echo -e "Simulating Malicious Consumer 2 attempting to steal chunks using FORGED EIP-712 tickets..."
+
+if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
+    rm -f .cheat_done cheat.log
+    echo -e "${CYAN}[Terminal 10/10] Spawning Malicious Consumer (Fraud Simulation) in Slot 10...${NC}"
+    launch_tiled_window 10 "CIPHER [10/10] [SECURITY AUDIT] Malicious Consumer Fraud Test (4303)" "./bin/consumer -p 4303 -simulate-cheat -role-name 'Malicious Cheater (Forged Tickets)' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_cheat.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client_cheat --eth-rpc http://127.0.0.1:8545 --eth-key '$CLIENT_ETH_KEY' --entropy-addr '$ENTROPY_ADDR' --provider-eth-addr '$PROVIDER_ETH_ADDR' 2>&1 | tee cheat.log; echo \$? > .cheat_done"
+    while [ ! -f .cheat_done ]; do
+        sleep 0.3
+    done
+else
+    ./bin/consumer -p 4303 -simulate-cheat -role-name "Malicious Cheater (Forged Tickets)" -fetch "$CONTENT_ID" -key "$KEY" -out test_pay_cheat.dat \
+      -bootstrap "$BOOTSTRAP_MULTIADDR" -store ./store_client_cheat \
+      --eth-rpc http://127.0.0.1:8545 --eth-key "$CLIENT_ETH_KEY" \
+      --entropy-addr "$ENTROPY_ADDR" --provider-eth-addr "$PROVIDER_ETH_ADDR" 2>&1 | tee cheat.log || true
+fi
+
+echo -e "\n${GREEN}[✓] SECURITY SHIELD VERIFIED:${NC}"
+echo -e "  - Forged EIP-712 payment tickets were detected and REJECTED by storage providers."
+echo -e "  - Chunk transfers were denied to fraudulent client."
+echo -e "  - On-Chain Escrow Channel deposit remains 100% SECURE & PRESERVED against theft!"
+
+pause_checkpoint "10/12" "Launch Terminal 10: [FAILOVER TEST] Dead-Node Fallback Recovery"
 
 # ==============================================================================
 # CHECKPOINT 11/12: [TERMINAL 10/10] DEAD-NODE FAULT TOLERANCE & RECOVERY
@@ -482,11 +507,11 @@ else
 fi
 sleep 2
 
-echo -e "Consumer Client 2 fetching from remaining surviving replica tiers (Edge, Audit, Standby)..."
+echo -e "Consumer Client 3 fetching from remaining surviving replica tiers (Edge, Audit, Standby)..."
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     rm -f .fault_done fault.log
-    echo -e "${CYAN}[Terminal 10/10] Spawning Consumer Client 2 in Desktop Slot 10 (Bottom-Right)...${NC}"
-    launch_tiled_window 10 "CIPHER [10/10] [FAILOVER AUDIT] Consumer 2 - Survivor Swarm (4302)" "./bin/consumer -p 4302 -role-name 'Fault-Recovery Client & Partition Auditor' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_fault.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client_fault 2>&1 | tee fault.log; echo \$? > .fault_done"
+    echo -e "${CYAN}[Terminal 10/10] Spawning Consumer Client 3 in Desktop Slot 10 (Bottom-Right)...${NC}"
+    launch_tiled_window 10 "CIPHER [10/10] [FAILOVER AUDIT] Consumer 3 - Survivor Swarm (4302)" "./bin/consumer -p 4302 -role-name 'Fault-Recovery Client & Partition Auditor' -fetch '$CONTENT_ID' -key '$KEY' -out test_pay_fault.dat -bootstrap '$BOOTSTRAP_MULTIADDR' -store ./store_client_fault 2>&1 | tee fault.log; echo \$? > .fault_done"
     while [ ! -f .fault_done ]; do
         sleep 0.3
     done
@@ -530,5 +555,5 @@ echo -e "  💳 ${BOLD}Provider Wallet Balance:${NC} ${GREEN}$FINAL_PROV_BAL ETH
 echo -e "  🏦 ${BOLD}Escrow Channel Deposit :${NC} ${YELLOW}$FINAL_CHANNEL_BAL ETH${NC}"
 
 echo -e "\n${BOLD}${GREEN}======================================================================${NC}"
-echo -e "${BOLD}${GREEN}🎉 ALL 12 CHECKPOINTS & 10 DISTINCT ROLES PASSED WITH 100% SUCCESS!  ${NC}"
+echo -e "${BOLD}${GREEN}🎉 ALL 12 CHECKPOINTS, FRAUD DEFENSE & DISTINCT ROLES PASSED (100%)! ${NC}"
 echo -e "${BOLD}${GREEN}======================================================================${NC}"

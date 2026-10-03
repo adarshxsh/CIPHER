@@ -157,11 +157,12 @@ func main() {
 			defer ticketsMu.Unlock()
 
 			if !verifierSigner.Verify(ticket.Ticket, ticket.Signature, ticket.Ticket.Sender) {
+				log.Sub("Payment").Error("[SECURITY SHIELD] REJECTED FRAUDULENT TICKET from %s! Forged EIP-712 signature detected. Chunk transfer DENIED.", ticket.Ticket.Sender.Hex())
 				return fmt.Errorf("invalid ticket signature from %s", ticket.Ticket.Sender.Hex())
 			}
 
 			storedTickets = append(storedTickets, ticket)
-			log.Sub("Payment").Success("Received valid ticket #%d (Chunk Index %s, Value %s wei, from %s)",
+			log.Sub("Payment").Success("Received & verified authentic ticket #%d (Chunk #%s, Value %s wei, from %s)",
 				len(storedTickets), ticket.Ticket.LocalIndex.String(), ticket.Ticket.FaceValue.String(), ticket.Ticket.Sender.Hex())
 			return nil
 		})
