@@ -94,6 +94,15 @@ CLIENT_ETH_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
 CLIENT_ETH_KEY="5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
 CHANNEL_CONTRACT_ADDR="0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
 
+launch_window() {
+    local cmd="$1"
+    osascript <<EOF >/dev/null 2>&1
+tell application "Terminal"
+    do script "cd \"$ROOT\" && $cmd"
+end tell
+EOF
+}
+
 # ------------------------------------------------------------------------------
 # SECTION 1: LAUNCH ALWAYS-RUNNING DAEMONS
 # ------------------------------------------------------------------------------
@@ -110,7 +119,7 @@ sleep 1
 
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${CYAN}[1/4] Spawning Anvil EVM in Terminal window...${NC}"
-    osascript -e "tell application \"Terminal\" to do script \"cd '$ROOT' && echo -e '\\033[1;33m=== ANVIL EVM NODE (PORT 8545) ===\\033[0m' && anvil --port 8545\""
+    launch_window "anvil --port 8545"
 else
     echo -e "${CYAN}[1/4] Starting Anvil EVM node in background...${NC}"
     anvil --port 8545 --silent > anvil.log 2>&1 &
@@ -149,14 +158,14 @@ if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     # Kill background bootstrap and spawn in terminal window with same key
     kill $BOOT_PID 2>/dev/null || true
     echo -e "\n${CYAN}[2/4] Spawning DHT Bootstrap Node in Terminal window...${NC}"
-    osascript -e "tell application \"Terminal\" to do script \"cd '$ROOT' && ./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key\""
+    launch_window "./bin/bootstrap -p 4003 -ws-port 0 -identity ./store_pub/boot.key"
     sleep 2
 fi
 
 # 4. Storage Provider 1
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${CYAN}[3/4] Spawning Storage Provider 1 in Terminal window...${NC}"
-    osascript -e "tell application \"Terminal\" to do script \"cd '$ROOT' && ./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'\""
+    launch_window "./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
     echo -e "${CYAN}[3/4] Starting Storage Provider 1 in background...${NC}"
     ./bin/provider -p 4101 -ws-port 0 -identity ./store_p1/p1.key -store ./store_p1 \
@@ -167,7 +176,7 @@ fi
 # 5. Storage Provider 2
 if [ "$MODE" == "windows" ] && [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${CYAN}[4/4] Spawning Storage Provider 2 in Terminal window...${NC}"
-    osascript -e "tell application \"Terminal\" to do script \"cd '$ROOT' && ./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'\""
+    launch_window "./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 -bootstrap '$BOOTSTRAP_MULTIADDR' --eth-rpc http://127.0.0.1:8545 --entropy-addr '$ENTROPY_ADDR'"
 else
     echo -e "${CYAN}[4/4] Starting Storage Provider 2 in background...${NC}"
     ./bin/provider -p 4102 -ws-port 0 -identity ./store_p2/p2.key -store ./store_p2 \
@@ -176,8 +185,8 @@ else
 fi
 sleep 3
 
-
 echo -e "\n${GREEN}${BOLD}[✓] ALL 4 DAEMON SERVICES ARE RUNNING!${NC}"
+
 
 cleanup() {
     if [ "$MODE" == "single" ]; then
