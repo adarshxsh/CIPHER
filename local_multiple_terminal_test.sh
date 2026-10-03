@@ -168,7 +168,7 @@ EOF
 echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
 echo -e "${BOLD}${MAGENTA} [CHECKPOINT 1/12] CRYPTOGRAPHIC INTEGRITY & COMPILED BINARIES        ${NC}"
 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
-echo -e "  ${DIM}Compiling 5 specialized node binaries...${NC}"
+echo -e "  ${DIM}Compiling 6 specialized node & inspector binaries...${NC}"
 
 mkdir -p bin
 go build -o bin/bootstrap ./network/cmd/bootstrap
@@ -176,7 +176,8 @@ go build -o bin/relay ./network/cmd/relay
 go build -o bin/provider ./nodes/provider
 go build -o bin/publisher ./nodes/publisher
 go build -o bin/consumer ./nodes/consumer
-echo -e "${GREEN}[✓] All 5 role binaries compiled cleanly in ./bin/${NC}"
+go build -o bin/dht-inspect ./network/cmd/dht_inspect
+echo -e "${GREEN}[✓] All 6 binaries (including Kademlia DHT Inspector) compiled cleanly in ./bin/${NC}"
 
 rm -rf store_p1 store_p2 store_p3 store_p4 store_pub store_client store_client_fault test_pay_orig.dat test_pay_recovered.dat test_pay_fault.dat test_pay_cheat.dat
 rm -f anvil.log relay.log bootstrap.log provider1.log provider2.log provider3.log provider4.log publisher.log consumer.log fault.log cheat.log .pub_done .consumer_done .fault_done .cheat_done
@@ -347,6 +348,9 @@ sleep 3
 
 echo -e "${GREEN}[✓] 4 differentiated storage tiers active and verified across ports 4101-4104.${NC}"
 
+echo -e "\n${BOLD}[*] Auditing Kademlia DHT Control-Plane Routing Table & Storage Registrations...${NC}"
+./bin/dht-inspect -bootstrap "$BOOTSTRAP_MULTIADDR" -list-providers
+
 cleanup() {
     if [ "$MODE" == "single" ]; then
         echo -e "\nCleaning up background daemons..."
@@ -411,6 +415,9 @@ KEY=$(grep "Decryption Key:" publisher.log | awk '{print $NF}')
 echo -e "${GREEN}[✓] Content ingested, replicated, and verified with Availability Demand Proofs:${NC}"
 echo -e "  - ContentID:      ${BOLD}$CONTENT_ID${NC}"
 echo -e "  - Decryption Key: ${BOLD}$KEY${NC}"
+
+echo -e "\n${BOLD}[*] Auditing Kademlia DHT Content Provider Index for ContentID $CONTENT_ID...${NC}"
+./bin/dht-inspect -bootstrap "$BOOTSTRAP_MULTIADDR" -find-cid "$CONTENT_ID"
 
 pause_checkpoint "8/12" "Launch Terminal 9: [HONEST CONSUMER] Swarm Download & EIP-712 Tickets"
 
