@@ -10,6 +10,16 @@
 
 set -e
 
+# Disable Git Bash MSYS automatic POSIX-to-Windows path conversion for multiaddrs
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
+# Windows vs POSIX executable suffix
+EXE=""
+if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* || "$OSTYPE" == "win32"* ]]; then
+    EXE=".exe"
+fi
+
 # Azure Infrastructure Coordinates
 AZURE_IP="20.197.30.171"
 PEER_ID="12D3KooWCgREq4x7bCdpDuXpY8rk6ABrkz7pZEfR7ZSCK6s4Lwk9"
@@ -34,8 +44,9 @@ case "$ROLE" in
     echo "    Store:     $STORE"
     echo "    Bootstrap: $BOOTSTRAP"
     echo "======================================================================"
-    go build -o bin/provider ./nodes/provider
-    exec ./bin/provider -p "$PORT" -store "$STORE" \
+    go build -o "bin/provider${EXE}" ./nodes/provider
+    chmod +x "bin/provider${EXE}" 2>/dev/null || true
+    exec "./bin/provider${EXE}" -p "$PORT" -store "$STORE" \
       -bootstrap "$BOOTSTRAP" \
       -relay "$RELAY" \
       --eth-rpc "$ETH_RPC" \
@@ -59,8 +70,9 @@ case "$ROLE" in
     echo "    File:      $FILE"
     echo "    Bootstrap: $BOOTSTRAP"
     echo "======================================================================"
-    go build -o bin/publisher ./nodes/publisher
-    ./bin/publisher -file "$FILE" -replication 2 -push \
+    go build -o "bin/publisher${EXE}" ./nodes/publisher
+    chmod +x "bin/publisher${EXE}" 2>/dev/null || true
+    "./bin/publisher${EXE}" -file "$FILE" -replication 2 -push \
       -bootstrap "$BOOTSTRAP" \
       -relay "$RELAY"
     ;;
@@ -80,8 +92,9 @@ case "$ROLE" in
     echo "    Output:    $OUT"
     echo "    Bootstrap: $BOOTSTRAP"
     echo "======================================================================"
-    go build -o bin/consumer ./nodes/consumer
-    ./bin/consumer -fetch "$CID" -key "$KEY" -out "$OUT" \
+    go build -o "bin/consumer${EXE}" ./nodes/consumer
+    chmod +x "bin/consumer${EXE}" 2>/dev/null || true
+    "./bin/consumer${EXE}" -fetch "$CID" -key "$KEY" -out "$OUT" \
       -bootstrap "$BOOTSTRAP" \
       -relay "$RELAY" \
       --eth-rpc "$ETH_RPC" \
