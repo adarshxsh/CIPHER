@@ -17,7 +17,7 @@ import (
 func main() {
 	port := flag.Int("p", 4003, "Port for the bootstrap node (TCP)")
 	wsPort := flag.Int("ws-port", 0, "Port for the bootstrap node (WebSocket, 0 to disable)")
-	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	identityPath := flag.String("identity", "config/identity/bootstrap.key", "Path to bootstrap identity key file (optional)")
 	flag.Parse()
 
 	log := logger.Bootstrap

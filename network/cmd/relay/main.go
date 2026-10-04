@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	identityPath := flag.String("identity", "config/identity/relay.key", "Path to relay identity key file (optional)")
 	flag.Parse()
 
 	golog.SetLogLevel("relay", "warn")
