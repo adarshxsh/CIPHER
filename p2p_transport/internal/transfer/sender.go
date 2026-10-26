@@ -30,38 +30,26 @@ func Send(s network.Stream, filePath string) error {
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	// 1. Calculate Full SHA-256 Checksum
-	log.Printf("Calculating SHA-256 for %s...", info.Name())
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return fmt.Errorf("failed to hash file: %w", err)
-	}
-
-	var checksum [32]byte
-	copy(checksum[:], hasher.Sum(nil))
-
-	// Rewind file for sending
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to rewind file: %w", err)
-	}
-
-	// 2. Construct and Write Header
+	// 1. Construct and Write Header (Checksum placeholder set to zero array)
 	header := &Header{
 		Version:  ProtocolVersion1,
 		Type:     MsgTypeFileTransfer,
 		Filename: filepath.Base(filePath),
 		FileSize: uint64(info.Size()),
-		Checksum: checksum,
+		Checksum: [32]byte{},
 	}
 
 	if err := header.WriteTo(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
-	// 3. Send Data with Progress Tracking
+	// 2. Send Data in Single Pass with Concurrent In-Stream Hashing
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
 
 	startTime := time.Now()
+
+	hasher := sha256.New()
+	mw := io.MultiWriter(s, hasher)
 
 	// Create a progress reader
 	pr := &progressReader{
@@ -70,9 +58,21 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	written, err := io.Copy(mw, pr)
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
+	}
+
+	if uint64(written) != header.FileSize {
+		return fmt.Errorf("sent size mismatch: expected %d, got %d", header.FileSize, written)
+	}
+
+	// 3. Append 32-byte Trailer SHA-256 Checksum
+	var trailerChecksum [32]byte
+	copy(trailerChecksum[:], hasher.Sum(nil))
+
+	if _, err := s.Write(trailerChecksum[:]); err != nil {
+		return fmt.Errorf("failed to write trailer checksum: %w", err)
 	}
 
 	duration := time.Since(startTime)
