@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -19,23 +20,64 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport     *transport.Transport
+	Engine        *engine.ContentEngine
+	MaxAttempts   int
+	BaseBackoff   time.Duration
+	MaxBackoff    time.Duration
+	QueueCapacity int
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
 	return &Scheduler{
-		Transport:   t,
-		Engine:      eng,
-		MaxAttempts: maxAttempts,
+		Transport:     t,
+		Engine:        eng,
+		MaxAttempts:   maxAttempts,
+		BaseBackoff:   10 * time.Millisecond,
+		MaxBackoff:    1 * time.Second,
+		QueueCapacity: DefaultQueueCapacity,
 	}
 }
 
+func (s *Scheduler) getBackoff(attempts int) time.Duration {
+	base := s.BaseBackoff
+	if base <= 0 {
+		base = 10 * time.Millisecond
+	}
+	maxB := s.MaxBackoff
+	if maxB <= 0 {
+		maxB = 1 * time.Second
+	}
+
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	shift := uint(attempts - 1)
+	if shift > 30 {
+		shift = 30
+	}
+	backoff := base * (1 << shift)
+	if backoff > maxB || backoff <= 0 {
+		backoff = maxB
+	}
+	return backoff
+}
+
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
+	capacity := s.QueueCapacity
+	if capacity <= 0 {
+		capacity = DefaultQueueCapacity
+	}
+
+	queue := NewChunkQueueWithCapacity(tasks, capacity)
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
-	
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
@@ -48,16 +90,19 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
 			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			select {
+			case <-ctx.Done():
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			}
 		}(source, client)
 	}
-	
+
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
-	
+
 	pendingTasks := len(tasks)
-	
+
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
@@ -68,7 +113,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					activeWorkers--
 					continue
 				}
-				
+
 				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
 				if errors.Is(res.Error, chunk.ErrRemoteChunkNotFound) {
 					if res.Task.MissedPeers == nil {
@@ -77,7 +122,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					res.Task.MissedPeers[res.PeerID] = true
 
 					if len(res.Task.MissedPeers) < len(sources) {
-						queue.Push(res.Task)
+						if err := queue.PushCtx(ctx, res.Task); err != nil {
+							return err
+						}
 						continue
 					}
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
@@ -86,21 +133,35 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				// Real network / integrity error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+					backoff := s.getBackoff(res.Task.Attempts)
+					go func(t ChunkTask, delay time.Duration) {
+						timer := time.NewTimer(delay)
+						defer timer.Stop()
+						select {
+						case <-ctx.Done():
+							return
+						case <-timer.C:
+							_ = queue.PushCtx(ctx, t)
+						}
+					}(res.Task, backoff)
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
 			} else {
 				// Success
-				completions <- res
-				pendingTasks--
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case completions <- res:
+					pendingTasks--
+				}
 			}
 		}
 	}
-	
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
-	
+
 	return nil
 }
