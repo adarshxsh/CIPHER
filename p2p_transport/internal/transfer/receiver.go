@@ -8,11 +8,23 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
 )
+
+// sanitizeFilename cleans and extracts the base filename to prevent path traversal.
+func sanitizeFilename(name string) (string, error) {
+	// Normalize backslashes to forward slashes for cross-platform separator handling
+	cleaned := strings.ReplaceAll(name, "\\", "/")
+	base := filepath.Base(cleaned)
+	if base == "." || base == ".." || base == "/" || base == "" || strings.TrimSpace(base) == "" {
+		return "", fmt.Errorf("invalid filename: %q", name)
+	}
+	return base, nil
+}
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
@@ -32,14 +44,19 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
+	sanitizedFilename, err := sanitizeFilename(header.Filename)
+	if err != nil {
+		return fmt.Errorf("invalid target filename: %w", err)
+	}
+
 	// 2. Setup Downloads Directory
 	downloadsDir := "downloads"
 	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
-	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
+	outPath := filepath.Join(downloadsDir, sanitizedFilename)
+	log.Printf("Receiving: %s (%.2f MB) into %s", sanitizedFilename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
 	if err != nil {
