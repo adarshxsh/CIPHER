@@ -11,7 +11,20 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
+
+	"cipher/internal/protocol/chunk"
 )
+
+type timeoutWriter struct {
+	s network.Stream
+}
+
+func (tw *timeoutWriter) Write(p []byte) (int, error) {
+	if tw.s != nil {
+		_ = tw.s.SetWriteDeadline(time.Now().Add(chunk.DefaultWriteTimeout))
+	}
+	return tw.s.Write(p)
+}
 
 // Send transfers a file to the remote peer over the provided stream.
 func Send(s network.Stream, filePath string) error {
@@ -45,7 +58,7 @@ func Send(s network.Stream, filePath string) error {
 		return fmt.Errorf("failed to rewind file: %w", err)
 	}
 
-	// 2. Construct and Write Header
+	// 2. Construct and Write Header with Write Deadline
 	header := &Header{
 		Version:  ProtocolVersion1,
 		Type:     MsgTypeFileTransfer,
@@ -54,11 +67,15 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
+	if err := s.SetWriteDeadline(time.Now().Add(chunk.DefaultWriteTimeout)); err != nil {
+		return fmt.Errorf("failed to set write deadline for header: %w", err)
+	}
+
 	if err := header.WriteTo(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
-	// 3. Send Data with Progress Tracking
+	// 3. Send Data with Progress Tracking and Write Deadlines
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
 
 	startTime := time.Now()
@@ -70,7 +87,8 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	tw := &timeoutWriter{s: s}
+	written, err := io.Copy(tw, pr)
 	if err != nil {
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
@@ -93,6 +111,7 @@ func Send(s network.Stream, filePath string) error {
 }
 
 type progressReader struct {
+	s     network.Stream
 	r     io.Reader
 	total uint64
 	read  uint64
@@ -100,6 +119,9 @@ type progressReader struct {
 }
 
 func (pr *progressReader) Read(p []byte) (n int, err error) {
+	if pr.s != nil {
+		_ = pr.s.SetReadDeadline(time.Now().Add(chunk.DefaultReadTimeout))
+	}
 	n, err = pr.r.Read(p)
 	pr.read += uint64(n)
 

@@ -12,9 +12,9 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
-)
 
-// This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+	"cipher/internal/protocol/chunk"
+)
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
@@ -22,7 +22,11 @@ func Receive(s network.Stream) error {
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
-	// 1. Read Header
+	// 1. Read Header with deadline
+	if err := s.SetReadDeadline(time.Now().Add(chunk.DefaultReadTimeout)); err != nil {
+		return fmt.Errorf("failed to set read deadline for header: %w", err)
+	}
+
 	var header Header
 	if err := header.ReadFrom(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
@@ -49,11 +53,12 @@ func Receive(s network.Stream) error {
 
 	startTime := time.Now()
 
-	// 3. Receive Data with Progress Tracking and Hashing
+	// 3. Receive Data with Progress Tracking, Hashing, and Read Deadlines
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
 	pr := &progressReader{
+		s:     s,
 		r:     io.LimitReader(s, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,

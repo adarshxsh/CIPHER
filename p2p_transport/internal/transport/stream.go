@@ -13,6 +13,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 
 	"cipher/internal/protocol"
+	"cipher/internal/protocol/chunk"
 	"cipher/internal/transfer"
 )
 
@@ -84,6 +85,16 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 	s, err := t.host.NewStream(streamCtx, target, pid)
 	if err != nil {
 		return nil, fmt.Errorf("NewStream failed: %w", err)
+	}
+
+	now := time.Now()
+	if err := s.SetReadDeadline(now.Add(chunk.DefaultReadTimeout)); err != nil {
+		s.Reset()
+		return nil, fmt.Errorf("failed to set stream read deadline: %w", err)
+	}
+	if err := s.SetWriteDeadline(now.Add(chunk.DefaultWriteTimeout)); err != nil {
+		s.Reset()
+		return nil, fmt.Errorf("failed to set stream write deadline: %w", err)
 	}
 
 	return s, nil

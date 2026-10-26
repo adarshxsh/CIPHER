@@ -1,5 +1,15 @@
 package chunk
 
+import "time"
+
+const (
+	// DefaultReadTimeout is the standard read deadline duration for stream operations.
+	DefaultReadTimeout = 30 * time.Second
+
+	// DefaultWriteTimeout is the standard write deadline duration for stream operations.
+	DefaultWriteTimeout = 15 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
