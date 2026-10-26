@@ -4,18 +4,49 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 )
 
+// PublicAddressFilter filters out non-public multiaddresses (loopback, RFC1918 private, link-local).
+func PublicAddressFilter(addrs []ma.Multiaddr) []ma.Multiaddr {
+	var filtered []ma.Multiaddr
+	for _, a := range addrs {
+		if manet.IsPublicAddr(a) {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
 // NewDHT creates and returns a Kademlia DHT bound to the given host.
-// mode should be dht.ModeServer for peers (they help route/store records too,
-// matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+// In public swarm mode, it configures standard Kad-DHT security filters including
+// PublicRoutingTableFilter, PublicQueryFilter, RoutingTablePeerDiversityFilter,
+// and AddressFilter using manet.IsPublicAddr.
+func NewDHT(h host.Host, mode dht.ModeOpt, opts ...dht.Option) (*dht.IpfsDHT, error) {
+	defaultOpts := []dht.Option{
+		dht.Mode(mode),
+	}
+
+	allowLocal := os.Getenv("CIPHER_ALLOW_LOCAL") == "1" || os.Getenv("CIPHER_LOCAL_DEV") == "1"
+
+	if !allowLocal {
+		defaultOpts = append(defaultOpts,
+			dht.RoutingTableFilter(dht.PublicRoutingTableFilter),
+			dht.QueryFilter(dht.PublicQueryFilter),
+			dht.RoutingTablePeerDiversityFilter(dht.NewRTPeerDiversityFilter(h, 2, 3)),
+			dht.AddressFilter(PublicAddressFilter),
+		)
+	}
+
+	allOpts := append(defaultOpts, opts...)
+	kdht, err := dht.New(h, allOpts...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
