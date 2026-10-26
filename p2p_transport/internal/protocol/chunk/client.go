@@ -42,12 +42,13 @@ func (c *Client) Close() error {
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	ws := transport.WrapStreamWithContext(ctx, c.stream)
 	req := BuildRequestManifest(id)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(ws, req); err != nil {
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(ws)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -89,12 +90,13 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	ws := transport.WrapStreamWithContext(ctx, c.stream)
 	req := BuildRequestChunk(chunkID)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(ws, req); err != nil {
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(ws)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -120,7 +122,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
+		WriteMessage(ws, errMsg)
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
@@ -129,7 +131,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	// Send ACK (optional fire-and-forget)
 	ack := BuildAck(chunkID, 0)
-	if err := WriteMessage(c.stream, ack); err != nil {
+	if err := WriteMessage(ws, ack); err != nil {
 		log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
 	}
 

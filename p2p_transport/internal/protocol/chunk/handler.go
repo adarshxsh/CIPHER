@@ -11,6 +11,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	"cipher/internal/transport"
 )
 
 var TestCorruptProb float64
@@ -30,35 +31,39 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
-	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	ws := transport.WrapStream(s)
+	defer ws.Close()
+	log.Printf("[Chunk Protocol] New stream from %s", ws.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		msg, err := ReadMessage(ws)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", ws.Conn().RemotePeer())
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			ws.Close()
 			return
 		}
 
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			WriteMessage(ws, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			ws.Close()
 			return
 		}
 
 		switch msg.Type {
 		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
+			h.handleRequestManifest(ws, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(ws, msg)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			WriteMessage(ws, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			ws.Close()
 		}
 	}
 }

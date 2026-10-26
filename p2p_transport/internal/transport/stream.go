@@ -2,8 +2,12 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -16,10 +20,157 @@ import (
 	"cipher/internal/transfer"
 )
 
+const DefaultStreamTimeout = 30 * time.Second
+
+// Stream wraps network.Stream to enforce context-bounded read and write deadlines.
+type Stream struct {
+	network.Stream
+	timeout time.Duration
+	ctx     context.Context
+}
+
+// WrapStream wraps a libp2p network.Stream with standard timeout and context handling.
+func WrapStream(s network.Stream) *Stream {
+	if s == nil {
+		return nil
+	}
+	if ws, ok := s.(*Stream); ok {
+		return ws
+	}
+	return &Stream{
+		Stream:  s,
+		timeout: DefaultStreamTimeout,
+		ctx:     context.Background(),
+	}
+}
+
+// WrapStreamWithContext wraps a libp2p network.Stream bound to a parent context.
+func WrapStreamWithContext(ctx context.Context, s network.Stream) *Stream {
+	if s == nil {
+		return nil
+	}
+	if ws, ok := s.(*Stream); ok {
+		if ctx != nil {
+			ws.ctx = ctx
+		}
+		return ws
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &Stream{
+		Stream:  s,
+		timeout: DefaultStreamTimeout,
+		ctx:     ctx,
+	}
+}
+
+func (s *Stream) SetTimeout(d time.Duration) {
+	s.timeout = d
+}
+
+func (s *Stream) SetContext(ctx context.Context) {
+	s.ctx = ctx
+}
+
+func (s *Stream) getDeadline() time.Time {
+	deadline := time.Now().Add(s.timeout)
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return time.Now().Add(-1 * time.Second)
+		}
+		if d, ok := s.ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
+		}
+	}
+	return deadline
+}
+
+func (s *Stream) Read(p []byte) (int, error) {
+	deadline := s.getDeadline()
+	_ = s.Stream.SetReadDeadline(deadline)
+
+	var timer *time.Timer
+	if !deadline.IsZero() {
+		dur := time.Until(deadline)
+		if dur <= 0 {
+			_ = s.Stream.SetReadDeadline(time.Now().Add(-1 * time.Second))
+			_ = s.Stream.Reset()
+			_ = s.Stream.Close()
+			return 0, os.ErrDeadlineExceeded
+		}
+		timer = time.AfterFunc(dur, func() {
+			_ = s.Stream.SetReadDeadline(time.Now().Add(-1 * time.Second))
+			_ = s.Stream.Reset()
+			_ = s.Stream.Close()
+		})
+	}
+
+	n, err := s.Stream.Read(p)
+	if timer != nil {
+		timer.Stop()
+	}
+
+	if err != nil && isTimeoutErr(err) {
+		_ = s.Stream.Reset()
+		_ = s.Stream.Close()
+	}
+	return n, err
+}
+
+func (s *Stream) Write(p []byte) (int, error) {
+	deadline := s.getDeadline()
+	_ = s.Stream.SetWriteDeadline(deadline)
+
+	var timer *time.Timer
+	if !deadline.IsZero() {
+		dur := time.Until(deadline)
+		if dur <= 0 {
+			_ = s.Stream.SetWriteDeadline(time.Now().Add(-1 * time.Second))
+			_ = s.Stream.Reset()
+			_ = s.Stream.Close()
+			return 0, os.ErrDeadlineExceeded
+		}
+		timer = time.AfterFunc(dur, func() {
+			_ = s.Stream.SetWriteDeadline(time.Now().Add(-1 * time.Second))
+			_ = s.Stream.Reset()
+			_ = s.Stream.Close()
+		})
+	}
+
+	n, err := s.Stream.Write(p)
+	if timer != nil {
+		timer.Stop()
+	}
+
+	if err != nil && isTimeoutErr(err) {
+		_ = s.Stream.Reset()
+		_ = s.Stream.Close()
+	}
+	return n, err
+}
+
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "deadline exceeded") || strings.Contains(errMsg, "i/o timeout")
+}
+
 // SetupStreamHandler configures the host to handle incoming streams for the file transfer protocol.
 func SetupStreamHandler(h host.Host) {
 	h.SetStreamHandler(protocol.FileTransferProtocolID, func(s network.Stream) {
-		if err := transfer.Receive(s); err != nil {
+		ws := WrapStream(s)
+		defer ws.Close()
+		if err := transfer.Receive(ws); err != nil {
 			log.Printf("Error receiving file: %v", err)
 		}
 	})
@@ -86,5 +237,5 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
 
-	return s, nil
+	return WrapStreamWithContext(ctx, s), nil
 }
