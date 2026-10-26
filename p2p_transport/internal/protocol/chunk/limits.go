@@ -75,9 +75,8 @@ const (
 	// MaxProtocolErrorSize limits encoded protocol error responses.
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
-	// Manifest responses can be larger than request payloads but remain bound
-	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	// Manifest responses are bound by the manifest limit + ContentID header size.
+	MaxManifestSize = 512 * 1024
 )
 
 const (
@@ -111,7 +110,7 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 		return MaxChunkRequestSize
 
 	case MsgManifest:
-		return MaxManifestSize
+		return ContentIDSize + MaxManifestSize
 
 	case MsgRequestChunk:
 		return MaxChunkRequestSize
