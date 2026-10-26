@@ -36,14 +36,15 @@ const (
 )
 
 const (
-	PushStatusOK              byte = 0x00
-	PushStatusUnauthorized    byte = 0x01
-	PushStatusDiskFull        byte = 0x02
-	PushStatusMalformed       byte = 0x03
-	PushStatusIncomplete      byte = 0x04
-	PushStatusHashMismatch    byte = 0x05
+	PushStatusOK               byte = 0x00
+	PushStatusUnauthorized     byte = 0x01
+	PushStatusDiskFull         byte = 0x02
+	PushStatusMalformed        byte = 0x03
+	PushStatusIncomplete       byte = 0x04
+	PushStatusHashMismatch     byte = 0x05
 	PushStatusNotInAssignedSet byte = 0x06
-	PushStatusIOError         byte = 0x07
+	PushStatusIOError          byte = 0x07
+	PushStatusResourceExhausted byte = 0x08
 )
 
 type PushMessage struct {

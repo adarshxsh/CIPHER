@@ -44,6 +44,10 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	pushMaxSessions := flag.Int("push-max-sessions", 100, "Maximum total pending push sessions")
+	pushMaxSessionsPerPeer := flag.Int("push-max-sessions-per-peer", 10, "Maximum pending push sessions per remote peer")
+	pushSessionTTL := flag.Duration("push-session-ttl", 15*time.Minute, "Maximum time-to-live for a push session")
+	pushSessionIdleTimeout := flag.Duration("push-session-idle-timeout", 5*time.Minute, "Idle timeout for a push session")
 
 	flag.Parse()
 
@@ -127,7 +131,15 @@ func main() {
 			}
 		}
 	}
-	push.NewStreamHandler(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList)
+	cfg := push.StreamHandlerConfig{
+		MaxPendingSessions: *pushMaxSessions,
+		MaxSessionsPerPeer: *pushMaxSessionsPerPeer,
+		SessionTTL:         *pushSessionTTL,
+		SessionIdleTimeout: *pushSessionIdleTimeout,
+		GCTickerInterval:   1 * time.Minute,
+	}
+	pushHandler := push.NewStreamHandlerWithConfig(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList, cfg)
+	defer pushHandler.Close()
 
 	// 7. Start Control-Plane DHT Announcements
 	if *allowPush {
