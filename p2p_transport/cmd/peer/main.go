@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +59,7 @@ func main() {
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	exportKeyFile := flag.String("export-key-file", "", "Path to export raw content decryption key (hex)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
@@ -123,7 +125,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewLocalKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -225,7 +227,7 @@ func main() {
 		// Advertise/ broadcast the content on the DHT
 
 		log.Printf(
-			"[DHT] Providing ContentID %s",
+			"[DHT] Providing ContentID %x",
 			m.Descriptor.ID,
 		)
 
@@ -235,21 +237,36 @@ func main() {
 			m.Descriptor.ID,
 		); err != nil {
 			log.Printf(
-				"[DHT] Failed to advertise content %s: %v",
+				"[DHT] Failed to advertise content %x: %v",
 				m.Descriptor.ID,
 				err,
 			)
 		} else {
 			log.Printf(
-				"[DHT] Successfully advertised content %s",
+				"[DHT] Successfully advertised content %x",
 				m.Descriptor.ID,
 			)
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		if *exportKeyFile != "" {
+			dir := filepath.Dir(*exportKeyFile)
+			if dir != "" && dir != "." {
+				_ = os.MkdirAll(dir, 0700)
+				_ = os.Chmod(dir, 0700)
+			}
+			keyHexStr := fmt.Sprintf("%x\n", key)
+			if err := os.WriteFile(*exportKeyFile, []byte(keyHexStr), 0600); err != nil {
+				log.Printf("Warning: Failed to export key file: %v", err)
+			} else {
+				_ = os.Chmod(*exportKeyFile, 0600)
+				log.Printf("Exported decryption key to: %s", *exportKeyFile)
+			}
+		}
+
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: [REDACTED]")
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +280,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"<DECRYPTION_KEY>\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
