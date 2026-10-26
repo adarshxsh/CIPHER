@@ -26,7 +26,7 @@ func setupTestEngine(t *testing.T, chunkSize uint32) (*engine.ContentEngine, str
 	}
 
 	config := core.EngineConfig{ChunkSize: chunkSize}
-	enc := crypto.NewChaCha20Encryptor()
+	enc := crypto.NewXChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 
