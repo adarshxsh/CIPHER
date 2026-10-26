@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -105,3 +106,83 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestSanitizeErrorMessage_ControlCharacters(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "newlines and carriage returns",
+			input:    "line1\nline2\rline3\r\nline4",
+			expected: "line1\\nline2\\rline3\\r\\nline4",
+		},
+		{
+			name:     "tabs",
+			input:    "col1\tcol2",
+			expected: "col1\\tcol2",
+		},
+		{
+			name:     "ANSI escape sequences",
+			input:    "\x1b[31mError message\x1b[0m",
+			expected: "\\x1b[31mError message\\x1b[0m",
+		},
+		{
+			name:     "multiline log forgery attack payload",
+			input:    "Failed\n[INFO] User logged in as admin\r\n",
+			expected: "Failed\\n[INFO] User logged in as admin\\r\\n",
+		},
+		{
+			name:     "null bytes and non-printable control chars",
+			input:    "err\x00\x07\x1f\x7f",
+			expected: "err\\x00\\a\\x1f\\x7f",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := chunk.SanitizeErrorMessage(tc.input)
+			if got != tc.expected {
+				t.Errorf("SanitizeErrorMessage(%q):\n got  %q\n want %q", tc.input, got, tc.expected)
+			}
+			if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
+				t.Errorf("SanitizeErrorMessage output contains newline or carriage return: %q", got)
+			}
+		})
+	}
+}
+
+func TestSanitizeErrorMessage_LengthTruncation(t *testing.T) {
+	longMsg := strings.Repeat("A", 600)
+	got := chunk.SanitizeErrorMessage(longMsg)
+
+	if len(got) > chunk.MaxErrorMessageSize {
+		t.Errorf("Expected max length %d, got length %d", chunk.MaxErrorMessageSize, len(got))
+	}
+	if got != strings.Repeat("A", chunk.MaxErrorMessageSize) {
+		t.Errorf("Truncated string mismatched")
+	}
+}
+
+func TestParseError_SanitizationAndTruncation(t *testing.T) {
+	forgedPayload := append([]byte{byte(chunk.ErrBadRequest)}, []byte("Error:\n[FAKE LOG] Admin session granted\r\n")...)
+
+	code, msg, err := chunk.ParseError(forgedPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected code %d, got %d", chunk.ErrBadRequest, code)
+	}
+
+	if strings.Contains(msg, "\n") || strings.Contains(msg, "\r") {
+		t.Errorf("Parsed error message contains raw newlines/carriage returns: %q", msg)
+	}
+
+	if msg != "Error:\\n[FAKE LOG] Admin session granted\\r\\n" {
+		t.Errorf("Unexpected sanitized message: %q", msg)
+	}
+}
+

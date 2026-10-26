@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode/utf8"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +207,63 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+// SanitizeErrorMessage sanitizes control characters (newlines, carriage returns, tabs, ANSI escape codes)
+// into safe single-line escape sequences and caps message length at MaxErrorMessageSize (512 bytes).
+func SanitizeErrorMessage(msg string) string {
+	if len(msg) > MaxErrorMessageSize {
+		msg = msg[:MaxErrorMessageSize]
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(msg))
+
+	for i := 0; i < len(msg); i++ {
+		b := msg[i]
+		switch b {
+		case '\n':
+			builder.WriteString("\\n")
+		case '\r':
+			builder.WriteString("\\r")
+		case '\t':
+			builder.WriteString("\\t")
+		case 0x1b: // ANSI escape character (ESC)
+			builder.WriteString("\\x1b")
+		case '\a':
+			builder.WriteString("\\a")
+		case '\b':
+			builder.WriteString("\\b")
+		case '\v':
+			builder.WriteString("\\v")
+		case '\f':
+			builder.WriteString("\\f")
+		default:
+			if b < 0x20 || b == 0x7f {
+				fmt.Fprintf(&builder, "\\x%02x", b)
+			} else {
+				builder.WriteByte(b)
+			}
+		}
+	}
+
+	res := builder.String()
+	if len(res) > MaxErrorMessageSize {
+		res = res[:MaxErrorMessageSize]
+		for len(res) > 0 && !utf8.ValidString(res) {
+			res = res[:len(res)-1]
+		}
+		if strings.HasSuffix(res, "\\") {
+			res = strings.TrimSuffix(res, "\\")
+		}
+	}
+	return res
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	rawMsg := string(payload[1:])
+	sanitizedMsg := SanitizeErrorMessage(rawMsg)
+	return code, sanitizedMsg, nil
 }
