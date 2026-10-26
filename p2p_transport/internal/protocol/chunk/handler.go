@@ -5,7 +5,9 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
@@ -16,16 +18,26 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host    host.Host
+	engine  *engine.ContentEngine
+	privKey crypto.PrivKey
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
-	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, privKey ...crypto.PrivKey) *StreamHandler {
+	var pk crypto.PrivKey
+	if len(privKey) > 0 {
+		pk = privKey[0]
+	} else if h != nil && h.Peerstore() != nil {
+		pk = h.Peerstore().PrivKey(h.ID())
 	}
-	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	handler := &StreamHandler{
+		host:    h,
+		engine:  eng,
+		privKey: pk,
+	}
+	if h != nil {
+		h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	}
 	return handler
 }
 
@@ -78,7 +90,42 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 		return
 	}
 
-	resp := BuildManifest(contentID, manifestData)
+	privKey := h.privKey
+	if privKey == nil && h.host != nil && h.host.Peerstore() != nil {
+		privKey = h.host.Peerstore().PrivKey(h.host.ID())
+	}
+
+	var att *ProviderAttestation
+	if privKey != nil {
+		pubKeyBytes, err := crypto.MarshalPublicKey(privKey.GetPublic())
+		if err != nil {
+			log.Printf("[Security] Failed to marshal provider public key: %v", err)
+			WriteMessage(s, BuildError(ErrInternal, "failed to build provider attestation"))
+			return
+		}
+		providerID := h.host.ID().String()
+		att = &ProviderAttestation{
+			ContentID:      contentID,
+			ProviderID:     providerID,
+			ProviderPubKey: pubKeyBytes,
+			Timestamp:      time.Now().Unix(),
+		}
+		if err := att.Sign(privKey); err != nil {
+			log.Printf("[Security] Failed to sign provider attestation: %v", err)
+			WriteMessage(s, BuildError(ErrInternal, "failed to sign provider attestation"))
+			return
+		}
+	} else {
+		log.Printf("[Security] Warning: No private key available for stream handler, sending unauthenticated manifest response")
+	}
+
+	resp, err := BuildManifest(contentID, att, manifestData)
+	if err != nil {
+		log.Printf("[Chunk Protocol] Error building MANIFEST response: %v", err)
+		WriteMessage(s, BuildError(ErrInternal, "failed to build manifest response"))
+		return
+	}
+
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}

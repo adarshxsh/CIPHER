@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -61,12 +63,71 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	respID, att, data, err := ParseManifest(resp.Payload)
 	if err != nil {
 		return nil, err
 	}
 	if respID != id {
+		log.Printf("[Security] Content ID mismatch in manifest response from peer %s: expected %x, got %x", c.stream.Conn().RemotePeer(), id, respID)
+		c.stream.Reset()
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	if att == nil {
+		log.Printf("[Security] Missing provider attestation in manifest response from peer %s", c.stream.Conn().RemotePeer())
+		c.stream.Reset()
+		return nil, fmt.Errorf("missing provider attestation in manifest response")
+	}
+
+	if att.ContentID != id {
+		log.Printf("[Security] Provider attestation ContentID mismatch from peer %s: expected %x, got %x", c.stream.Conn().RemotePeer(), id, att.ContentID)
+		c.stream.Reset()
+		return nil, fmt.Errorf("provider attestation ContentID mismatch")
+	}
+
+	remotePeerID := c.stream.Conn().RemotePeer()
+	if att.ProviderID != remotePeerID.String() {
+		log.Printf("[Security] Provider ID mismatch in attestation from peer %s: attestation has %s", remotePeerID, att.ProviderID)
+		c.stream.Reset()
+		return nil, fmt.Errorf("provider ID mismatch in attestation: %s != %s", att.ProviderID, remotePeerID)
+	}
+
+	now := time.Now().Unix()
+	skew := now - att.Timestamp
+	if skew < -300 || skew > 300 {
+		log.Printf("[Security] Provider attestation timestamp skew out of bounds from peer %s: skew=%d seconds", remotePeerID, skew)
+		c.stream.Reset()
+		return nil, fmt.Errorf("provider attestation timestamp skew out of bounds: %d seconds", skew)
+	}
+
+	var pubKey crypto.PubKey
+	if len(att.ProviderPubKey) > 0 {
+		var err error
+		pubKey, err = GetCachedPubKey(att.ProviderPubKey)
+		if err != nil {
+			log.Printf("[Security] Invalid provider public key from peer %s: %v", remotePeerID, err)
+			c.stream.Reset()
+			return nil, fmt.Errorf("invalid provider public key: %w", err)
+		}
+		pubKeyPeerID, err := peer.IDFromPublicKey(pubKey)
+		if err != nil || pubKeyPeerID != remotePeerID {
+			log.Printf("[Security] Provider public key does not match remote peer ID %s", remotePeerID)
+			c.stream.Reset()
+			return nil, fmt.Errorf("provider public key does not match remote peer ID")
+		}
+	} else {
+		pubKey = c.stream.Conn().RemotePublicKey()
+		if pubKey == nil {
+			log.Printf("[Security] Transport connection for peer %s missing remote public key", remotePeerID)
+			c.stream.Reset()
+			return nil, fmt.Errorf("missing remote public key on transport connection")
+		}
+	}
+
+	if err := att.Verify(pubKey); err != nil {
+		log.Printf("[Security] Provider attestation signature verification failed for peer %s: %v", remotePeerID, err)
+		c.stream.Reset()
+		return nil, fmt.Errorf("provider attestation signature verification failed: %w", err)
 	}
 
 	return data, nil

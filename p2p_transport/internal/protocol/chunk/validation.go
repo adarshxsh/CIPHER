@@ -225,7 +225,7 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, _, _, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}

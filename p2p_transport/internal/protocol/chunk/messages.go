@@ -3,9 +3,13 @@ package chunk
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+
+	"github.com/libp2p/go-libp2p/core/crypto"
 
 	"cipher/internal/content/core"
 )
@@ -13,6 +17,69 @@ import (
 const (
 	CurrentMessageVersion uint16 = 1
 )
+
+type ProviderAttestation struct {
+	ContentID      core.ContentID `json:"content_id"`
+	ProviderID     string         `json:"provider_id"`
+	ProviderPubKey []byte         `json:"provider_pub_key"`
+	Timestamp      int64          `json:"timestamp"`
+	Signature      []byte         `json:"signature"`
+}
+
+func (a *ProviderAttestation) SignableData() []byte {
+	buf := new(bytes.Buffer)
+	buf.WriteString("CIPHER-PROVIDER-ATTESTATION:")
+	buf.Write(a.ContentID[:])
+	buf.WriteString(a.ProviderID)
+	binary.Write(buf, binary.LittleEndian, a.Timestamp)
+	return buf.Bytes()
+}
+
+func (a *ProviderAttestation) Sign(privKey crypto.PrivKey) error {
+	if privKey == nil {
+		return errors.New("private key is nil")
+	}
+	data := a.SignableData()
+	sig, err := privKey.Sign(data)
+	if err != nil {
+		return fmt.Errorf("failed to sign provider attestation: %w", err)
+	}
+	a.Signature = sig
+	return nil
+}
+
+func (a *ProviderAttestation) Verify(pubKey crypto.PubKey) error {
+	if pubKey == nil {
+		return errors.New("public key is nil")
+	}
+	if len(a.Signature) == 0 {
+		return errors.New("provider attestation signature is empty")
+	}
+	data := a.SignableData()
+	ok, err := pubKey.Verify(data, a.Signature)
+	if err != nil {
+		return fmt.Errorf("provider attestation signature verification error: %w", err)
+	}
+	if !ok {
+		return errors.New("provider attestation signature invalid")
+	}
+	return nil
+}
+
+var pubKeyCache sync.Map
+
+func GetCachedPubKey(pubKeyBytes []byte) (crypto.PubKey, error) {
+	keyStr := string(pubKeyBytes)
+	if val, ok := pubKeyCache.Load(keyStr); ok {
+		return val.(crypto.PubKey), nil
+	}
+	pubKey, err := crypto.UnmarshalPublicKey(pubKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal public key: %w", err)
+	}
+	pubKeyCache.Store(keyStr, pubKey)
+	return pubKey, nil
+}
 
 type MessageType uint8
 
@@ -117,22 +184,65 @@ func ParseRequestManifest(payload []byte) (core.ContentID, error) {
 	return id, nil
 }
 
-func BuildManifest(id core.ContentID, data []byte) *Message {
-	payload := append(id[:], data...)
+func BuildManifest(id core.ContentID, att *ProviderAttestation, data []byte) (*Message, error) {
+	buf := new(bytes.Buffer)
+	buf.Write(id[:])
+
+	if att != nil {
+		attBytes, err := json.Marshal(att)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal provider attestation: %w", err)
+		}
+		attLen := uint32(len(attBytes))
+		if err := binary.Write(buf, binary.LittleEndian, attLen); err != nil {
+			return nil, err
+		}
+		buf.Write(attBytes)
+	} else {
+		if err := binary.Write(buf, binary.LittleEndian, uint32(0)); err != nil {
+			return nil, err
+		}
+	}
+
+	buf.Write(data)
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgManifest,
-		Payload: payload,
-	}
+		Payload: buf.Bytes(),
+	}, nil
 }
 
-func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
+func ParseManifest(payload []byte) (core.ContentID, *ProviderAttestation, []byte, error) {
 	var id core.ContentID
 	if len(payload) < 32 {
-		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+		return id, nil, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
 	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+
+	if len(payload) < 36 {
+		return id, nil, payload[32:], nil
+	}
+
+	attLen := binary.LittleEndian.Uint32(payload[32:36])
+	offset := 36
+
+	if attLen == 0 {
+		return id, nil, payload[offset:], nil
+	}
+
+	if int(attLen) > len(payload)-offset {
+		return id, nil, payload[32:], nil
+	}
+
+	attBytes := payload[offset : offset+int(attLen)]
+	manifestData := payload[offset+int(attLen):]
+
+	var att ProviderAttestation
+	if err := json.Unmarshal(attBytes, &att); err != nil {
+		return id, nil, payload[32:], nil
+	}
+
+	return id, &att, manifestData, nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
