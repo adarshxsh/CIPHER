@@ -148,8 +148,9 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
-	if m.Descriptor.ID != contentID {
-		log.Printf("[Push Protocol] Manifest contentID mismatch: %x vs %x", m.Descriptor.ID, contentID)
+	computedID, err := m.ComputeContentID()
+	if err != nil || computedID != contentID || m.Descriptor.ID != contentID {
+		log.Printf("[Push Protocol] Manifest contentID mismatch: computed %x vs header %x", computedID, contentID)
 		_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "contentID mismatch"))
 		return
 	}

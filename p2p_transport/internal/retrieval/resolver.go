@@ -63,6 +63,17 @@ func ResolveManifest(
 			continue
 		}
 
+		computedID, err := m.ComputeContentID()
+		if err != nil || computedID != id {
+			log.Printf(
+				"[DHT] Provider %s returned manifest with ContentID mismatch: %v",
+				provider,
+				manifest.ErrContentIDMismatch,
+			)
+			lastErr = manifest.ErrContentIDMismatch
+			continue
+		}
+
 		log.Printf(
 			"[DHT] Successfully resolved manifest from provider %s",
 			provider,

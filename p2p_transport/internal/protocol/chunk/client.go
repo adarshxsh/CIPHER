@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 	"cipher/internal/transport"
@@ -66,7 +67,21 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, err
 	}
 	if respID != id {
-		return nil, fmt.Errorf("content ID mismatch in response")
+		return nil, fmt.Errorf("%w: content ID mismatch in response header", ErrContentIDMismatch)
+	}
+
+	m, err := manifest.Deserialize(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize manifest: %w", err)
+	}
+
+	computedID, err := m.ComputeContentID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute content ID: %w", err)
+	}
+
+	if computedID != id {
+		return nil, fmt.Errorf("%w: manifest checksum mismatch", ErrContentIDMismatch)
 	}
 
 	return data, nil
