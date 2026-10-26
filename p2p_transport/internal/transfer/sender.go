@@ -66,6 +66,7 @@ func Send(s network.Stream, filePath string) error {
 	// Create a progress reader
 	pr := &progressReader{
 		r:     file,
+		s:     s,
 		total: header.FileSize,
 		last:  0,
 	}
@@ -94,6 +95,7 @@ func Send(s network.Stream, filePath string) error {
 
 type progressReader struct {
 	r     io.Reader
+	s     network.Stream
 	total uint64
 	read  uint64
 	last  int
@@ -102,6 +104,10 @@ type progressReader struct {
 func (pr *progressReader) Read(p []byte) (n int, err error) {
 	n, err = pr.r.Read(p)
 	pr.read += uint64(n)
+
+	if pr.s != nil {
+		_ = pr.s.SetDeadline(time.Now().Add(30 * time.Second))
+	}
 
 	if pr.total > 0 {
 		percent := int((float64(pr.read) / float64(pr.total)) * 100)

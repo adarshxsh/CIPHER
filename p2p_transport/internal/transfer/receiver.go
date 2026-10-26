@@ -55,6 +55,7 @@ func Receive(s network.Stream) error {
 
 	pr := &progressReader{
 		r:     io.LimitReader(s, int64(header.FileSize)),
+		s:     s,
 		total: header.FileSize,
 		last:  0,
 	}
