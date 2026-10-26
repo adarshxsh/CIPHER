@@ -1,18 +1,18 @@
 #!/bin/bash
 cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+rm -rf store_a store_b test.mp4 out.mp4 key_a.bin
 export CGO_ENABLED=0
 go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
 
-./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 > peer_a.log 2>&1 &
+./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 -export-key-file key_a.bin -seed=true > peer_a.log 2>&1 &
 PEER_A_PID=$!
 
 sleep 3
 
 CONTENT_ID=$(grep "ContentID:" peer_a.log | awk '{print $NF}')
-KEY=$(grep "Key:" peer_a.log | awk '{print $NF}')
+KEY=$(python3 -c "import sys; print(open('key_a.bin','rb').read().hex())" 2>/dev/null)
 ADDR=$(grep "127.0.0.1/tcp/47891/p2p/" peer_a.log | head -n 1 | awk '{print $NF}')
 
 echo "Content ID: $CONTENT_ID"
