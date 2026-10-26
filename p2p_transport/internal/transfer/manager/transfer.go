@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/reputation"
 	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 )
@@ -26,19 +27,32 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	ScoreManager   *reputation.ScoreManager
 }
 
 func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
+	return NewTransferManagerWithScoreManager(sm, eng, t, nil)
+}
+
+func NewTransferManagerWithScoreManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, scoreMgr *reputation.ScoreManager) *TransferManager {
+	if scoreMgr == nil {
+		scoreMgr = reputation.NewScoreManager(reputation.DefaultConfig())
+	}
 	return &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		ScoreManager:   scoreMgr,
 	}
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
+	if tm.ScoreManager != nil {
+		peers = tm.ScoreManager.FilterPeers(ctx, peers)
+	}
+
 	if len(peers) == 0 {
-		return fmt.Errorf("no peers provided")
+		return fmt.Errorf("no unbanned peers provided")
 	}
 
 	// 2. Setup Session
@@ -95,7 +109,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	tm.SessionManager.Save(sess)
 
 	log.Printf("Starting download: %d chunks remaining", len(tasks))
-	
+
 	if len(tasks) == 0 {
 		sess.Status = StatusCompleted
 		tm.SessionManager.Save(sess)
@@ -112,11 +126,11 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
-	
+	sched := scheduler.NewSchedulerWithScoreManager(tm.Transport, tm.Engine, 3, tm.ScoreManager) // MaxAttempts = 3
+
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
-	
+
 	go func() {
 		errCh <- sched.Run(ctx, tasks, sources, completions)
 		close(completions)
@@ -131,7 +145,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 			sess.Completed[res.Task.Index] = true
 		}
 		completedCount++
-		
+
 		if res.PeerID != "" {
 			peerContributions[res.PeerID]++
 		}
