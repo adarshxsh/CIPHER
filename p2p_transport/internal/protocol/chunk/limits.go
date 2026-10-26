@@ -75,9 +75,11 @@ const (
 	// MaxProtocolErrorSize limits encoded protocol error responses.
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
-	// Manifest responses can be larger than request payloads but remain bound
-	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	// MaxManifestJSONSize is the maximum size allowed for a manifest JSON payload (256 KiB).
+	MaxManifestJSONSize = 256 * 1024
+
+	// Manifest responses contain a 32-byte ContentID header plus the JSON manifest payload.
+	MaxManifestSize = ContentIDSize + MaxManifestJSONSize
 )
 
 const (

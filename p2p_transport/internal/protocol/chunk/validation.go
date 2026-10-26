@@ -107,6 +107,14 @@ func ValidateManifestPayload(payload []byte) error {
 			ContentIDSize,
 		)
 	}
+	if len(payload) > ContentIDSize+MaxManifestJSONSize {
+		return fmt.Errorf(
+			"manifest: %w: received=%d maximum=%d",
+			ErrInvalidPayloadLength,
+			len(payload),
+			ContentIDSize+MaxManifestJSONSize,
+		)
+	}
 	return nil
 }
 
