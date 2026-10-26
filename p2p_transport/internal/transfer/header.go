@@ -101,3 +101,9 @@ func (h *Header) ReadFrom(r io.Reader) error {
 
 	return nil
 }
+
+// IsZeroChecksum returns true if the header's checksum field is all zero bytes.
+func (h *Header) IsZeroChecksum() bool {
+	var zero [32]byte
+	return h.Checksum == zero
+}

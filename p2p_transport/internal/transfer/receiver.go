@@ -75,10 +75,21 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
+	expectedChecksum := header.Checksum
+	if header.IsZeroChecksum() {
+		var trailer [32]byte
+		if _, err := io.ReadFull(s, trailer[:]); err != nil {
+			return fmt.Errorf("failed to read checksum trailer: %w", err)
+		}
+		expectedChecksum = trailer
+	}
+
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	var checksumErr error
+	if !bytes.Equal(computedChecksum[:], expectedChecksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", expectedChecksum, computedChecksum)
+		checksumErr = fmt.Errorf("checksum mismatch: expected %x, got %x", expectedChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
@@ -93,5 +104,5 @@ func Receive(s network.Stream) error {
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
-	return nil
+	return checksumErr
 }
