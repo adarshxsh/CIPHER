@@ -154,6 +154,12 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		return
 	}
 
+	if err := manifest.ValidateManifestID(manifestData, contentID); err != nil {
+		log.Printf("[Push Protocol] Manifest digest validation failed for %x: %v", contentID, err)
+		_ = WritePushMessage(s, BuildPushError(PushStatusHashMismatch, "manifest digest mismatch"))
+		return
+	}
+
 	expectedMap := make(map[core.ChunkID]struct{})
 	for _, cid := range assignedChunkIDs {
 		expectedMap[cid] = struct{}{}
