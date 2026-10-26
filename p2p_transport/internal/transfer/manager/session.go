@@ -51,16 +51,45 @@ type SessionManager interface {
 	List() ([]*TransferSession, error)
 }
 
+const (
+	dirMode  os.FileMode = 0700
+	fileMode os.FileMode = 0600
+)
+
 // FileSessionManager implements SessionManager by writing JSON to disk.
 type FileSessionManager struct {
 	dir string
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return nil, err
+	}
+	if err := remediatePermissions(dir); err != nil {
 		return nil, err
 	}
 	return &FileSessionManager{dir: dir}, nil
+}
+
+func remediatePermissions(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		var mode os.FileMode
+		if d.IsDir() {
+			mode = dirMode
+		} else {
+			mode = fileMode
+		}
+		if err := os.Chmod(path, mode); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	})
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -92,7 +121,10 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	path := m.getPath(session.ContentID)
 	// Write to temporary file and rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, b, fileMode); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, fileMode); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
