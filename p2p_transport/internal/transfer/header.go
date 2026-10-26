@@ -4,7 +4,49 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
+
+	"github.com/libp2p/go-libp2p/core/network"
 )
+
+var (
+	ReadTimeout  = 15 * time.Second
+	WriteTimeout = 15 * time.Second
+)
+
+type deadlineWriter struct {
+	w       io.Writer
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dw *deadlineWriter) Write(p []byte) (int, error) {
+	if dw.timeout > 0 && dw.s != nil {
+		_ = dw.s.SetWriteDeadline(time.Now().Add(dw.timeout))
+	}
+	n, err := dw.w.Write(p)
+	if dw.timeout > 0 && dw.s != nil {
+		_ = dw.s.SetWriteDeadline(time.Time{})
+	}
+	return n, err
+}
+
+type deadlineReader struct {
+	r       io.Reader
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dr *deadlineReader) Read(p []byte) (int, error) {
+	if dr.timeout > 0 && dr.s != nil {
+		_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	}
+	n, err := dr.r.Read(p)
+	if dr.timeout > 0 && dr.s != nil {
+		_ = dr.s.SetReadDeadline(time.Time{})
+	}
+	return n, err
+}
 
 const (
 	ProtocolVersion1 byte = 1

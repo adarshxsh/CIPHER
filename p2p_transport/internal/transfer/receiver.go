@@ -23,8 +23,9 @@ func Receive(s network.Stream) error {
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
+	dr := &deadlineReader{r: s, s: s, timeout: ReadTimeout}
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err := header.ReadFrom(dr); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -54,7 +55,7 @@ func Receive(s network.Stream) error {
 	multiWriter := io.MultiWriter(outFile, hasher)
 
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(dr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}

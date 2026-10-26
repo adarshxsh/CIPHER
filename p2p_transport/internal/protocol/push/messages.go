@@ -17,7 +17,9 @@ const (
 	MaxMessageSize  uint32        = 4 * 1024 * 1024 // 4 MB
 	MaxChunkSize    uint32        = 2 * 1024 * 1024 // 2 MB
 	MaxManifestSize uint32        = 2 * 1024 * 1024 // 2 MB
+)
 
+var (
 	ReadTimeout  = 15 * time.Second
 	WriteTimeout = 15 * time.Second
 	AckTimeout   = 30 * time.Second
