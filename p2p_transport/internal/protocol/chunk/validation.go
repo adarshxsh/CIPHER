@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 var (
@@ -26,6 +27,7 @@ var (
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
 	ErrInvalidManifestPayload = errors.New("invalid manifest payload")
+	ErrManifestTooLarge       = manifest.ErrManifestTooLarge
 )
 
 type ContentInfo struct {
@@ -58,6 +60,10 @@ func ValidateMessagePayload(messageType MessageType, payload []byte) error {
 		return fmt.Errorf("message: %w: %d", ErrInvalidMessageType, messageType)
 	}
 
+	if messageType == MsgManifest {
+		return ValidateManifestPayload(payload)
+	}
+
 	if len(payload) > maxPayloadSize {
 		return fmt.Errorf(
 			"message: %w: type=%d received=%d maximum=%d",
@@ -71,8 +77,6 @@ func ValidateMessagePayload(messageType MessageType, payload []byte) error {
 	switch messageType {
 	case MsgRequestManifest:
 		return ValidateRequestManifestPayload(payload)
-	case MsgManifest:
-		return ValidateManifestPayload(payload)
 	case MsgRequestChunk:
 		return ValidateRequestChunkPayload(payload)
 	case MsgChunk:
@@ -105,6 +109,14 @@ func ValidateManifestPayload(payload []byte) error {
 			ErrInvalidManifestPayload,
 			len(payload),
 			ContentIDSize,
+		)
+	}
+	if len(payload) > MaxManifestSize {
+		return fmt.Errorf(
+			"manifest: %w: received=%d maximum=%d",
+			ErrManifestTooLarge,
+			len(payload),
+			MaxManifestSize,
 		)
 	}
 	return nil
