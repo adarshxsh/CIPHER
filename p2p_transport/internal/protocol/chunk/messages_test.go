@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -99,9 +100,76 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	var buf bytes.Buffer
 	chunk.WriteMessage(&buf, msg)
 
-	parsedMsg, _ := chunk.ReadMessage(&buf)
-	if parsedMsg.Type != 0x99 {
-		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("Expected error from ReadMessage for unsupported message type 0x99, got nil")
 	}
-	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_InflatedHeaderExploitPrevention(t *testing.T) {
+	// Untrusted peer sends a 4-byte frame size of 2,000,000 bytes for MsgAck (type 0x05, max payload 33 bytes)
+	var buf bytes.Buffer
+
+	// Size: 2,000,000
+	frameSize := uint32(2000000)
+	binary.Write(&buf, binary.LittleEndian, frameSize)
+
+	// Envelope: Version = 1, Type = MsgAck (0x05)
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgAck))
+
+	// Followed by dummy data
+	buf.Write(make([]byte, 100))
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("Expected ReadMessage to reject inflated frame header for MsgAck, got nil error")
+	}
+}
+
+func TestReadMessage_FrameSizeTooSmall(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Size < 3
+	frameSize := uint32(2)
+	binary.Write(&buf, binary.LittleEndian, frameSize)
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("Expected ReadMessage to reject frame size < 3, got nil error")
+	}
+}
+
+func TestReadMessage_FrameSizeExceedsMaxFrameSize(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Size > MaxFrameSize (2MB)
+	frameSize := uint32(chunk.MaxFrameSize + 1)
+	binary.Write(&buf, binary.LittleEndian, frameSize)
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("Expected ReadMessage to reject frame size > MaxFrameSize, got nil error")
+	}
+}
+
+func TestReadMessage_ZeroAllocBeforeValidation(t *testing.T) {
+	// Construct an oversized Ack frame header in a byte slice
+	var hdr [7]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], 2000000)
+	binary.LittleEndian.PutUint16(hdr[4:6], chunk.CurrentMessageVersion)
+	hdr[6] = byte(chunk.MsgAck)
+
+	reader := bytes.NewReader(hdr[:])
+
+	allocs := testing.AllocsPerRun(10, func() {
+		reader.Reset(hdr[:])
+		chunk.ReadMessage(reader)
+	})
+
+	// Heap allocations for payload buffering (make([]byte, 2000000)) must NOT occur.
+	// Only minor Go interface boxing allocations (2) occur on returning the error.
+	if allocs > 2 {
+		t.Errorf("Expected <= 2 allocations on rejected oversized frame, got %f", allocs)
+	}
 }
