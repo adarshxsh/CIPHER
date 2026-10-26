@@ -60,6 +60,8 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	keyOut := flag.String("key-out", "", "Path to write raw decryption key material")
+	keyFile := flag.String("key-file", "", "Path to file containing decryption key")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +125,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -247,9 +249,15 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		if *keyOut != "" && len(key) > 0 {
+			if err := engine.ExportKey(*keyOut, key); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+			log.Printf("[✓] Key exported to: %s", *keyOut)
+		}
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Decryption Key: [REDACTED]")
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +271,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key-file <key_file> \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,12 +376,22 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
+		if *keyFile != "" {
+			kBytes, err := engine.LoadKeyFromFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to load key file: %v", err)
+			}
+			if err := keys.Put(ctx, contentID, kBytes); err != nil {
+				log.Fatalf("Failed to store key in keystore: %v", err)
+			}
+		} else if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
 			if err != nil || len(kBytes) != 32 {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
-			keys.Put(ctx, contentID, kBytes)
+			if err := keys.Put(ctx, contentID, kBytes); err != nil {
+				log.Fatalf("Failed to store key in keystore: %v", err)
+			}
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.

@@ -46,11 +46,17 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	keyOut := flag.String("key-out", "", "Path to write raw decryption key material")
+	keyFile := flag.String("key-file", "", "Path to file containing decryption key")
 
 	flag.Parse()
 
 	if *filePath == "" {
 		log.Fatalf("Error: -file <path> is required to publish content")
+	}
+
+	if *keyFile != "" {
+		log.Printf("Key file specified: %s", *keyFile)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,7 +116,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -235,11 +241,17 @@ func main() {
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	if *keyOut != "" && len(key) > 0 {
+		if err := engine.ExportKey(*keyOut, key); err != nil {
+			log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+		}
+		log.Printf("[✓] Key exported to: %s", *keyOut)
+	}
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: [REDACTED]\n")
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
