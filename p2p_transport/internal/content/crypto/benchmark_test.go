@@ -15,7 +15,7 @@ func BenchmarkChaCha20Encryptor(b *testing.B) {
 	rand.Read(key)
 
 	chunkSize := 256 * 1024
-	data := make([]byte, chunkSize)
+	data := make([]byte, chunkSize, chunkSize+16)
 	rand.Read(data)
 
 	chunk := &core.Chunk{
@@ -26,6 +26,7 @@ func BenchmarkChaCha20Encryptor(b *testing.B) {
 	}
 
 	b.SetBytes(int64(chunkSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
