@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	record "github.com/libp2p/go-libp2p-record"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -15,7 +16,16 @@ import (
 // mode should be dht.ModeServer for peers (they help route/store records too,
 // matching your "providers" box — everyone participates).
 func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+	validator := record.NamespacedValidator{
+		"pk":       record.PublicKeyValidator{},
+		"cipher":   ProviderRecordValidator{},
+		"provider": ProviderRecordValidator{},
+	}
+	kdht, err := dht.New(h,
+		dht.Mode(mode),
+		dht.ProtocolPrefix("/cipher"),
+		dht.Validator(validator),
+	)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
