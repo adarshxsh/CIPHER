@@ -61,8 +61,14 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
+	if err := ValidateManifestPayload(resp.Payload); err != nil {
+		c.stream.Close()
+		return nil, fmt.Errorf("manifest payload validation failed: %w", err)
+	}
+
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
+		c.stream.Close()
 		return nil, err
 	}
 	if respID != id {
