@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"cipher/internal/content/core"
@@ -23,6 +24,28 @@ const (
 	AckTimeout   = 30 * time.Second
 )
 
+var bufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
+// GetBuffer retrieves a reset bytes.Buffer from the pool.
+func GetBuffer() *bytes.Buffer {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+// PutBuffer resets and returns a bytes.Buffer to the pool.
+func PutBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	buf.Reset()
+	bufferPool.Put(buf)
+}
+
 type PushMessageType uint8
 
 const (
@@ -36,24 +59,40 @@ const (
 )
 
 const (
-	PushStatusOK              byte = 0x00
-	PushStatusUnauthorized    byte = 0x01
-	PushStatusDiskFull        byte = 0x02
-	PushStatusMalformed       byte = 0x03
-	PushStatusIncomplete      byte = 0x04
-	PushStatusHashMismatch    byte = 0x05
+	PushStatusOK               byte = 0x00
+	PushStatusUnauthorized     byte = 0x01
+	PushStatusDiskFull         byte = 0x02
+	PushStatusMalformed        byte = 0x03
+	PushStatusIncomplete       byte = 0x04
+	PushStatusHashMismatch     byte = 0x05
 	PushStatusNotInAssignedSet byte = 0x06
-	PushStatusIOError         byte = 0x07
+	PushStatusIOError          byte = 0x07
 )
 
 type PushMessage struct {
 	Version uint16
 	Type    PushMessageType
 	Payload []byte
+	buffer  *bytes.Buffer
+}
+
+// Release returns any pooled buffer backing this PushMessage to the buffer pool.
+func (m *PushMessage) Release() {
+	if m != nil && m.buffer != nil {
+		PutBuffer(m.buffer)
+		m.buffer = nil
+		m.Payload = nil
+	}
 }
 
 func WritePushMessage(w io.Writer, msg *PushMessage) error {
-	buf := new(bytes.Buffer)
+	if msg == nil {
+		return errors.New("cannot write nil push message")
+	}
+	defer msg.Release()
+
+	buf := GetBuffer()
+	defer PutBuffer(buf)
 
 	// Envelope: Version (2B), Type (1B)
 	if err := binary.Write(buf, binary.LittleEndian, msg.Version); err != nil {
@@ -116,7 +155,7 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 // -- Payload Builders & Parsers --
 
 func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID, manifestData []byte) *PushMessage {
-	buf := new(bytes.Buffer)
+	buf := GetBuffer()
 	buf.Write(contentID[:])
 
 	count := uint32(len(assignedChunkIDs))
@@ -131,6 +170,7 @@ func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID
 		Version: CurrentPushVersion,
 		Type:    MsgPushManifest,
 		Payload: buf.Bytes(),
+		buffer:  buf,
 	}
 }
 
@@ -177,10 +217,11 @@ func ParsePushManifestAck(payload []byte) (core.ContentID, byte, error) {
 }
 
 func BuildPushChunk(contentID core.ContentID, chunk *core.Chunk) (*PushMessage, error) {
-	buf := new(bytes.Buffer)
+	buf := GetBuffer()
 	buf.Write(contentID[:])
 
 	if err := binary.Write(buf, binary.LittleEndian, &chunk.Header); err != nil {
+		PutBuffer(buf)
 		return nil, err
 	}
 	buf.Write(chunk.Data)
@@ -189,6 +230,7 @@ func BuildPushChunk(contentID core.ContentID, chunk *core.Chunk) (*PushMessage, 
 		Version: CurrentPushVersion,
 		Type:    MsgPushChunk,
 		Payload: buf.Bytes(),
+		buffer:  buf,
 	}, nil
 }
 
