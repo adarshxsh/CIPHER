@@ -60,6 +60,8 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	showKey := flag.Bool("show-key", false, "Display raw decryption key in standard output")
+	keyOut := flag.String("key-out", "", "Path to export raw decryption key file (mode 0600)")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,7 +251,21 @@ func main() {
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		if *showKey {
+			log.Printf("    Key: %x", key)
+		} else {
+			log.Printf("    Key: [REDACTED]")
+		}
+
+		if *keyOut != "" {
+			hexKey := fmt.Sprintf("%x\n", key)
+			if err := os.WriteFile(*keyOut, []byte(hexKey), 0600); err != nil {
+				log.Fatalf("Failed to write key to file %s: %v", *keyOut, err)
+			}
+			if err := os.Chmod(*keyOut, 0600); err != nil {
+				log.Printf("Warning: Failed to set permissions on key file %s: %v", *keyOut, err)
+			}
+		}
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -257,14 +273,19 @@ func main() {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
 		
+		keyStr := "[REDACTED]"
+		if *showKey {
+			keyStr = fmt.Sprintf("%x", key)
+		}
+
 		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
 			"  -p 5001 \\\n" +
 			"  -ws-port 5002 \\\n" +
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyStr)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
