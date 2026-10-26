@@ -15,7 +15,7 @@ rm -f bootstrap.log publisher.log provider.log client1.log client2.log
 export CGO_ENABLED=0
 
 cleanup() {
-    kill $BOOT_PID $PUB_PID $PROV_PID 2>/dev/null || true
+    kill -9 $BOOT_PID $PUB_PID $PROV_PID 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -73,7 +73,7 @@ fi
 echo "✓ SUCCESS: Client 1 retrieved file solely via DHT discovery from independent Provider!"
 
 echo "\n[Step 6/6] Testing Provider Persistence: Killing Provider & Restarting..."
-kill $PROV_PID
+kill -9 $PROV_PID
 wait $PROV_PID 2>/dev/null || true
 echo "✓ Provider stopped."
 
