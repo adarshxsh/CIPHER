@@ -16,9 +16,14 @@ import (
 	"cipher/internal/transfer"
 )
 
+// StreamTimeout is the default idle timeout applied to transport streams.
+var StreamTimeout = 30 * time.Second
+
 // SetupStreamHandler configures the host to handle incoming streams for the file transfer protocol.
 func SetupStreamHandler(h host.Host) {
 	h.SetStreamHandler(protocol.FileTransferProtocolID, func(s network.Stream) {
+		s.SetReadDeadline(time.Now().Add(StreamTimeout))
+		s.SetWriteDeadline(time.Now().Add(StreamTimeout))
 		if err := transfer.Receive(s); err != nil {
 			log.Printf("Error receiving file: %v", err)
 		}
@@ -85,6 +90,9 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 	if err != nil {
 		return nil, fmt.Errorf("NewStream failed: %w", err)
 	}
+
+	s.SetReadDeadline(time.Now().Add(StreamTimeout))
+	s.SetWriteDeadline(time.Now().Add(StreamTimeout))
 
 	return s, nil
 }
