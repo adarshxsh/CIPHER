@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -34,6 +35,8 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
@@ -83,9 +86,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
 				}
 
-				// Real network / integrity error: count attempts
+				// Real network / integrity error: count attempts and schedule backoff
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
+					delay := CalculateBackoff(res.Task.Attempts, 50*time.Millisecond)
+					res.Task.NextAvailable = time.Now().Add(delay)
 					queue.Push(res.Task)
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
@@ -94,6 +99,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				// Success
 				completions <- res
 				pendingTasks--
+				if pendingTasks == 0 {
+					queue.Close()
+				}
 			}
 		}
 	}
