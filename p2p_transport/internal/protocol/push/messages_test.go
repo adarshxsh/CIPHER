@@ -128,3 +128,15 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestParsePushManifest_OversizedManifestData(t *testing.T) {
+	var contentID core.ContentID
+	assigned := []core.ChunkID{}
+	manifestData := make([]byte, MaxManifestSize+1)
+
+	msg := BuildPushManifest(contentID, assigned, manifestData)
+	_, _, _, err := ParsePushManifest(msg.Payload)
+	if err == nil {
+		t.Fatalf("expected error for oversized manifestData in ParsePushManifest, got nil")
+	}
+}
