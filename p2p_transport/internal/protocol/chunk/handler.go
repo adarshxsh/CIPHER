@@ -33,7 +33,15 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	var msgCount int
+	var txCount int
+
 	for {
+		if txCount >= MaxTransactionsPerStream || msgCount >= MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Stream limits reached (txCount=%d, msgCount=%d)", txCount, msgCount)
+			return
+		}
+
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
@@ -41,6 +49,12 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			return
+		}
+
+		msgCount++
+		if msgCount > MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Exceeded MaxMessagesPerStream (%d)", MaxMessagesPerStream)
 			return
 		}
 
@@ -53,20 +67,31 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 
 		switch msg.Type {
 		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
+			h.handleRequestManifest(s, msg, &msgCount, &txCount)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, &msgCount, &txCount)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			return
+		}
+
+		if txCount >= MaxTransactionsPerStream || msgCount >= MaxMessagesPerStream {
+			return
 		}
 	}
 }
 
-func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message, msgCount *int, txCount *int) {
+	defer func() {
+		(*txCount)++
+	}()
+
 	contentID, err := ParseRequestManifest(msg.Payload)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
+		if errWrite := WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST")); errWrite == nil {
+			(*msgCount)++
+		}
 		return
 	}
 
@@ -74,27 +99,39 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	ctx := context.Background()
 	manifestData, err := h.engine.GetManifestBytes(ctx, contentID)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrContentNotFound, "manifest not found"))
+		if errWrite := WriteMessage(s, BuildError(ErrContentNotFound, "manifest not found")); errWrite == nil {
+			(*msgCount)++
+		}
 		return
 	}
 
 	resp := BuildManifest(contentID, manifestData)
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
+	} else {
+		(*msgCount)++
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, msgCount *int, txCount *int) {
+	defer func() {
+		(*txCount)++
+	}()
+
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
+		if errWrite := WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK")); errWrite == nil {
+			(*msgCount)++
+		}
 		return
 	}
 
 	ctx := context.Background()
 	chunkData, err := h.engine.GetChunk(ctx, chunkID)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
+		if errWrite := WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found")); errWrite == nil {
+			(*msgCount)++
+		}
 		return
 	}
 
@@ -106,12 +143,19 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 
 	resp, err := BuildChunk(chunkData)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrInternal, "failed to build chunk message"))
+		if errWrite := WriteMessage(s, BuildError(ErrInternal, "failed to build chunk message")); errWrite == nil {
+			(*msgCount)++
+		}
 		return
 	}
 
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing CHUNK response: %v", err)
+		return
+	}
+	(*msgCount)++
+
+	if *msgCount >= MaxMessagesPerStream {
 		return
 	}
 
@@ -121,6 +165,8 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
+	(*msgCount)++
+
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
