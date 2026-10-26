@@ -70,10 +70,16 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 	// Read all chunks, encrypt, hash, and store
 	for chunk := range chunkCh {
+		plainBuf := chunk.Data
+
 		// Encrypt the chunk
 		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+			e.chunker.PutBuffer(plainBuf)
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
+
+		// Recycle plaintext buffer back to sync.Pool
+		e.chunker.PutBuffer(plainBuf)
 
 		// Hash the ciphertext to get the ChunkID (content-addressing)
 		chunkHash := e.digest.Sum(chunk.Data)
