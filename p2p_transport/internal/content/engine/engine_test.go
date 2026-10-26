@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"math/rand"
 	"os"
 	"testing"
@@ -69,5 +70,50 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 
 	if !bytes.Equal(originalData, outBuf.Bytes()) {
 		t.Errorf("reassembled data does not match original data")
+	}
+}
+
+func TestIngest_ContentIDMatchesCanonicalManifestSHA256(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-digest-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	sampleData := []byte("Hello, world! Cryptographic content addressing verification.")
+	ctx := context.Background()
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(sampleData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("m.Serialize failed: %v", err)
+	}
+
+	expectedHash := sha256.Sum256(mBytes)
+	if m.Descriptor.ID != core.ContentID(expectedHash) {
+		t.Fatalf("Descriptor.ID %x != expected SHA-256 %x", m.Descriptor.ID, expectedHash)
+	}
+
+	deserialized, err := manifest.Deserialize(mBytes)
+	if err != nil {
+		t.Fatalf("manifest.Deserialize failed: %v", err)
+	}
+	if deserialized.Descriptor.ID != core.ContentID(expectedHash) {
+		t.Fatalf("deserialized Descriptor.ID %x != expected SHA-256 %x", deserialized.Descriptor.ID, expectedHash)
 	}
 }

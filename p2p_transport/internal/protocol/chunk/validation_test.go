@@ -1,6 +1,7 @@
 package chunk_test
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -127,5 +128,25 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_IntegrityMismatch(t *testing.T) {
+	manifestBytes := []byte(`{"version":1,"descriptor":{"type":"file","size":100}}`)
+	actualDigest := sha256.Sum256(manifestBytes)
+	contentID := core.ContentID(actualDigest)
+
+	// Valid payload
+	validMsg := chunk.BuildManifest(contentID, manifestBytes)
+	if err := chunk.ValidateManifestForRequest(contentID, validMsg.Payload); err != nil {
+		t.Fatalf("expected valid manifest to pass, got: %v", err)
+	}
+
+	// Tampered payload body (digest mismatch)
+	tamperedBytes := []byte(`{"version":1,"descriptor":{"type":"file","size":200}}`)
+	tamperedMsg := chunk.BuildManifest(contentID, tamperedBytes)
+	err := chunk.ValidateManifestForRequest(contentID, tamperedMsg.Payload)
+	if !errors.Is(err, chunk.ErrIntegrityMismatch) {
+		t.Fatalf("expected ErrIntegrityMismatch for tampered manifest payload, got: %v", err)
 	}
 }

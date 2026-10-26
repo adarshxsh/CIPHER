@@ -28,15 +28,38 @@ const (
 type ErrorCode uint8
 
 const (
-	ErrContentNotFound  ErrorCode = 0x01
-	ErrChunkNotFound    ErrorCode = 0x02
-	ErrInvalidManifest  ErrorCode = 0x03
-	ErrPermissionDenied ErrorCode = 0x04
-	ErrInternal         ErrorCode = 0x05
-	ErrIntegrityMismatch ErrorCode = 0x06
-	ErrBadRequest       ErrorCode = 0x07
+	ErrContentNotFound    ErrorCode = 0x01
+	ErrChunkNotFound      ErrorCode = 0x02
+	ErrInvalidManifest    ErrorCode = 0x03
+	ErrPermissionDenied   ErrorCode = 0x04
+	ErrInternal           ErrorCode = 0x05
+	ErrIntegrityMismatch  ErrorCode = 0x06
+	ErrBadRequest         ErrorCode = 0x07
 	ErrUnsupportedMessage ErrorCode = 0x08
 )
+
+func (e ErrorCode) Error() string {
+	switch e {
+	case ErrContentNotFound:
+		return "content not found"
+	case ErrChunkNotFound:
+		return "chunk not found"
+	case ErrInvalidManifest:
+		return "invalid manifest"
+	case ErrPermissionDenied:
+		return "permission denied"
+	case ErrInternal:
+		return "internal error"
+	case ErrIntegrityMismatch:
+		return "integrity mismatch"
+	case ErrBadRequest:
+		return "bad request"
+	case ErrUnsupportedMessage:
+		return "unsupported message"
+	default:
+		return fmt.Sprintf("protocol error %d", e)
+	}
+}
 
 // Message is the symmetric envelope for all protocol communications.
 type Message struct {
