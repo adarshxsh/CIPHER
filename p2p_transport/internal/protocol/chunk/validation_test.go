@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +128,59 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_ZeroIDDigest(t *testing.T) {
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 1024,
+		},
+		ChunkIDs: []core.ChunkID{{0x01}},
+		Crypto: manifest.CryptoDescriptor{
+			Algorithm: "ChaCha20-Poly1305",
+		},
+	}
+
+	contentID, err := m.ComputeDigest()
+	if err != nil {
+		t.Fatalf("ComputeDigest failed: %v", err)
+	}
+	m.Descriptor.ID = contentID
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	validMsg := chunk.BuildManifest(contentID, mBytes)
+
+	// 1. Valid payload should pass
+	if err := chunk.ValidateManifestForRequest(contentID, validMsg.Payload); err != nil {
+		t.Fatalf("valid manifest failed validation: %v", err)
+	}
+
+	// 2. Modified manifest body (e.g. altered size) with original ContentID header prefix should fail
+	mModified := *m
+	mModified.Descriptor.Size = 9999
+	mModifiedBytes, _ := mModified.Serialize()
+	corruptedMsg := chunk.BuildManifest(contentID, mModifiedBytes)
+
+	err = chunk.ValidateManifestForRequest(contentID, corruptedMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected ErrContentMismatch for modified manifest payload, got %v", err)
+	}
+
+	// 3. Mismatched Descriptor.ID inside manifest JSON should fail
+	mMismatchedID := *m
+	mMismatchedID.Descriptor.ID = core.ContentID{0x99}
+	mMismatchedBytes, _ := mMismatchedID.Serialize()
+	mismatchedIDMsg := chunk.BuildManifest(contentID, mMismatchedBytes)
+
+	err = chunk.ValidateManifestForRequest(contentID, mismatchedIDMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("expected ErrContentMismatch for mismatched Descriptor.ID, got %v", err)
 	}
 }
