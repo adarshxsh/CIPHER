@@ -1,9 +1,22 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+	"io"
+
 	"cipher/internal/content/core"
+)
+
+const (
+	// MaxManifestSize specifies the maximum allowed size for manifest payloads (2 MiB).
+	MaxManifestSize = 2 * 1024 * 1024
+)
+
+var (
+	ErrManifestTooLarge = errors.New("manifest exceeds maximum allowed size")
 )
 
 type ContentType string
@@ -47,9 +60,27 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if len(data) > MaxManifestSize {
+		return nil, ErrManifestTooLarge
+	}
+	return DeserializeStream(bytes.NewReader(data))
+}
+
+func DeserializeStream(r io.Reader) (*Manifest, error) {
+	if r == nil {
+		return nil, errors.New("nil reader")
+	}
+	limitedReader := io.LimitReader(r, int64(MaxManifestSize)+1)
+	buf, err := io.ReadAll(limitedReader)
+	if err != nil {
 		return nil, err
+	}
+	if len(buf) > MaxManifestSize {
+		return nil, ErrManifestTooLarge
+	}
+	var m Manifest
+	if err := json.Unmarshal(buf, &m); err != nil {
+		return nil, fmt.Errorf("failed to deserialize manifest: %w", err)
 	}
 	return &m, nil
 }

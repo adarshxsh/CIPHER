@@ -131,3 +131,30 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 		t.Errorf("Unexpected error msg: %v", err)
 	}
 }
+
+func TestChunkProtocol_OversizedManifest(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	eng2 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	var testID core.ContentID
+	testID[0] = 0xDE
+	testID[1] = 0xAD
+
+	// Create oversized manifest data
+	oversizedManifestData := make([]byte, chunk.MaxManifestSize+1)
+	eng1.PutManifestBytes(ctx, testID, oversizedManifestData)
+
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Resolve(ctx, testID)
+	if err == nil {
+		t.Fatalf("Expected error when resolving oversized manifest, got nil")
+	}
+}

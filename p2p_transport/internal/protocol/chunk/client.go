@@ -61,6 +61,10 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
+	if err := ValidateMessage(resp); err != nil {
+		return nil, fmt.Errorf("invalid manifest response: %w", err)
+	}
+
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
 		return nil, err
