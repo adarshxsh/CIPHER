@@ -57,7 +57,19 @@ type FileSessionManager struct {
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.Chmod(path, 0700)
+		}
+		return os.Chmod(path, 0600)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &FileSessionManager{dir: dir}, nil
@@ -92,10 +104,16 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	path := m.getPath(session.ContentID)
 	// Write to temporary file and rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, b, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
 }
 
 func (m *FileSessionManager) Close(id core.ContentID) error {
