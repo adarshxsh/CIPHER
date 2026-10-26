@@ -1,11 +1,11 @@
 package push
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"cipher/internal/content/core"
@@ -36,14 +36,14 @@ const (
 )
 
 const (
-	PushStatusOK              byte = 0x00
-	PushStatusUnauthorized    byte = 0x01
-	PushStatusDiskFull        byte = 0x02
-	PushStatusMalformed       byte = 0x03
-	PushStatusIncomplete      byte = 0x04
-	PushStatusHashMismatch    byte = 0x05
+	PushStatusOK               byte = 0x00
+	PushStatusUnauthorized     byte = 0x01
+	PushStatusDiskFull         byte = 0x02
+	PushStatusMalformed        byte = 0x03
+	PushStatusIncomplete       byte = 0x04
+	PushStatusHashMismatch     byte = 0x05
 	PushStatusNotInAssignedSet byte = 0x06
-	PushStatusIOError         byte = 0x07
+	PushStatusIOError          byte = 0x07
 )
 
 type PushMessage struct {
@@ -52,37 +52,67 @@ type PushMessage struct {
 	Payload []byte
 }
 
+func encodeChunkHeader(h *core.ChunkHeader, dst []byte) {
+	binary.LittleEndian.PutUint16(dst[0:2], h.Version)
+	copy(dst[2:34], h.ID[:])
+	binary.LittleEndian.PutUint32(dst[34:38], h.Index)
+	binary.LittleEndian.PutUint64(dst[38:46], uint64(h.Offset))
+	binary.LittleEndian.PutUint32(dst[46:50], h.PlainSize)
+	binary.LittleEndian.PutUint32(dst[50:54], h.CipherSize)
+	copy(dst[54:66], h.Nonce[:])
+}
+
+func decodeChunkHeader(src []byte, h *core.ChunkHeader) {
+	h.Version = binary.LittleEndian.Uint16(src[0:2])
+	copy(h.ID[:], src[2:34])
+	h.Index = binary.LittleEndian.Uint32(src[34:38])
+	h.Offset = int64(binary.LittleEndian.Uint64(src[38:46]))
+	h.PlainSize = binary.LittleEndian.Uint32(src[46:50])
+	h.CipherSize = binary.LittleEndian.Uint32(src[50:54])
+	copy(h.Nonce[:], src[54:66])
+}
+
+var headerPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 7)
+		return &b
+	},
+}
+
 func WritePushMessage(w io.Writer, msg *PushMessage) error {
-	buf := new(bytes.Buffer)
+	payloadLen := len(msg.Payload)
+	size := uint32(3 + payloadLen)
 
-	// Envelope: Version (2B), Type (1B)
-	if err := binary.Write(buf, binary.LittleEndian, msg.Version); err != nil {
-		return err
-	}
-	if err := binary.Write(buf, binary.LittleEndian, msg.Type); err != nil {
-		return err
-	}
-	buf.Write(msg.Payload)
-
-	size := uint32(buf.Len())
 	if size > MaxMessageSize {
 		return fmt.Errorf("message size %d exceeds limit %d", size, MaxMessageSize)
 	}
 
-	// 4B size prefix
-	if err := binary.Write(w, binary.LittleEndian, size); err != nil {
+	hdrPtr := headerPool.Get().(*[]byte)
+	hdr := *hdrPtr
+	binary.LittleEndian.PutUint32(hdr[0:4], size)
+	binary.LittleEndian.PutUint16(hdr[4:6], msg.Version)
+	hdr[6] = byte(msg.Type)
+
+	if _, err := w.Write(hdr); err != nil {
+		headerPool.Put(hdrPtr)
 		return err
 	}
-
-	_, err := w.Write(buf.Bytes())
-	return err
+	if payloadLen > 0 {
+		if _, err := w.Write(msg.Payload); err != nil {
+			headerPool.Put(hdrPtr)
+			return err
+		}
+	}
+	headerPool.Put(hdrPtr)
+	return nil
 }
 
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
 		return nil, err
 	}
+	size := binary.LittleEndian.Uint32(sizeBuf[:])
 
 	if size > MaxMessageSize {
 		return nil, fmt.Errorf("message size %d exceeds maximum frame size %d", size, MaxMessageSize)
@@ -91,46 +121,42 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	frame := make([]byte, size)
+	if _, err := io.ReadFull(r, frame); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
-	}
+	version := binary.LittleEndian.Uint16(frame[0:2])
+	msgType := PushMessageType(frame[2])
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
-	}
-
-	return msg, nil
+	return &PushMessage{
+		Version: version,
+		Type:    msgType,
+		Payload: frame[3:],
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
 
 func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID, manifestData []byte) *PushMessage {
-	buf := new(bytes.Buffer)
-	buf.Write(contentID[:])
-
 	count := uint32(len(assignedChunkIDs))
-	_ = binary.Write(buf, binary.LittleEndian, count)
+	payloadLen := 36 + int(count)*32 + len(manifestData)
+	payload := make([]byte, payloadLen)
 
+	copy(payload[0:32], contentID[:])
+	binary.LittleEndian.PutUint32(payload[32:36], count)
+
+	offset := 36
 	for _, cid := range assignedChunkIDs {
-		buf.Write(cid[:])
+		copy(payload[offset:offset+32], cid[:])
+		offset += 32
 	}
-	buf.Write(manifestData)
+	copy(payload[offset:], manifestData)
 
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushManifest,
-		Payload: buf.Bytes(),
+		Payload: payload,
 	}
 }
 
@@ -159,7 +185,9 @@ func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, 
 }
 
 func BuildPushManifestAck(contentID core.ContentID, status byte) *PushMessage {
-	payload := append(contentID[:], status)
+	payload := make([]byte, 33)
+	copy(payload[:32], contentID[:])
+	payload[32] = status
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushManifestAck,
@@ -177,25 +205,26 @@ func ParsePushManifestAck(payload []byte) (core.ContentID, byte, error) {
 }
 
 func BuildPushChunk(contentID core.ContentID, chunk *core.Chunk) (*PushMessage, error) {
-	buf := new(bytes.Buffer)
-	buf.Write(contentID[:])
-
-	if err := binary.Write(buf, binary.LittleEndian, &chunk.Header); err != nil {
-		return nil, err
+	if chunk == nil {
+		return nil, errors.New("nil chunk")
 	}
-	buf.Write(chunk.Data)
+	payloadLen := 32 + 66 + len(chunk.Data)
+	payload := make([]byte, payloadLen)
+
+	copy(payload[0:32], contentID[:])
+	encodeChunkHeader(&chunk.Header, payload[32:98])
+	copy(payload[98:], chunk.Data)
 
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushChunk,
-		Payload: buf.Bytes(),
+		Payload: payload,
 	}, nil
 }
 
 func ParsePushChunk(payload []byte) (core.ContentID, *core.Chunk, error) {
 	var contentID core.ContentID
-	var dummyHeader core.ChunkHeader
-	headerSize := binary.Size(dummyHeader)
+	const headerSize = 66
 
 	if len(payload) < 32+headerSize {
 		return contentID, nil, errors.New("invalid payload length for PUSH_CHUNK")
@@ -203,22 +232,17 @@ func ParsePushChunk(payload []byte) (core.ContentID, *core.Chunk, error) {
 
 	copy(contentID[:], payload[:32])
 
-	buf := bytes.NewReader(payload[32:])
 	chunk := &core.Chunk{}
-	if err := binary.Read(buf, binary.LittleEndian, &chunk.Header); err != nil {
-		return contentID, nil, err
-	}
-
-	chunk.Data = make([]byte, buf.Len())
-	if _, err := buf.Read(chunk.Data); err != nil && err != io.EOF {
-		return contentID, nil, err
-	}
+	decodeChunkHeader(payload[32:32+headerSize], &chunk.Header)
+	chunk.Data = payload[32+headerSize:]
 
 	return contentID, chunk, nil
 }
 
 func BuildPushChunkAck(chunkID core.ChunkID, status byte) *PushMessage {
-	payload := append(chunkID[:], status)
+	payload := make([]byte, 33)
+	copy(payload[:32], chunkID[:])
+	payload[32] = status
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushChunkAck,
@@ -236,10 +260,12 @@ func ParsePushChunkAck(payload []byte) (core.ChunkID, byte, error) {
 }
 
 func BuildPushBatchComplete(contentID core.ContentID) *PushMessage {
+	payload := make([]byte, 32)
+	copy(payload, contentID[:])
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushBatchComplete,
-		Payload: contentID[:],
+		Payload: payload,
 	}
 }
 
@@ -253,7 +279,9 @@ func ParsePushBatchComplete(payload []byte) (core.ContentID, error) {
 }
 
 func BuildPushBatchCompleteAck(contentID core.ContentID, status byte) *PushMessage {
-	payload := append(contentID[:], status)
+	payload := make([]byte, 33)
+	copy(payload[:32], contentID[:])
+	payload[32] = status
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushBatchCompleteAck,
@@ -271,7 +299,9 @@ func ParsePushBatchCompleteAck(payload []byte) (core.ContentID, byte, error) {
 }
 
 func BuildPushError(code byte, msg string) *PushMessage {
-	payload := append([]byte{code}, []byte(msg)...)
+	payload := make([]byte, 1+len(msg))
+	payload[0] = code
+	copy(payload[1:], msg)
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushError,
@@ -285,3 +315,4 @@ func ParsePushError(payload []byte) (byte, string, error) {
 	}
 	return payload[0], string(payload[1:]), nil
 }
+

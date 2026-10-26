@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"io"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -128,3 +129,49 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestWritePushMessage_ZeroIntermediateAllocations(t *testing.T) {
+	msg := &PushMessage{
+		Version: CurrentPushVersion,
+		Type:    MsgPushChunk,
+		Payload: []byte("sample-push-payload-data-slice"),
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := WritePushMessage(io.Discard, msg); err != nil {
+			t.Fatalf("WritePushMessage failed: %v", err)
+		}
+	})
+
+	if allocs > 0 {
+		t.Errorf("expected 0 dynamic intermediate allocations for WritePushMessage, got %f", allocs)
+	}
+}
+
+func TestParsePushChunk_ZeroByteArrayAllocations(t *testing.T) {
+	var contentID core.ContentID
+	chunkData := []byte("hello-world-push-ciphertext-chunk-data")
+	origChunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			Version:    1,
+			Index:      1,
+			PlainSize:  uint32(len(chunkData)),
+			CipherSize: uint32(len(chunkData)),
+		},
+		Data: chunkData,
+	}
+	msg, err := BuildPushChunk(contentID, origChunk)
+	if err != nil {
+		t.Fatalf("BuildPushChunk failed: %v", err)
+	}
+
+	_, parsedChunk, err := ParsePushChunk(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParsePushChunk failed: %v", err)
+	}
+
+	if &parsedChunk.Data[0] != &msg.Payload[98] {
+		t.Errorf("ParsePushChunk did not preserve slice reference (copied payload instead of slicing)")
+	}
+}
+

@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"io"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -105,3 +106,48 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestWriteMessage_ZeroIntermediateAllocations(t *testing.T) {
+	msg := &chunk.Message{
+		Version: chunk.CurrentMessageVersion,
+		Type:    chunk.MsgChunk,
+		Payload: []byte("sample-payload-data-slice"),
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := chunk.WriteMessage(io.Discard, msg); err != nil {
+			t.Fatalf("WriteMessage failed: %v", err)
+		}
+	})
+
+	if allocs > 0 {
+		t.Errorf("expected 0 dynamic intermediate allocations for WriteMessage, got %f", allocs)
+	}
+}
+
+func TestParseChunk_ZeroByteArrayAllocations(t *testing.T) {
+	chunkData := []byte("hello-world-ciphertext-chunk-data")
+	origChunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			Version:    1,
+			Index:      1,
+			PlainSize:  uint32(len(chunkData)),
+			CipherSize: uint32(len(chunkData)),
+		},
+		Data: chunkData,
+	}
+	msg, err := chunk.BuildChunk(origChunk)
+	if err != nil {
+		t.Fatalf("BuildChunk failed: %v", err)
+	}
+
+	parsed, err := chunk.ParseChunk(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParseChunk failed: %v", err)
+	}
+
+	if &parsed.Data[0] != &msg.Payload[66] {
+		t.Errorf("ParseChunk did not preserve slice reference (copied payload instead of slicing)")
+	}
+}
+
