@@ -149,7 +149,7 @@ func main() {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
-	enc := crypto.NewChaCha20Encryptor()
+	enc := crypto.NewXChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)

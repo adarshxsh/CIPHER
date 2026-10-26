@@ -26,7 +26,7 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		ChunkSize: 32 * 1024, // 32KB
 	}
 
-	enc := crypto.NewChaCha20Encryptor()
+	enc := crypto.NewXChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := NewLocalKeyProvider()
 
@@ -49,6 +49,15 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 	m, err := eng.Ingest(ctx, reader, manifest.TypeFile)
 	if err != nil {
 		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Verify Manifest
+	if m.Crypto.Algorithm != "XChaCha20-Poly1305" {
+		t.Errorf("manifest algorithm %s != expected XChaCha20-Poly1305", m.Crypto.Algorithm)
+	}
+
+	if m.Crypto.ChunkNonceSize != 24 {
+		t.Errorf("manifest chunk nonce size %d != expected 24", m.Crypto.ChunkNonceSize)
 	}
 
 	// Verify Manifest
