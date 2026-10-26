@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"cipher/internal/content/core"
@@ -49,6 +50,7 @@ type SessionManager interface {
 	Close(id core.ContentID) error
 	Delete(id core.ContentID) error
 	List() ([]*TransferSession, error)
+	ListSessions(offset, limit int) ([]*TransferSession, error)
 }
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
@@ -113,6 +115,15 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 }
 
 func (m *FileSessionManager) List() ([]*TransferSession, error) {
+	return m.ListSessions(0, 50)
+}
+
+type sessionFileInfo struct {
+	name    string
+	modTime time.Time
+}
+
+func (m *FileSessionManager) ListSessions(offset, limit int) ([]*TransferSession, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -120,18 +131,61 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
-	var sessions []*TransferSession
+
+	var files []sessionFileInfo
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
-			}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, sessionFileInfo{
+			name:    entry.Name(),
+			modTime: info.ModTime(),
+		})
 	}
+
+	// Date-sorted file scanning: sort by modification time descending (newest first).
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].modTime.Equal(files[j].modTime) {
+			return files[i].name < files[j].name
+		}
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	if offset < 0 {
+		offset = 0
+	}
+
+	var sessions []*TransferSession
+	skipped := 0
+
+	for _, f := range files {
+		// Stop reading disk files once limit is reached
+		if limit > 0 && len(sessions) >= limit {
+			break
+		}
+
+		path := filepath.Join(m.dir, f.name)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var s TransferSession
+		if err := json.Unmarshal(b, &s); err != nil {
+			continue
+		}
+
+		if skipped < offset {
+			skipped++
+			continue
+		}
+
+		sessions = append(sessions, &s)
+	}
+
 	return sessions, nil
 }
