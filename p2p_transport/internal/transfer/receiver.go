@@ -16,6 +16,27 @@ import (
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
+var DefaultTransferDeadline = 30 * time.Second
+
+type deadlineReader struct {
+	s       network.Stream
+	r       io.Reader
+	timeout time.Duration
+}
+
+func (dr *deadlineReader) Read(p []byte) (int, error) {
+	_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	timer := time.AfterFunc(dr.timeout, func() {
+		dr.s.Reset()
+	})
+	n, err := dr.r.Read(p)
+	timer.Stop()
+	if n > 0 {
+		_ = dr.s.SetReadDeadline(time.Now().Add(dr.timeout))
+	}
+	return n, err
+}
+
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
 	defer s.Close()
@@ -23,10 +44,20 @@ func Receive(s network.Stream) error {
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
 	// 1. Read Header
+	_ = s.SetReadDeadline(time.Now().Add(DefaultTransferDeadline))
+	headerTimer := time.AfterFunc(DefaultTransferDeadline, func() {
+		s.Reset()
+	})
+
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	err := header.ReadFrom(s)
+	headerTimer.Stop()
+	_ = s.SetReadDeadline(time.Time{})
+
+	if err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
+	_ = s.SetReadDeadline(time.Time{})
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
@@ -53,13 +84,20 @@ func Receive(s network.Stream) error {
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
+	dr := &deadlineReader{
+		s:       s,
+		r:       s,
+		timeout: DefaultTransferDeadline,
+	}
+
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(dr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}
 
 	received, err := io.Copy(multiWriter, pr)
+	_ = s.SetReadDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}
