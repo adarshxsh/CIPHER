@@ -74,28 +74,38 @@ func ReadMessage(r io.Reader) (*Message, error) {
 		return nil, err
 	}
 
-	if size > 2*1024*1024 { // 2MB max frame size
+	if size < messageHeaderSize {
+		return nil, fmt.Errorf("message size %d is smaller than header", size)
+	}
+
+	if size > MaxFrameSize { // 2MB max frame size
 		return nil, errors.New("message exceeds maximum frame size")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	headerBuf := make([]byte, messageHeaderSize)
+	if _, err := io.ReadFull(r, headerBuf); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &Message{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
+	version := binary.LittleEndian.Uint16(headerBuf[:2])
+	messageType := MessageType(headerBuf[2])
+
+	payloadSize := size - messageHeaderSize
+	maxPayloadSize := MaxPayloadSizeForMessage(messageType)
+	if maxPayloadSize > 0 && uint64(payloadSize) > uint64(maxPayloadSize) {
+		return nil, fmt.Errorf("%w: message type=%d declared=%d maximum=%d", ErrPayloadTooLarge, messageType, payloadSize, maxPayloadSize)
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
+
+	payload := make([]byte, payloadSize)
+	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
-
-	return msg, nil
+	return &Message{
+		Version: version,
+		Type:    messageType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
@@ -130,6 +140,9 @@ func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
 	var id core.ContentID
 	if len(payload) < 32 {
 		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+	}
+	if len(payload) > MaxManifestSize {
+		return id, nil, fmt.Errorf("manifest payload exceeds maximum limit: received=%d maximum=%d", len(payload), MaxManifestSize)
 	}
 	copy(id[:], payload[:32])
 	return id, payload[32:], nil

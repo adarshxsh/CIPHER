@@ -49,6 +49,8 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		c.stream.Reset()
+		log.Printf("[SECURITY] Failed to read manifest response from peer %s: %v", c.stream.Conn().RemotePeer(), err)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -58,14 +60,24 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 
 	if resp.Type != MsgManifest {
+		c.stream.Reset()
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
+	}
+
+	if err := ValidateManifestPayload(resp.Payload); err != nil {
+		c.stream.Reset()
+		log.Printf("[SECURITY] Manifest payload validation failed for peer %s: %v", c.stream.Conn().RemotePeer(), err)
+		return nil, fmt.Errorf("invalid manifest payload: %w", err)
 	}
 
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
-		return nil, err
+		c.stream.Reset()
+		log.Printf("[SECURITY] Failed to parse manifest from peer %s: %v", c.stream.Conn().RemotePeer(), err)
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
 	}
 	if respID != id {
+		c.stream.Reset()
 		return nil, fmt.Errorf("content ID mismatch in response")
 	}
 
