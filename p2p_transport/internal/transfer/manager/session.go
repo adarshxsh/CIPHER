@@ -12,6 +12,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+const (
+	MaxSessionFileSize int64 = 512 * 1024 // 512KB limit for session JSON payload
+	MaxListedSessions  int   = 1000       // Upper limit on returned sessions per query
+)
+
 type SessionStatus string
 
 const (
@@ -53,14 +58,20 @@ type SessionManager interface {
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
 type FileSessionManager struct {
-	dir string
+	dir         string
+	maxFileSize int64
+	maxListed   int
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	return &FileSessionManager{
+		dir:         dir,
+		maxFileSize: MaxSessionFileSize,
+		maxListed:   MaxListedSessions,
+	}, nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -69,11 +80,22 @@ func (m *FileSessionManager) getPath(id core.ContentID) string {
 
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
-	b, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No session found
 		}
+		return nil, err
+	}
+	maxFileSize := m.maxFileSize
+	if maxFileSize <= 0 {
+		maxFileSize = MaxSessionFileSize
+	}
+	if info.Size() > maxFileSize {
+		return nil, fmt.Errorf("session file exceeds maximum size limit of %d bytes", maxFileSize)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
 	var s TransferSession
@@ -120,17 +142,35 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
+
+	maxFileSize := m.maxFileSize
+	if maxFileSize <= 0 {
+		maxFileSize = MaxSessionFileSize
+	}
+	maxListed := m.maxListed
+	if maxListed <= 0 {
+		maxListed = MaxListedSessions
+	}
+
 	var sessions []*TransferSession
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
-			}
+		if len(sessions) >= maxListed {
+			break
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() > maxFileSize {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var s TransferSession
+		if err := json.Unmarshal(b, &s); err == nil {
+			sessions = append(sessions, &s)
 		}
 	}
 	return sessions, nil
