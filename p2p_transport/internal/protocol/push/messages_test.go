@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +127,18 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestParsePushManifest_Oversized(t *testing.T) {
+	oversizedPayload := make([]byte, MaxManifestPayloadSize+1)
+
+	_, _, _, err := ParsePushManifest(oversizedPayload)
+	if err == nil {
+		t.Fatalf("expected error for oversized push manifest payload, got nil")
+	}
+
+	if !errors.Is(err, ErrManifestTooLarge) {
+		t.Errorf("expected error %v, got %v", ErrManifestTooLarge, err)
 	}
 }

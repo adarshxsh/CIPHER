@@ -9,18 +9,24 @@ import (
 	"time"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 const (
 	CurrentPushVersion uint16 = 1
 
-	MaxMessageSize  uint32        = 4 * 1024 * 1024 // 4 MB
-	MaxChunkSize    uint32        = 2 * 1024 * 1024 // 2 MB
-	MaxManifestSize uint32        = 2 * 1024 * 1024 // 2 MB
+	MaxMessageSize         uint32 = 4 * 1024 * 1024 // 4 MB
+	MaxChunkSize           uint32 = 2 * 1024 * 1024 // 2 MB
+	MaxManifestPayloadSize int    = manifest.MaxManifestPayloadSize
+	MaxManifestSize        uint32 = manifest.MaxManifestPayloadSize // 1 MB
 
 	ReadTimeout  = 15 * time.Second
 	WriteTimeout = 15 * time.Second
 	AckTimeout   = 30 * time.Second
+)
+
+var (
+	ErrManifestTooLarge = manifest.ErrManifestTooLarge
 )
 
 type PushMessageType uint8
@@ -136,6 +142,9 @@ func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID
 
 func ParsePushManifest(payload []byte) (core.ContentID, []core.ChunkID, []byte, error) {
 	var contentID core.ContentID
+	if len(payload) > MaxManifestPayloadSize {
+		return contentID, nil, nil, ErrManifestTooLarge
+	}
 	if len(payload) < 36 { // 32 bytes ContentID + 4 bytes count
 		return contentID, nil, nil, errors.New("invalid payload length for PUSH_MANIFEST")
 	}
