@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -123,7 +122,8 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, sequentially fetches, verifies, decrypts, and writes chunks to w.
+// Chunks are processed one at a time and released from memory immediately to keep memory consumption O(1).
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
 	// Retrieve key
 	key, err := e.keys.Get(ctx, m.Descriptor.ID)
@@ -131,42 +131,37 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
-
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
-
 	for _, chunkID := range m.ChunkIDs {
 		chunk, err := e.source.GetChunk(ctx, chunkID)
 		if err != nil {
 			return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
 		}
 
-		// Verify chunk hash matches ID
+		// Verify chunk hash matches ID prior to writing
 		hash := e.digest.Sum(chunk.Data)
 		if hash != core.Hash(chunkID) {
 			return fmt.Errorf("corrupted chunk %x: hash mismatch", chunkID)
 		}
 
-		// Decrypt
+		// Decrypt chunk
 		if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
-	}
-
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
-
-	// Write out
-	for _, chunk := range chunks {
+		// Write decrypted payload immediately to the output stream
 		if _, err := w.Write(chunk.Data); err != nil {
 			return fmt.Errorf("failed to write decrypted chunk: %w", err)
 		}
+
+		// Flush output writer if supported
+		if flusher, ok := w.(interface{ Flush() error }); ok {
+			if err := flusher.Flush(); err != nil {
+				return fmt.Errorf("failed to flush writer: %w", err)
+			}
+		}
+
+		// Release chunk payload memory immediately
+		chunk.Data = nil
 	}
 
 	return nil
