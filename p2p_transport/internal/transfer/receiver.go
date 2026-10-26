@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -38,7 +39,28 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	sanitizedFilename := filepath.Base(header.Filename)
+	if sanitizedFilename == "" || sanitizedFilename == "." || sanitizedFilename == "/" || sanitizedFilename == "\\" || sanitizedFilename == ".." {
+		return fmt.Errorf("invalid header filename: %q", header.Filename)
+	}
+
+	outPath := filepath.Join(downloadsDir, sanitizedFilename)
+
+	absDownloadsDir, err := filepath.Abs(downloadsDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path for downloads directory: %w", err)
+	}
+
+	absOutPath, err := filepath.Abs(outPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path for output file: %w", err)
+	}
+
+	rel, err := filepath.Rel(absDownloadsDir, absOutPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "..\\") {
+		return fmt.Errorf("invalid output path, directory traversal detected: %s", outPath)
+	}
+
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
