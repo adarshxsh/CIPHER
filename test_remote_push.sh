@@ -60,7 +60,7 @@ echo "Provider 2: $P2_ADDR"
 echo "Provider 3: $P3_ADDR"
 
 echo "\n[Step 5/6] Publisher pushes 2 MB file across Providers with Replication R=2..."
-./bin/publisher -p 48040 -ws-port 0 -file test_orig.dat -store ./store_pub \
+./bin/publisher -show-key -p 48040 -ws-port 0 -file test_orig.dat -store ./store_pub \
     -push -providers "$P1_ADDR,$P2_ADDR,$P3_ADDR" -replication 2 \
     -bootstrap "$BOOT_ADDR" -seed=false > publisher.log 2>&1
 
