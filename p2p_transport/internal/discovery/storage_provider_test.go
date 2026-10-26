@@ -1,13 +1,14 @@
 package discovery
 
 import (
+	"cipher/internal/identity"
 	"context"
 	"testing"
 	"time"
 
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 )
 
 func TestStorageProviderDHTRegistration(t *testing.T) {
@@ -28,7 +29,12 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	defer dht1.Close()
 
 	// 2. Create Storage Provider DHT Node
-	h2, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	priv2, err := identity.GenerateEphemeral()
+	if err != nil {
+		t.Fatalf("failed to generate priv2: %v", err)
+	}
+
+	h2, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"), libp2p.Identity(priv2))
 	if err != nil {
 		t.Fatalf("failed to create h2: %v", err)
 	}
@@ -48,7 +54,7 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	}
 
 	// 3. Register h2 as Storage Provider
-	if err := RegisterStorageProvider(ctx, dht2); err != nil {
+	if err := RegisterStorageProvider(ctx, dht2, h2, priv2); err != nil {
 		t.Fatalf("RegisterStorageProvider failed: %v", err)
 	}
 

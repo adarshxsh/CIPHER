@@ -305,7 +305,8 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 		go func() {
 			dhtCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := discovery.Provide(dhtCtx, h.kdht, contentID); err != nil {
+			privKey := h.host.Peerstore().PrivKey(h.host.ID())
+			if err := discovery.Provide(dhtCtx, h.kdht, h.host, privKey, contentID); err != nil {
 				log.Printf("[Push Protocol] Warning: Failed to announce %x on DHT: %v", contentID, err)
 			} else {
 				log.Printf("[Push Protocol] [✓] Successfully announced ContentID %x on DHT", contentID)

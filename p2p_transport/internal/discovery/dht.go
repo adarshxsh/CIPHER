@@ -21,6 +21,8 @@ func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
 
+	RegisterProvideHandler(h, kdht)
+
 	return kdht, nil
 }
 
