@@ -49,6 +49,7 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+	keyOut := flag.String("key-out", "", "Path to export raw key material to (optional)")
 
 	flag.Parse()
 
@@ -206,11 +207,16 @@ func main() {
 
 	// 5. Store decryption key if provided
 	if *keyHex != "" {
-		kBytes, err := hex.DecodeString(*keyHex)
-		if err != nil || len(kBytes) != 32 {
-			log.Fatalf("Invalid key format (must be 32-byte hex)")
+		kBytes, err := engine.ParseKey(*keyHex)
+		if err != nil {
+			log.Fatalf("Invalid key format or path: %v", err)
 		}
 		keys.Put(ctx, contentID, kBytes)
+		if *keyOut != "" {
+			if err := engine.ExportKey(*keyOut, kBytes); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+		}
 	}
 
 	// 6. Data Plane: Resolve Manifest

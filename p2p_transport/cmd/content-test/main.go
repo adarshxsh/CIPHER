@@ -21,6 +21,7 @@ func main() {
 	ingestFile := flag.String("ingest", "", "File to ingest and chunk")
 	reassembleOut := flag.String("out", "", "Output file for reassembled data (requires -manifest)")
 	manifestFile := flag.String("manifest", "test_files/manifest.json", "Manifest JSON file (output for ingest, input for reassemble)")
+	keyOut := flag.String("key-out", "", "Path to export raw key material to (optional)")
 	flag.Parse()
 
 	if *ingestFile == "" && *reassembleOut == "" {
@@ -73,7 +74,14 @@ func main() {
 		// (Normally this would be handled securely or retrieved over network)
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		os.WriteFile(keyPath, key, 0600)
+		if err := engine.ExportKey(keyPath, key); err != nil {
+			log.Fatalf("Failed to save test key: %v", err)
+		}
+		if *keyOut != "" {
+			if err := engine.ExportKey(*keyOut, key); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+		}
 		log.Printf("Test content key saved to: %s", keyPath)
 	}
 
