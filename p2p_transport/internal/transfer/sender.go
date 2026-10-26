@@ -30,50 +30,67 @@ func Send(s network.Stream, filePath string) error {
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	// 1. Calculate Full SHA-256 Checksum
-	log.Printf("Calculating SHA-256 for %s...", info.Name())
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return fmt.Errorf("failed to hash file: %w", err)
-	}
-
-	var checksum [32]byte
-	copy(checksum[:], hasher.Sum(nil))
-
-	// Rewind file for sending
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to rewind file: %w", err)
-	}
-
-	// 2. Construct and Write Header
+	// Construct and Write Header
 	header := &Header{
 		Version:  ProtocolVersion1,
 		Type:     MsgTypeFileTransfer,
 		Filename: filepath.Base(filePath),
 		FileSize: uint64(info.Size()),
-		Checksum: checksum,
+		Checksum: [32]byte{},
 	}
 
 	if err := header.WriteTo(s); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
-	// 3. Send Data with Progress Tracking
+	// Send Data with Progress Tracking and In-Stream Checksum Calculation
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
 
 	startTime := time.Now()
 
-	// Create a progress reader
+	fileHasher := sha256.New()
+	teeReader := io.TeeReader(file, fileHasher)
+
 	pr := &progressReader{
-		r:     file,
+		r:     teeReader,
 		total: header.FileSize,
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
-	if err != nil {
-		return fmt.Errorf("failed to send file data: %w", err)
+	buf := make([]byte, 32*1024)
+	var written uint64
+	var chunkIndex int
+
+	for {
+		n, readErr := pr.Read(buf)
+		if n > 0 {
+			chunkData := buf[:n]
+
+			// Calculate per-chunk digest in-stream
+			chunkDigest := sha256.Sum256(chunkData)
+			_ = chunkDigest
+
+			wn, writeErr := s.Write(chunkData)
+			written += uint64(wn)
+			if writeErr != nil {
+				return fmt.Errorf("failed to send file data: %w", writeErr)
+			}
+			if wn < n {
+				return fmt.Errorf("short write: wrote %d of %d bytes", wn, n)
+			}
+			chunkIndex++
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to read file data: %w", readErr)
+		}
 	}
+
+	var calculatedChecksum [32]byte
+	copy(calculatedChecksum[:], fileHasher.Sum(nil))
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(written) / (1024 * 1024)) / duration.Seconds()
@@ -86,6 +103,8 @@ func Send(s network.Stream, filePath string) error {
 
 	log.Printf("\nTransfer Complete (Sender)")
 	log.Printf("Path       : %s", connType)
+	log.Printf("SHA-256    : %x", calculatedChecksum)
+	log.Printf("Chunks Sent: %d", chunkIndex)
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 

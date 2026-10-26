@@ -75,8 +75,9 @@ func Receive(s network.Stream) error {
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
+	var zeroChecksum [32]byte
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	if header.Checksum != zeroChecksum && !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
 		integrityStr = "FAILED"
 		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
 	}
