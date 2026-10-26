@@ -14,7 +14,16 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
+type slidingReader struct {
+	r       io.Reader
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (sr *slidingReader) Read(p []byte) (int, error) {
+	_ = sr.s.SetReadDeadline(time.Now().Add(sr.timeout))
+	return sr.r.Read(p)
+}
 
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
@@ -22,11 +31,13 @@ func Receive(s network.Stream) error {
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
-	// 1. Read Header
+	// 1. Read Header with header deadline
+	_ = s.SetReadDeadline(time.Now().Add(HeaderTimeout))
 	var header Header
 	if err := header.ReadFrom(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
+	_ = s.SetReadDeadline(time.Time{})
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
@@ -49,17 +60,24 @@ func Receive(s network.Stream) error {
 
 	startTime := time.Now()
 
-	// 3. Receive Data with Progress Tracking and Hashing
+	// 3. Receive Data with Progress Tracking, Hashing, and Sliding Read Deadline
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
+	sr := &slidingReader{
+		r:       s,
+		s:       s,
+		timeout: BlockTimeout,
+	}
+
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(sr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}
 
 	received, err := io.Copy(multiWriter, pr)
+	_ = s.SetDeadline(time.Time{})
 	if err != nil {
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}

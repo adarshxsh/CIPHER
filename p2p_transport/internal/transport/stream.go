@@ -88,3 +88,41 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 
 	return s, nil
 }
+
+const (
+	DefaultControlTimeout = 15 * time.Second
+	DefaultChunkTimeout   = 30 * time.Second
+)
+
+// SetReadTimeout sets a read deadline on the network stream relative to time.Now().
+// If timeout <= 0, the read deadline is cleared.
+func SetReadTimeout(s network.Stream, timeout time.Duration) error {
+	if timeout <= 0 {
+		return s.SetReadDeadline(time.Time{})
+	}
+	return s.SetReadDeadline(time.Now().Add(timeout))
+}
+
+// SetWriteTimeout sets a write deadline on the network stream relative to time.Now().
+// If timeout <= 0, the write deadline is cleared.
+func SetWriteTimeout(s network.Stream, timeout time.Duration) error {
+	if timeout <= 0 {
+		return s.SetWriteDeadline(time.Time{})
+	}
+	return s.SetWriteDeadline(time.Now().Add(timeout))
+}
+
+// SetTimeout sets both read and write deadlines on the network stream relative to time.Now().
+// If timeout <= 0, both deadlines are cleared.
+func SetTimeout(s network.Stream, timeout time.Duration) error {
+	if timeout <= 0 {
+		return s.SetDeadline(time.Time{})
+	}
+	return s.SetDeadline(time.Now().Add(timeout))
+}
+
+// ClearDeadlines removes any read or write deadlines on the network stream.
+func ClearDeadlines(s network.Stream) error {
+	return s.SetDeadline(time.Time{})
+}
+
