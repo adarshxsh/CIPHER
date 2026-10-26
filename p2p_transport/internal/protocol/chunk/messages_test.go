@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +105,34 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestParseManifest_SizeLimits(t *testing.T) {
+	// Undersized
+	shortPayload := make([]byte, chunk.ContentIDSize-1)
+	_, _, err := chunk.ParseManifest(shortPayload)
+	if err == nil || !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for undersized ParseManifest, got %v", err)
+	}
+
+	// Oversized
+	oversizedPayload := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err = chunk.ParseManifest(oversizedPayload)
+	if err == nil || !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for oversized ParseManifest, got %v", err)
+	}
+
+	// Valid
+	validPayload := make([]byte, chunk.ContentIDSize+10)
+	validPayload[0] = 0x12
+	id, data, err := chunk.ParseManifest(validPayload)
+	if err != nil {
+		t.Fatalf("expected valid ParseManifest, got %v", err)
+	}
+	if id[0] != 0x12 {
+		t.Fatalf("expected id[0]=0x12, got %x", id[0])
+	}
+	if len(data) != 10 {
+		t.Fatalf("expected data length 10, got %d", len(data))
+	}
 }
