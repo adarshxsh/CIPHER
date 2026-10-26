@@ -1,5 +1,7 @@
 package chunk
 
+import "cipher/internal/content/core"
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
@@ -7,19 +9,19 @@ const (
 
 const (
 	// StandardChunkSize is the normal plaintext chunk size.
-	StandardChunkSize = 32 * 1024 // 32 KiB
+	StandardChunkSize = core.StandardChunkSize
 
 	// ChaCha20NonceSize is the nonce size used by standard ChaCha20-Poly1305.
-	ChaCha20NonceSize = 12
+	ChaCha20NonceSize = core.ChaCha20NonceSize
 
 	// Poly1305TagSize is the authentication-tag size.
-	Poly1305TagSize = 16
+	Poly1305TagSize = core.Poly1305TagSize
 
 	// EncryptionOverhead is added to every encrypted chunk.
-	EncryptionOverhead = ChaCha20NonceSize + Poly1305TagSize
+	EncryptionOverhead = core.EncryptionOverhead
 
 	// MaxCiphertextSize is the largest encrypted chunk accepted.
-	MaxCiphertextSize = StandardChunkSize + EncryptionOverhead
+	MaxCiphertextSize = core.MaxCiphertextSize
 )
 
 const (
