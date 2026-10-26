@@ -78,12 +78,34 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	return err
 }
 
+func MaxPayloadSizeForPushMessage(msgType PushMessageType) int {
+	switch msgType {
+	case MsgPushManifest:
+		return int(MaxMessageSize - 3)
+	case MsgPushManifestAck:
+		return 33
+	case MsgPushChunk:
+		return 32 + 64 + int(MaxChunkSize)
+	case MsgPushChunkAck:
+		return 33
+	case MsgPushBatchComplete:
+		return 32
+	case MsgPushBatchCompleteAck:
+		return 33
+	case MsgPushError:
+		return 640
+	default:
+		return 0
+	}
+}
+
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var header [7]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
 
+	size := binary.LittleEndian.Uint32(header[0:4])
 	if size > MaxMessageSize {
 		return nil, fmt.Errorf("message size %d exceeds maximum frame size %d", size, MaxMessageSize)
 	}
@@ -91,26 +113,25 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	version := binary.LittleEndian.Uint16(header[4:6])
+	msgType := PushMessageType(header[6])
+
+	payloadSize := size - 3
+	maxPayload := MaxPayloadSizeForPushMessage(msgType)
+	if int(payloadSize) > maxPayload {
+		return nil, fmt.Errorf("payload size %d exceeds limit %d for push message type %d", payloadSize, maxPayload, msgType)
+	}
+
+	payload := make([]byte, payloadSize)
+	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
-	}
-
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
-	}
-
-	return msg, nil
+	return &PushMessage{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
