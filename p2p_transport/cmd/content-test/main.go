@@ -27,17 +27,16 @@ func main() {
 		log.Fatal("Must specify either -ingest <file> or -out <file>")
 	}
 
-	// Initialize Content Engine components
-	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
-	enc := crypto.NewChaCha20Encryptor()
-	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
-
 	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
 		log.Fatalf("Failed to create store dir: %v", err)
 	}
 	store := storage.NewFSStore(storeDir)
+
+	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := engine.NewFSKeyProvider(storeDir)
 
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 	ctx := context.Background()
@@ -71,9 +70,7 @@ func main() {
 
 		// For manual testing, we persist the generated content key so it can be reassembled later
 		// (Normally this would be handled securely or retrieved over network)
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
-		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		os.WriteFile(keyPath, key, 0600)
+		keyPath := filepath.Join(storeDir, "keys", fmt.Sprintf("%x.key", m.Descriptor.ID))
 		log.Printf("Test content key saved to: %s", keyPath)
 	}
 
@@ -90,13 +87,14 @@ func main() {
 			log.Fatalf("Failed to parse manifest: %v", err)
 		}
 
-		// Load the test content key back into the key provider
-		keyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
-		key, err := os.ReadFile(keyPath)
-		if err == nil {
-			keys.Put(ctx, m.Descriptor.ID, key)
-		} else {
-			log.Printf("Warning: Could not load test key from %s: %v", keyPath, err)
+		// Verify key exists in key provider (or check legacy path)
+		if _, err := keys.Get(ctx, m.Descriptor.ID); err != nil {
+			legacyPath := filepath.Join(storeDir, fmt.Sprintf("%x.key", m.Descriptor.ID))
+			if legacyKey, err := os.ReadFile(legacyPath); err == nil {
+				keys.Put(ctx, m.Descriptor.ID, legacyKey)
+			} else {
+				log.Printf("Warning: Could not load test key for ContentID %x: %v", m.Descriptor.ID, err)
+			}
 		}
 
 		out, err := os.Create(*reassembleOut)

@@ -43,11 +43,10 @@ echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 ./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY=$(od -An -tx1 -v ./store_provider/keys/$CONTENT_ID.key | tr -d ' \n')
 
 echo "Content Published:"
-echo "  - ContentID:      $CONTENT_ID"
-echo "  - Decryption Key: $KEY"
+echo "  - ContentID: $CONTENT_ID"
 
 # Verify publisher exited cleanly (ran synchronously above)
 echo "✓ Verified: Publisher process completed and exited."
