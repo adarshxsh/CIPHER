@@ -300,7 +300,7 @@ func splitChunkPayload(payload []byte) (core.ChunkHeader, []byte, error) {
 
 	reader := bytes.NewReader(payload[:headerSize])
 	if err := binary.Read(reader, binary.LittleEndian, &header); err != nil {
-		return header, nil, fmt.Errorf("chunk: %w: %v", ErrInvalidChunkHeader, err)
+		return header, nil, fmt.Errorf("chunk: %w: %w", ErrInvalidChunkHeader, err)
 	}
 
 	return header, payload[headerSize:], nil
