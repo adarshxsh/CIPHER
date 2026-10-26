@@ -14,12 +14,62 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
 
-// NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+// NewNode creates a new libp2p host with role-based quota configuration.
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, nodeOpts ...NodeOption) (host.Host, *dht.IpfsDHT, error) {
+	nOpts := nodeOptions{
+		quotaConfig: DefaultQuotaConfig(),
+	}
+	for _, opt := range nodeOpts {
+		if opt != nil {
+			opt(&nOpts)
+		}
+	}
+
+	cfg := nOpts.quotaConfig
+
+	cm, err := connmgr.NewConnManager(
+		cfg.ConnLow,
+		cfg.ConnHigh,
+		connmgr.WithGracePeriod(cfg.GracePeriod),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
+	scalingLimits := rcmgr.DefaultLimits
+	if cfg.MaxMemory > 0 {
+		scalingLimits.SystemBaseLimit.Memory = cfg.MaxMemory
+	}
+	if cfg.MaxStreams > 0 {
+		scalingLimits.SystemBaseLimit.Streams = cfg.MaxStreams
+	}
+	if cfg.MaxStreamsInbound > 0 {
+		scalingLimits.SystemBaseLimit.StreamsInbound = cfg.MaxStreamsInbound
+	}
+	if cfg.MaxStreamsOutbound > 0 {
+		scalingLimits.SystemBaseLimit.StreamsOutbound = cfg.MaxStreamsOutbound
+	}
+	if cfg.MaxConns > 0 {
+		scalingLimits.SystemBaseLimit.Conns = cfg.MaxConns
+	}
+	if cfg.MaxConnsInbound > 0 {
+		scalingLimits.SystemBaseLimit.ConnsInbound = cfg.MaxConnsInbound
+	}
+	if cfg.MaxConnsOutbound > 0 {
+		scalingLimits.SystemBaseLimit.ConnsOutbound = cfg.MaxConnsOutbound
+	}
+
+	rm, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(scalingLimits.AutoScale()))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
 	listenAddrs := []string{addr}
@@ -31,6 +81,8 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(cm),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {

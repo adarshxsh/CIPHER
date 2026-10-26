@@ -77,7 +77,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay, transport.WithRoleProfile(transport.RoleClient))
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}

@@ -46,7 +46,7 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false, transport.WithRoleProfile(transport.RoleBootstrap))
 	if err != nil {
 		log.Fatalf(
 			"Failed to create bootstrap node: %v",
