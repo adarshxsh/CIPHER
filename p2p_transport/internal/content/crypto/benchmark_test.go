@@ -10,31 +10,65 @@ import (
 
 func BenchmarkChaCha20Encryptor(b *testing.B) {
 	enc := crypto.NewChaCha20Encryptor()
-	
+
 	key := make([]byte, 32)
 	rand.Read(key)
 
 	chunkSize := 256 * 1024
-	data := make([]byte, chunkSize)
-	rand.Read(data)
+	originalData := make([]byte, chunkSize)
+	rand.Read(originalData)
 
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
 			PlainSize: uint32(chunkSize),
 		},
-		Data: data,
+		Data: append([]byte(nil), originalData...),
 	}
 
 	b.SetBytes(int64(chunkSize))
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		// Encrypt in place
+		chunk.Data = append([]byte(nil), originalData...)
 		err := enc.EncryptChunk(key, chunk)
 		if err != nil {
 			b.Fatalf("Encrypt failed: %v", err)
 		}
-		// Reset for next iteration (doesn't have to be plaintext, just needs to encrypt again)
-		chunk.Data = chunk.Data[:chunkSize]
+	}
+}
+
+func BenchmarkChaCha20Decryptor(b *testing.B) {
+	enc := crypto.NewChaCha20Encryptor()
+
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	chunkSize := 256 * 1024
+	originalData := make([]byte, chunkSize)
+	rand.Read(originalData)
+
+	origChunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			PlainSize: uint32(chunkSize),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	if err := enc.EncryptChunk(key, origChunk); err != nil {
+		b.Fatalf("Encrypt failed: %v", err)
+	}
+
+	b.SetBytes(int64(chunkSize))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		chunk := &core.Chunk{
+			Header: origChunk.Header,
+			Data:   append([]byte(nil), origChunk.Data...),
+		}
+		err := enc.DecryptChunk(key, chunk)
+		if err != nil {
+			b.Fatalf("Decrypt failed: %v", err)
+		}
 	}
 }
