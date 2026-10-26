@@ -46,6 +46,7 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	maxConcurrentProviders := flag.Int("max-concurrent-providers", 8, "Maximum concurrent provider upload workers during push distribution")
 
 	flag.Parse()
 
@@ -218,7 +219,13 @@ func main() {
 		pushCtx, pushCancel := context.WithTimeout(ctx, *pushTimeout)
 		defer pushCancel()
 
-		if err := distribution.Distribute(pushCtx, t, eng, plan, tracker, distribution.DefaultUploaderConfig); err != nil {
+		uploaderCfg := distribution.UploaderConfig{
+			MaxRetriesPerChunk:    3,
+			FailoverRounds:        2,
+			MaxConcurrentProviders: *maxConcurrentProviders,
+		}
+
+		if err := distribution.Distribute(pushCtx, t, eng, plan, tracker, uploaderCfg); err != nil {
 			log.Fatalf("Push distribution failed to satisfy replication invariant: %v", err)
 		}
 
