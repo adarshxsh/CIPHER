@@ -13,6 +13,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 
 	"cipher/internal/protocol"
+	"cipher/internal/reputation"
 	"cipher/internal/transfer"
 )
 
@@ -27,12 +28,37 @@ func SetupStreamHandler(h host.Host) {
 
 // Transport wraps the libp2p host to provide a simpler abstraction for connection and stream management.
 type Transport struct {
-	host host.Host
+	host    host.Host
+	tracker *reputation.PeerTracker
 }
 
-// NewTransport creates a new Transport abstraction.
+// NewTransport creates a new Transport abstraction with default peer reputation tracker.
 func NewTransport(h host.Host) *Transport {
-	return &Transport{host: h}
+	return NewTransportWithTracker(h, reputation.Default())
+}
+
+// NewTransportWithTracker creates a new Transport abstraction with custom peer reputation tracker.
+func NewTransportWithTracker(h host.Host, tracker *reputation.PeerTracker) *Transport {
+	if tracker == nil {
+		tracker = reputation.Default()
+	}
+	return &Transport{
+		host:    h,
+		tracker: tracker,
+	}
+}
+
+// Host returns the underlying libp2p host.
+func (t *Transport) Host() host.Host {
+	return t.host
+}
+
+// Tracker returns the PeerTracker associated with this Transport.
+func (t *Transport) Tracker() *reputation.PeerTracker {
+	if t.tracker == nil {
+		t.tracker = reputation.Default()
+	}
+	return t.tracker
 }
 
 // Connect dials the target peer and establishes the initial connection (likely a relayed connection).
@@ -47,6 +73,10 @@ func (t *Transport) Connect(ctx context.Context, target string) (*peer.AddrInfo,
 		return nil, fmt.Errorf("failed to extract peer info: %w", err)
 	}
 
+	if t.Tracker().IsBlacklisted(addrInfo.ID) {
+		return nil, fmt.Errorf("peer %s is blacklisted", addrInfo.ID)
+	}
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer dialCancel()
 
@@ -57,8 +87,12 @@ func (t *Transport) Connect(ctx context.Context, target string) (*peer.AddrInfo,
 	return addrInfo, nil
 }
 
-// This is actually the same func as above Connect, but just that this directly connects using addrInfo, while Connect uses a string
+// ConnectPeer connects directly using addrInfo.
 func (t *Transport) ConnectPeer(ctx context.Context, addrInfo peer.AddrInfo) error {
+	if t.Tracker().IsBlacklisted(addrInfo.ID) {
+		return fmt.Errorf("peer %s is blacklisted", addrInfo.ID)
+	}
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer dialCancel()
 
@@ -74,6 +108,10 @@ func (t *Transport) ConnectPeer(ctx context.Context, addrInfo peer.AddrInfo) err
 }
 
 func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_protocol.ID) (network.Stream, error) {
+	if t.Tracker().IsBlacklisted(target) {
+		return nil, fmt.Errorf("peer %s is blacklisted", target)
+	}
+
 	streamCtx, streamCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer streamCancel()
 

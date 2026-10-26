@@ -12,6 +12,8 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
+
+	"cipher/internal/reputation"
 )
 
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
@@ -78,7 +80,12 @@ func Receive(s network.Stream) error {
 	integrityStr := "VERIFIED"
 	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		remotePeer := s.Conn().RemotePeer()
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x from peer %s", header.Checksum, computedChecksum, remotePeer)
+		_, blacklisted := reputation.Default().RecordHashFailure(remotePeer)
+		if blacklisted {
+			_ = reputation.Default().DisconnectAndBlacklist(nil, remotePeer)
+		}
 	}
 
 	// Determine Connection Type
