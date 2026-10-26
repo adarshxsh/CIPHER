@@ -14,7 +14,12 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// ResolveManifest takes a content ID, queries the DHT for providers who have that content, and attempts to retrieve the manifest from those providers, it connects to each provider, creates a chunk client, and requests the manifest. If successful, it returns the manifest; otherwise, it returns an error after trying all providers.
+type resolveResult struct {
+	manifest *manifest.Manifest
+	err      error
+}
+
+// ResolveManifest takes a content ID, queries the DHT for providers who have that content, and attempts to retrieve the manifest from those providers in parallel. It uses context race fan-out and worker goroutines to query providers concurrently. As soon as a valid manifest is retrieved, remaining requests are canceled.
 func ResolveManifest(
 	ctx context.Context,
 	id core.ContentID,
@@ -24,51 +29,78 @@ func ResolveManifest(
 	providers []peer.ID,
 ) (*manifest.Manifest, error) {
 
-	var lastErr error
+	if len(providers) == 0 {
+		return nil, fmt.Errorf(
+			"failed to resolve manifest from all providers: %w",
+			fmt.Errorf("no providers available"),
+		)
+	}
+
+	raceCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan resolveResult, len(providers))
 
 	for _, provider := range providers {
+		go func(p peer.ID) {
+			client, err := chunk.NewClient(raceCtx, t, p, eng)
+			if err != nil {
+				log.Printf(
+					"[DHT] Failed to create chunk client for %s: %v",
+					p,
+					err,
+				)
+				results <- resolveResult{err: err}
+				return
+			}
+			defer client.Close()
 
-		client, err := chunk.NewClient(ctx, t, provider, eng)
-		if err != nil {
+			manifestData, err := client.Resolve(raceCtx, id)
+			if err != nil {
+				log.Printf(
+					"[DHT] Failed to resolve manifest from provider %s: %v",
+					p,
+					err,
+				)
+				results <- resolveResult{err: err}
+				return
+			}
+
+			m, err := manifest.Deserialize(manifestData)
+			if err != nil {
+				log.Printf(
+					"[DHT] Provider %s returned invalid manifest: %v",
+					p,
+					err,
+				)
+				results <- resolveResult{err: err}
+				return
+			}
+
 			log.Printf(
-				"[DHT] Failed to create chunk client for %s: %v",
-				provider,
-				err,
+				"[DHT] Successfully resolved manifest from provider %s",
+				p,
 			)
-			lastErr = err
-			continue
+
+			results <- resolveResult{manifest: m}
+		}(provider)
+	}
+
+	var lastErr error
+	failedCount := 0
+
+	for failedCount < len(providers) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case res := <-results:
+			if res.manifest != nil {
+				cancel()
+				return res.manifest, nil
+			}
+			lastErr = res.err
+			failedCount++
 		}
-
-		manifestData, err := client.Resolve(ctx, id)
-		client.Close()
-
-		if err != nil {
-			log.Printf(
-				"[DHT] Failed to resolve manifest from provider %s: %v",
-				provider,
-				err,
-			)
-			lastErr = err
-			continue
-		}
-
-		m, err := manifest.Deserialize(manifestData)
-		if err != nil {
-			log.Printf(
-				"[DHT] Provider %s returned invalid manifest: %v",
-				provider,
-				err,
-			)
-			lastErr = err
-			continue
-		}
-
-		log.Printf(
-			"[DHT] Successfully resolved manifest from provider %s",
-			provider,
-		)
-
-		return m, nil
 	}
 
 	return nil, fmt.Errorf(
