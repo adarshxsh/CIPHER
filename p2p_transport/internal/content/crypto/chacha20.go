@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	pool "github.com/libp2p/go-buffer-pool"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -38,11 +39,18 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	}
 
 	nonce := e.generateNonce(chunk.Header.Index)
-	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
+	outLen := len(chunk.Data) + aead.Overhead()
+	outBuf := pool.Get(outLen)
+	ciphertext := aead.Seal(outBuf[:0], nonce, chunk.Data, nil)
 
+	oldData := chunk.Data
 	copy(chunk.Header.Nonce[:], nonce)
 	chunk.Header.CipherSize = uint32(len(ciphertext))
 	chunk.Data = ciphertext
+
+	if len(oldData) > 0 {
+		pool.Put(oldData)
+	}
 
 	return nil
 }
@@ -57,15 +65,25 @@ func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
 		return errors.New("cipher size mismatch in header")
 	}
 
-	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, nil)
+	outLen := int(chunk.Header.PlainSize)
+	outBuf := pool.Get(outLen)
+	plaintext, err := aead.Open(outBuf[:0], chunk.Header.Nonce[:], chunk.Data, nil)
 	if err != nil {
+		pool.Put(outBuf)
 		return fmt.Errorf("failed to decrypt chunk: %w", err)
 	}
 
 	if chunk.Header.PlainSize != uint32(len(plaintext)) {
+		pool.Put(outBuf)
 		return errors.New("plain size mismatch in header")
 	}
 
+	oldData := chunk.Data
 	chunk.Data = plaintext
+
+	if len(oldData) > 0 {
+		pool.Put(oldData)
+	}
+
 	return nil
 }

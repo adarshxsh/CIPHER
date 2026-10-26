@@ -10,6 +10,7 @@ import (
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 type ContentEngine struct {
@@ -72,6 +73,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	for chunk := range chunkCh {
 		// Encrypt the chunk
 		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+			pool.Put(chunk.Data)
 			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
 		}
 
@@ -83,11 +85,15 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 		// Store the chunk
 		if err := e.sink.PutChunk(ctx, chunk); err != nil {
+			pool.Put(chunk.Data)
 			return nil, fmt.Errorf("failed to store chunk: %w", err)
 		}
 
 		chunkIDs = append(chunkIDs, chunkID)
 		totalSize += uint64(chunk.Header.PlainSize)
+
+		// Return byte buffer to shared pool
+		pool.Put(chunk.Data)
 	}
 
 	if err := <-errCh; err != nil {

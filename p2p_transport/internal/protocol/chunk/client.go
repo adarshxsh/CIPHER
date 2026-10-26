@@ -13,6 +13,7 @@ import (
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 	"cipher/internal/transport"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
@@ -51,6 +52,7 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
+	defer pool.Put(resp.Payload)
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
@@ -80,8 +82,10 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 			return err
 		}
 		if err := c.engine.PutChunk(ctx, chunk); err != nil {
+			pool.Put(chunk.Data)
 			return fmt.Errorf("failed to store chunk %x: %w", chunkID, err)
 		}
+		pool.Put(chunk.Data)
 	}
 	return nil
 }
@@ -98,6 +102,7 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
+	defer pool.Put(resp.Payload)
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)

@@ -6,6 +6,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 // WorkerResult is the result of a worker attempting a chunk
@@ -46,9 +47,11 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
+			pool.Put(chunkData.Data)
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
 			continue
 		}
+		pool.Put(chunkData.Data)
 
 		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
 	}
