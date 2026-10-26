@@ -11,11 +11,70 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// DHTOption configures settings on a new Kademlia DHT instance.
+type DHTOption func(*dhtConfig)
+
+// Option is an alias for DHTOption for convenience.
+type Option = DHTOption
+
+type dhtConfig struct {
+	queryConcurrency  int
+	routingTableLimit int
+	dhtOpts           []dht.Option
+}
+
+// WithQueryConcurrency configures the maximum query concurrency for DHT operations.
+func WithQueryConcurrency(c int) DHTOption {
+	return func(cfg *dhtConfig) {
+		cfg.queryConcurrency = c
+	}
+}
+
+// WithRoutingTableLimit configures the maximum routing table capacity (k-bucket size) for the DHT.
+func WithRoutingTableLimit(limit int) DHTOption {
+	return func(cfg *dhtConfig) {
+		cfg.routingTableLimit = limit
+	}
+}
+
+// WithBucketSize configures the routing table k-bucket size for the DHT.
+func WithBucketSize(size int) DHTOption {
+	return func(cfg *dhtConfig) {
+		cfg.routingTableLimit = size
+	}
+}
+
+// WithDHTOption passes a raw go-libp2p-kad-dht Option to dht.New.
+func WithDHTOption(opt dht.Option) DHTOption {
+	return func(cfg *dhtConfig) {
+		cfg.dhtOpts = append(cfg.dhtOpts, opt)
+	}
+}
+
 // NewDHT creates and returns a Kademlia DHT bound to the given host.
 // mode should be dht.ModeServer for peers (they help route/store records too,
 // matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+func NewDHT(h host.Host, mode dht.ModeOpt, opts ...DHTOption) (*dht.IpfsDHT, error) {
+	cfg := &dhtConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
+	dhtOptions := []dht.Option{dht.Mode(mode)}
+
+	if cfg.queryConcurrency > 0 {
+		dhtOptions = append(dhtOptions, dht.Concurrency(cfg.queryConcurrency))
+	}
+
+	if cfg.routingTableLimit > 0 {
+		dhtOptions = append(dhtOptions, dht.BucketSize(cfg.routingTableLimit))
+	}
+
+	dhtOptions = append(dhtOptions, cfg.dhtOpts...)
+
+	kdht, err := dht.New(h, dhtOptions...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
