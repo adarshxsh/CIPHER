@@ -8,6 +8,13 @@ import (
 	"cipher/internal/content/core"
 )
 
+// Zeroize overwrites the provided byte slice with zero bytes to clear key material from memory.
+func Zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // LocalKeyProvider is an in-memory implementation of core.KeyProvider.
 type LocalKeyProvider struct {
 	mu   sync.RWMutex
@@ -36,6 +43,9 @@ func (p *LocalKeyProvider) Get(ctx context.Context, id core.ContentID) ([]byte, 
 func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if existing, exists := p.keys[id]; exists {
+		Zeroize(existing)
+	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
 	p.keys[id] = keyCopy
@@ -45,6 +55,9 @@ func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byt
 func (p *LocalKeyProvider) Delete(ctx context.Context, id core.ContentID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.keys, id)
+	if existing, exists := p.keys[id]; exists {
+		Zeroize(existing)
+		delete(p.keys, id)
+	}
 	return nil
 }
