@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"sync"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -46,18 +45,53 @@ type StreamHandler struct {
 	authPolicy        AuthPolicy
 	allowedPublishers map[peer.ID]struct{}
 
-	sessionsMu sync.RWMutex
-	sessions   map[core.ContentID]*PendingSession
+	sessionCache *SessionCache
 }
 
-func NewStreamHandler(
+type HandlerOption func(*handlerOptions)
+
+type handlerOptions struct {
+	maxSessions     int
+	sessionTTL      time.Duration
+	cleanupInterval time.Duration
+}
+
+func WithMaxSessions(max int) HandlerOption {
+	return func(opts *handlerOptions) {
+		opts.maxSessions = max
+	}
+}
+
+func WithSessionTTL(ttl time.Duration) HandlerOption {
+	return func(opts *handlerOptions) {
+		opts.sessionTTL = ttl
+	}
+}
+
+func WithCleanupInterval(interval time.Duration) HandlerOption {
+	return func(opts *handlerOptions) {
+		opts.cleanupInterval = interval
+	}
+}
+
+func NewStreamHandlerWithOptions(
 	h host.Host,
 	eng *engine.ContentEngine,
 	kdht *dht.IpfsDHT,
 	allowPush bool,
 	authPolicy AuthPolicy,
 	allowedPublishers []peer.ID,
+	opts ...HandlerOption,
 ) *StreamHandler {
+	options := &handlerOptions{
+		maxSessions:     DefaultMaxSessions,
+		sessionTTL:      DefaultSessionTTL,
+		cleanupInterval: DefaultCleanupInterval,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	allowedMap := make(map[peer.ID]struct{})
 	for _, pid := range allowedPublishers {
 		allowedMap[pid] = struct{}{}
@@ -71,11 +105,29 @@ func NewStreamHandler(
 		allowPush:         allowPush,
 		authPolicy:        authPolicy,
 		allowedPublishers: allowedMap,
-		sessions:          make(map[core.ContentID]*PendingSession),
+		sessionCache:      NewSessionCache(options.maxSessions, options.sessionTTL, options.cleanupInterval),
 	}
 
 	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func NewStreamHandler(
+	h host.Host,
+	eng *engine.ContentEngine,
+	kdht *dht.IpfsDHT,
+	allowPush bool,
+	authPolicy AuthPolicy,
+	allowedPublishers []peer.ID,
+) *StreamHandler {
+	return NewStreamHandlerWithOptions(h, eng, kdht, allowPush, authPolicy, allowedPublishers)
+}
+
+func (h *StreamHandler) Close() error {
+	if h.sessionCache != nil {
+		h.sessionCache.Close()
+	}
+	return nil
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -159,8 +211,7 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		expectedMap[cid] = struct{}{}
 	}
 
-	h.sessionsMu.Lock()
-	h.sessions[contentID] = &PendingSession{
+	session := &PendingSession{
 		ContentID:       contentID,
 		Manifest:        m,
 		ManifestBytes:   manifestData,
@@ -169,7 +220,7 @@ func (h *StreamHandler) handlePushManifest(s network.Stream, msg *PushMessage) {
 		StartedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
-	h.sessionsMu.Unlock()
+	h.sessionCache.Put(session)
 
 	log.Printf("[Push Protocol] Initialized push session for ContentID %x (expecting %d chunks)", contentID, len(expectedMap))
 
@@ -189,10 +240,7 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 
 	chunkID := chunk.Header.ID
 
-	h.sessionsMu.RLock()
-	session, exists := h.sessions[contentID]
-	h.sessionsMu.RUnlock()
-
+	session, exists := h.sessionCache.Get(contentID)
 	if !exists {
 		log.Printf("[Push Protocol] Chunk %x received for unknown/non-pending content %x", chunkID, contentID)
 		_ = WritePushMessage(s, BuildPushChunkAck(chunkID, PushStatusNotInAssignedSet))
@@ -239,10 +287,8 @@ func (h *StreamHandler) handlePushChunk(s network.Stream, msg *PushMessage) {
 		}
 	}
 
-	h.sessionsMu.Lock()
 	session.CommittedChunks[chunkID] = true
-	session.UpdatedAt = time.Now()
-	h.sessionsMu.Unlock()
+	h.sessionCache.Touch(contentID)
 
 	ack := BuildPushChunkAck(chunkID, PushStatusOK)
 	if err := WritePushMessage(s, ack); err != nil {
@@ -258,10 +304,8 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 		return
 	}
 
-	h.sessionsMu.Lock()
-	session, exists := h.sessions[contentID]
+	session, exists := h.sessionCache.Get(contentID)
 	if !exists {
-		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] BatchComplete requested for non-pending content %x", contentID)
 		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
 		return
@@ -277,7 +321,6 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	}
 
 	if !allCommitted || len(session.CommittedChunks) < len(session.ExpectedChunks) {
-		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] BatchComplete rejected for %x: committed %d/%d assigned chunks",
 			contentID, len(session.CommittedChunks), len(session.ExpectedChunks))
 		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIncomplete))
@@ -287,15 +330,13 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 	// Commit manifest to local CAS
 	ctx := context.Background()
 	if err := h.engine.PutManifestBytes(ctx, contentID, session.ManifestBytes); err != nil {
-		h.sessionsMu.Unlock()
 		log.Printf("[Push Protocol] Failed to store manifest for %x: %v", contentID, err)
 		_ = WritePushMessage(s, BuildPushBatchCompleteAck(contentID, PushStatusIOError))
 		return
 	}
 
 	// Remove session from pending
-	delete(h.sessions, contentID)
-	h.sessionsMu.Unlock()
+	h.sessionCache.Remove(contentID)
 
 	log.Printf("[Push Protocol] Content %x successfully committed to CAS (all %d assigned chunks verified)",
 		contentID, len(session.ExpectedChunks))
