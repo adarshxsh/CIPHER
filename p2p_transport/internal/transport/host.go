@@ -6,6 +6,7 @@ import (
 
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -14,6 +15,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -28,9 +31,25 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(1*time.Minute))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
+	scalingLimits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+	rm, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(scalingLimits.AutoScale()))
+	if err != nil {
+		cm.Close()
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(cm),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
@@ -40,10 +59,14 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 	if relayAddr != "" {
 		maddr, err := multiaddr.NewMultiaddr(relayAddr)
 		if err != nil {
+			rm.Close()
+			cm.Close()
 			return nil, nil, fmt.Errorf("invalid relay address: %w", err)
 		}
 		addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
 		if err != nil {
+			rm.Close()
+			cm.Close()
 			return nil, nil, fmt.Errorf("invalid relay peer info: %w", err)
 		}
 		opts = append(opts,
@@ -57,6 +80,8 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
+		rm.Close()
+		cm.Close()
 		return nil, nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
 
