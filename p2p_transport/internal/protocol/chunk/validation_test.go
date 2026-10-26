@@ -129,3 +129,22 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_RejectsOversizedPayload(t *testing.T) {
+	oversized := make([]byte, chunk.MaxManifestSize+1)
+	err := chunk.ValidateManifestPayload(oversized)
+	if err == nil {
+		t.Fatal("expected ValidateManifestPayload to reject oversized payload, got nil")
+	}
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload, got %v", err)
+	}
+}
+
+func TestParseManifest_RejectsOversizedPayload(t *testing.T) {
+	oversized := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err := chunk.ParseManifest(oversized)
+	if err == nil {
+		t.Fatal("expected ParseManifest to reject oversized payload, got nil")
+	}
+}

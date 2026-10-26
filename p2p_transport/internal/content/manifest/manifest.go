@@ -1,8 +1,12 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+	"io"
+
 	"cipher/internal/content/core"
 )
 
@@ -10,6 +14,28 @@ type ContentType string
 
 const (
 	TypeFile ContentType = "file"
+)
+
+const (
+	// MaxManifestSize specifies the maximum allowed serialized manifest size in bytes (256 KiB).
+	MaxManifestSize int64 = 256 * 1024
+
+	// MaxManifestChunkCount limits the maximum array size of ChunkIDs in a single manifest.
+	MaxManifestChunkCount = 2048
+
+	// MaxSupportedChunkCount limits chunk count protocol-wide.
+	MaxSupportedChunkCount uint64 = 1 << 32
+
+	// MaxAlgorithmNameSize limits string length for Crypto.Algorithm.
+	MaxAlgorithmNameSize = 64
+
+	// MaxKeyIDSize limits string length for Crypto.KeyID.
+	MaxKeyIDSize = 256
+)
+
+var (
+	ErrManifestTooLarge         = errors.New("manifest data exceeds size limit")
+	ErrInvalidManifestStructure = errors.New("manifest structural validation failed")
 )
 
 type ContentDescriptor struct {
@@ -47,9 +73,51 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if int64(len(data)) > MaxManifestSize {
+		return nil, fmt.Errorf("%w: size %d exceeds limit of %d bytes", ErrManifestTooLarge, len(data), MaxManifestSize)
+	}
+
+	limitReader := io.LimitReader(bytes.NewReader(data), MaxManifestSize)
+	dec := json.NewDecoder(limitReader)
+
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return nil, err
 	}
+
+	if err := m.ValidateBounds(); err != nil {
+		return nil, err
+	}
+
 	return &m, nil
+}
+
+func (m *Manifest) ValidateBounds() error {
+	if uint64(len(m.ChunkIDs)) > MaxSupportedChunkCount || len(m.ChunkIDs) > MaxManifestChunkCount {
+		return fmt.Errorf(
+			"%w: chunk count %d exceeds maximum limit",
+			ErrInvalidManifestStructure,
+			len(m.ChunkIDs),
+		)
+	}
+
+	if len(m.Crypto.Algorithm) > MaxAlgorithmNameSize {
+		return fmt.Errorf(
+			"%w: crypto algorithm string length %d exceeds max %d",
+			ErrInvalidManifestStructure,
+			len(m.Crypto.Algorithm),
+			MaxAlgorithmNameSize,
+		)
+	}
+
+	if len(m.Crypto.KeyID) > MaxKeyIDSize {
+		return fmt.Errorf(
+			"%w: crypto key_id string length %d exceeds max %d",
+			ErrInvalidManifestStructure,
+			len(m.Crypto.KeyID),
+			MaxKeyIDSize,
+		)
+	}
+
+	return nil
 }
