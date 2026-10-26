@@ -17,27 +17,44 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) bool {
+	peerID := source.PeerID.String()
+
 	for {
-		task, ok := queue.Next()
-		if !ok {
-			return // Queue empty
+		select {
+		case <-ctx.Done():
+			return false
+		default:
 		}
-		
-		// If this source already returned candidate miss for this task, requeue and yield
-		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Millisecond):
+
+		task, found, hasTasks := queue.PopForPeer(peerID)
+		if !found {
+			if !hasTasks {
+				select {
+				case <-ctx.Done():
+					return false
+				case <-queue.NotifyChan():
+					continue
+				case <-time.After(20 * time.Millisecond):
+					if queue.Len() == 0 {
+						return false
+					}
+					continue
+				}
 			}
-			continue
+
+			// Peer has missed all currently available tasks in queue.
+			// Yield immediately so worker slot can try another candidate source.
+			return true
 		}
-		
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case <-ctx.Done():
+				return false
+			case results <- WorkerResult{Task: task, Error: err, PeerID: peerID}:
+			}
 			continue
 		}
 
@@ -46,10 +63,18 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			select {
+			case <-ctx.Done():
+				return false
+			case results <- WorkerResult{Task: task, Error: err, PeerID: peerID}:
+			}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		select {
+		case <-ctx.Done():
+			return false
+		case results <- WorkerResult{Task: task, Error: nil, PeerID: peerID}:
+		}
 	}
 }
