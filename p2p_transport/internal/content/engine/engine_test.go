@@ -61,6 +61,14 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
 	}
 
+	if m.Crypto.Algorithm != "XChaCha20-Poly1305" {
+		t.Errorf("expected algorithm XChaCha20-Poly1305, got %s", m.Crypto.Algorithm)
+	}
+
+	if m.Crypto.ChunkNonceSize != 24 {
+		t.Errorf("expected ChunkNonceSize 24, got %d", m.Crypto.ChunkNonceSize)
+	}
+
 	// Reassemble
 	var outBuf bytes.Buffer
 	if err := eng.Reassemble(ctx, m, &outBuf); err != nil {
