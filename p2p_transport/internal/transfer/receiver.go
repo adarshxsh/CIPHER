@@ -24,6 +24,7 @@ func Receive(s network.Stream) error {
 
 	// 1. Read Header
 	var header Header
+	_ = s.SetReadDeadline(time.Now().Add(15 * time.Second))
 	if err := header.ReadFrom(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
@@ -59,6 +60,7 @@ func Receive(s network.Stream) error {
 		last:  0,
 	}
 
+	_ = s.SetReadDeadline(time.Now().Add(15 * time.Second))
 	received, err := io.Copy(multiWriter, pr)
 	if err != nil {
 		return fmt.Errorf("failed to receive file data: %w", err)
