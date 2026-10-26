@@ -21,7 +21,7 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	}
 	defer h1.Close()
 
-	dht1, err := NewDHT(h1, dht.ModeServer)
+	dht1, err := NewDHT(h1, dht.ModeServer, WithPrivateRouting())
 	if err != nil {
 		t.Fatalf("failed to create dht1: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	}
 	defer h2.Close()
 
-	dht2, err := NewDHT(h2, dht.ModeServer)
+	dht2, err := NewDHT(h2, dht.ModeServer, WithPrivateRouting())
 	if err != nil {
 		t.Fatalf("failed to create dht2: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestStorageProviderDHTRegistration(t *testing.T) {
 	}
 	defer h3.Close()
 
-	dht3, err := NewDHT(h3, dht.ModeServer)
+	dht3, err := NewDHT(h3, dht.ModeServer, WithPrivateRouting())
 	if err != nil {
 		t.Fatalf("failed to create dht3: %v", err)
 	}
