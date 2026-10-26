@@ -19,22 +19,11 @@ var TestThrottle time.Duration
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
-		task, ok := queue.Next()
+		task, ok := queue.NextForPeer(ctx, source.PeerID.String())
 		if !ok {
-			return // Queue empty
+			return // Queue empty, closed, or context cancelled
 		}
-		
-		// If this source already returned candidate miss for this task, requeue and yield
-		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
-			queue.Push(task)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * time.Millisecond):
-			}
-			continue
-		}
-		
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
