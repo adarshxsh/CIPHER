@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,17 +14,50 @@ import (
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
-
-type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+type StreamHandlerOptions struct {
+	CorruptProb float64
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+type StreamHandlerOption func(*StreamHandler)
+
+func WithCorruptProb(prob float64) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		h.corruptProb = prob
+	}
+}
+
+func WithTestCorruptProb(prob float64) StreamHandlerOption {
+	return WithCorruptProb(prob)
+}
+
+type StreamHandler struct {
+	host        host.Host
+	engine      *engine.ContentEngine
+	mu          sync.RWMutex
+	corruptProb float64
+}
+
+func (h *StreamHandler) SetCorruptProb(prob float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.corruptProb = prob
+}
+
+func (h *StreamHandler) CorruptProb() float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.corruptProb
+}
+
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...StreamHandlerOption) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
@@ -98,10 +132,16 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	corruptProb := h.CorruptProb()
+	if corruptProb > 0 && rand.Float64() < corruptProb && len(chunkData.Data) > 0 {
+		// Corrupt a copy of the chunk for testing to avoid mutating engine memory
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
-		chunkData.Data[0] ^= 0xFF
+		clonedChunk := *chunkData
+		clonedData := make([]byte, len(chunkData.Data))
+		copy(clonedData, chunkData.Data)
+		clonedData[0] ^= 0xFF
+		clonedChunk.Data = clonedData
+		chunkData = &clonedChunk
 	}
 
 	resp, err := BuildChunk(chunkData)
