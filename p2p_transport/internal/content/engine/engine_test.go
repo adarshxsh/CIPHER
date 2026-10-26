@@ -71,3 +71,38 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_Ingest_DeterministicContentID(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 32 * 1024,
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+	data := []byte("hello world deterministic manifest content ID test")
+
+	ctx := context.Background()
+	m1, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("ingest failed: %v", err)
+	}
+
+	computedID, err := m1.ComputeContentID()
+	if err != nil {
+		t.Fatalf("ComputeContentID failed: %v", err)
+	}
+
+	if m1.Descriptor.ID != computedID {
+		t.Fatalf("Ingest ContentID %x != computed %x", m1.Descriptor.ID, computedID)
+	}
+}
