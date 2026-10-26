@@ -129,3 +129,12 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestProtocolLimits_NonceSize(t *testing.T) {
+	if chunk.ChaCha20NonceSize != 24 {
+		t.Errorf("expected ChaCha20NonceSize = 24, got %d", chunk.ChaCha20NonceSize)
+	}
+	if chunk.EncryptionOverhead != 40 {
+		t.Errorf("expected EncryptionOverhead = 40 (24 nonce + 16 tag), got %d", chunk.EncryptionOverhead)
+	}
+}
