@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +206,53 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+const (
+	MaxSanitizedErrorMessageLength = 256
+)
+
+// SanitizeErrorMessage escapes control characters, newlines, tabs, and ANSI control sequences,
+// and bounds the message string length to a maximum of 256 bytes.
+func SanitizeErrorMessage(msg string) string {
+	var builder strings.Builder
+	builder.Grow(len(msg))
+
+	for i := 0; i < len(msg); i++ {
+		b := msg[i]
+		switch b {
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		default:
+			if b >= 32 && b <= 126 {
+				builder.WriteByte(b)
+			} else {
+				fmt.Fprintf(&builder, "\\x%02x", b)
+			}
+		}
+		if builder.Len() >= MaxSanitizedErrorMessageLength {
+			break
+		}
+	}
+
+	res := builder.String()
+	if len(res) > MaxSanitizedErrorMessageLength {
+		res = res[:MaxSanitizedErrorMessageLength]
+	}
+	return res
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	msgBytes := payload[1:]
+	if len(msgBytes) > MaxSanitizedErrorMessageLength {
+		msgBytes = msgBytes[:MaxSanitizedErrorMessageLength]
+	}
+	sanitizedMsg := SanitizeErrorMessage(string(msgBytes))
+	return code, sanitizedMsg, nil
 }
