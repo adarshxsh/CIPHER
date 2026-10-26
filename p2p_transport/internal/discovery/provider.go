@@ -4,6 +4,7 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -27,7 +28,10 @@ func Provide(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID) error {
 		return fmt.Errorf("failed to convert ContentID to CID: %w", err)
 	}
 
-	if err := kdht.Provide(ctx, cid, true); err != nil {
+	subCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := kdht.Provide(subCtx, cid, true); err != nil {
 		return fmt.Errorf("failed to provide content: %w", err)
 	}
 
@@ -118,6 +122,9 @@ func StartRepublisher(ctx context.Context, kdht *dht.IpfsDHT, store core.Manifes
 	}()
 }
 
+const defaultWorkerCount = 10
+const batchTimeout = 5 * time.Minute
+
 func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore) {
 	manifests, err := store.ListManifests(ctx)
 	if err != nil {
@@ -130,9 +137,37 @@ func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestSto
 	}
 
 	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
-	for _, id := range manifests {
-		if err := Provide(ctx, kdht, id); err != nil {
-			fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
-		}
+
+	batchCtx, cancel := context.WithTimeout(ctx, batchTimeout)
+	defer cancel()
+
+	numWorkers := defaultWorkerCount
+	if len(manifests) < numWorkers {
+		numWorkers = len(manifests)
 	}
+
+	jobs := make(chan core.ContentID, len(manifests))
+	for _, id := range manifests {
+		jobs <- id
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				select {
+				case <-batchCtx.Done():
+					return
+				default:
+				}
+				if err := Provide(batchCtx, kdht, id); err != nil {
+					fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
