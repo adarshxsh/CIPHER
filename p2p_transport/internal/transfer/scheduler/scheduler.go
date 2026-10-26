@@ -19,26 +19,36 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport         *transport.Transport
+	Engine            *engine.ContentEngine
+	MaxAttempts       int
+	ReputationTracker *ReputationTracker
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
 	return &Scheduler{
-		Transport:   t,
-		Engine:      eng,
-		MaxAttempts: maxAttempts,
+		Transport:         t,
+		Engine:            eng,
+		MaxAttempts:       maxAttempts,
+		ReputationTracker: NewReputationTracker(),
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	tracker := s.ReputationTracker
+	if tracker == nil {
+		tracker = NewReputationTracker()
+	}
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
+		if tracker.IsQuarantined(source.PeerID.String()) {
+			continue
+		}
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
@@ -47,7 +57,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, tracker)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
@@ -76,14 +86,32 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					}
 					res.Task.MissedPeers[res.PeerID] = true
 
-					if len(res.Task.MissedPeers) < len(sources) {
+					activeSources := 0
+					for _, src := range sources {
+						if !tracker.IsQuarantined(src.PeerID.String()) {
+							activeSources++
+						}
+					}
+
+					if len(res.Task.MissedPeers) < activeSources {
 						queue.Push(res.Task)
 						continue
 					}
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
 				}
 
-				// Real network / integrity error: count attempts
+				// Record failure penalty in reputation tracker
+				isQuarantined := tracker.RecordFailure(res.PeerID, res.Error)
+				if isQuarantined {
+					log.Printf("[Scheduler] Peer %s quarantined due to fault score (err: %v)", res.PeerID, res.Error)
+					// Tasks failed due to peer quarantine return to the queue without incrementing task retry limits.
+					// Clear MissedPeers so active healthy workers can attempt the task.
+					res.Task.MissedPeers = nil
+					queue.Push(res.Task)
+					continue
+				}
+
+				// Real network / temporary error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
 					queue.Push(res.Task)
@@ -92,6 +120,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
+				tracker.RecordSuccess(res.PeerID)
 				completions <- res
 				pendingTasks--
 			}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/manifest"
@@ -51,5 +52,38 @@ func TestChunkProtocol_InterruptedTransfer(t *testing.T) {
 	for _, chunkID := range m.ChunkIDs {
 		// Just ensure it doesn't crash on get
 		eng2.GetChunk(ctx, chunkID) 
+	}
+}
+
+func TestChunkProtocol_CorruptedChunkStreamReset(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	eng2 := createTestEngine(t)
+
+	handler1 := chunk.NewStreamHandler(h1, eng1)
+	handler1.CorruptProb = 1.0
+
+	ctx := context.Background()
+	data := make([]byte, 256*1024)
+	rand.Read(data)
+
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.FetchChunk(ctx, m.ChunkIDs[0])
+	if err == nil {
+		t.Fatal("Expected FetchChunk to fail on corrupted chunk")
+	}
+
+	if !errors.Is(err, chunk.ErrChunkCorrupted) {
+		t.Fatalf("Expected error to be ErrChunkCorrupted, got %v", err)
 	}
 }

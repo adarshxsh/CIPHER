@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -15,7 +16,10 @@ import (
 	"cipher/internal/transport"
 )
 
-var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
+var (
+	ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
+	ErrChunkCorrupted      = errors.New("corrupted chunk received: hash mismatch")
+)
 
 type Client struct {
 	stream network.Stream
@@ -120,8 +124,9 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
-		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
+		_ = WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
+		return nil, fmt.Errorf("%w: chunk %x", ErrChunkCorrupted, chunkID)
 	}
 
 	// Set the expected ChunkID
