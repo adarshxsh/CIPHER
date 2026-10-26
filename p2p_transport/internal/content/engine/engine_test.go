@@ -71,3 +71,45 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_CanonicalContentIDBinding(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-canonical-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	ctx := context.Background()
+	data := []byte("hello canonical manifest content id binding test")
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	expectedHash := dig.Sum(mBytes)
+	if core.Hash(m.Descriptor.ID) != expectedHash {
+		t.Fatalf("m.Descriptor.ID (%x) does not match sha256 of canonical manifest bytes (%x)", m.Descriptor.ID, expectedHash)
+	}
+
+	// Verify key is stored under m.Descriptor.ID
+	key, err := keys.Get(ctx, m.Descriptor.ID)
+	if err != nil || len(key) == 0 {
+		t.Fatalf("key was not stored under derived ContentID: %v", err)
+	}
+}
