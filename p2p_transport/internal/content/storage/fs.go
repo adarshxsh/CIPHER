@@ -12,6 +12,17 @@ import (
 	"cipher/internal/content/core"
 )
 
+const (
+	// HeaderSize is the binary size of a serialized core.ChunkHeader (66 bytes).
+	HeaderSize = 66
+	// StandardChunkSize is the default plaintext chunk size (32 KiB).
+	StandardChunkSize = 32 * 1024
+	// EncryptionOverhead is 12-byte nonce + 16-byte Poly1305 tag = 28 bytes.
+	EncryptionOverhead = 28
+	// MaxCiphertextSize matches limits.MaxCiphertextSize (32,796 bytes).
+	MaxCiphertextSize = StandardChunkSize + EncryptionOverhead
+)
+
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
 	baseDir string
@@ -94,25 +105,48 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
-	chunk := &core.Chunk{}
-	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+
+	fileSize := info.Size()
+	minSize := int64(HeaderSize)
+	maxSize := int64(HeaderSize + MaxCiphertextSize)
+
+	if fileSize < minSize {
+		return nil, fmt.Errorf("chunk file too small: %d bytes (minimum %d bytes)", fileSize, minSize)
+	}
+	if fileSize > maxSize {
+		return nil, fmt.Errorf("chunk file too large: %d bytes (maximum %d bytes)", fileSize, maxSize)
+	}
+
+	chk := &core.Chunk{}
+	if err := binary.Read(f, binary.LittleEndian, &chk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	expectedPayloadSize := fileSize - minSize
+	expectedCipherSize := chk.Header.CipherSize
+	if expectedCipherSize == 0 {
+		expectedCipherSize = chk.Header.PlainSize
+	}
+	if int64(expectedCipherSize) != expectedPayloadSize {
+		return nil, fmt.Errorf("chunk header size (%d) does not match disk payload size (%d)", expectedCipherSize, expectedPayloadSize)
+	}
+
+	data := make([]byte, expectedPayloadSize)
+	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	var trailing [1]byte
+	if _, err := f.Read(trailing[:]); err != io.EOF {
+		return nil, fmt.Errorf("unexpected trailing bytes in chunk file")
+	}
 
-	return chunk, nil
+	chk.Data = data
+	return chk, nil
 }
 
 func (s *FSStorage) manifestPath(id core.ContentID) string {
