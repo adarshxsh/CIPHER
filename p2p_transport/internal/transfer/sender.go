@@ -13,6 +13,23 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+type deadlineWriter struct {
+	w       io.Writer
+	s       network.Stream
+	timeout time.Duration
+}
+
+func (dw *deadlineWriter) Write(p []byte) (int, error) {
+	if dw.timeout > 0 {
+		_ = dw.s.SetWriteDeadline(time.Now().Add(dw.timeout))
+	}
+	n, err := dw.w.Write(p)
+	if err != nil {
+		_ = dw.s.Reset()
+	}
+	return n, err
+}
+
 // Send transfers a file to the remote peer over the provided stream.
 func Send(s network.Stream, filePath string) error {
 	defer s.Close()
@@ -21,12 +38,14 @@ func Send(s network.Stream, filePath string) error {
 
 	file, err := os.Open(filePath)
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
 
@@ -34,6 +53,7 @@ func Send(s network.Stream, filePath string) error {
 	log.Printf("Calculating SHA-256 for %s...", info.Name())
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to hash file: %w", err)
 	}
 
@@ -42,6 +62,7 @@ func Send(s network.Stream, filePath string) error {
 
 	// Rewind file for sending
 	if _, err := file.Seek(0, 0); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to rewind file: %w", err)
 	}
 
@@ -54,9 +75,12 @@ func Send(s network.Stream, filePath string) error {
 		Checksum: checksum,
 	}
 
+	_ = s.SetWriteDeadline(time.Now().Add(DefaultTransferTimeout))
 	if err := header.WriteTo(s); err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to write header: %w", err)
 	}
+	_ = s.SetWriteDeadline(time.Time{})
 
 	// 3. Send Data with Progress Tracking
 	log.Printf("Sending: %s (%.2f MB)", header.Filename, float64(header.FileSize)/(1024*1024))
@@ -70,8 +94,16 @@ func Send(s network.Stream, filePath string) error {
 		last:  0,
 	}
 
-	written, err := io.Copy(s, pr)
+	dw := &deadlineWriter{
+		w:       s,
+		s:       s,
+		timeout: DefaultTransferTimeout,
+	}
+
+	written, err := io.Copy(dw, pr)
+	_ = s.SetWriteDeadline(time.Time{})
 	if err != nil {
+		_ = s.Reset()
 		return fmt.Errorf("failed to send file data: %w", err)
 	}
 

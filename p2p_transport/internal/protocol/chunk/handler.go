@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -29,25 +30,38 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	return handler
 }
 
+func writeMessageWithDeadline(s network.Stream, msg *Message) error {
+	_ = s.SetWriteDeadline(time.Now().Add(StreamWriteDeadline))
+	defer s.SetWriteDeadline(time.Time{})
+	err := WriteMessage(s, msg)
+	if err != nil {
+		_ = s.Reset()
+	}
+	return err
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
 	for {
+		_ = s.SetReadDeadline(time.Now().Add(StreamReadDeadline))
 		msg, err := ReadMessage(s)
+		_ = s.SetReadDeadline(time.Time{})
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			_ = s.Reset()
 			return
 		}
 
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			_ = writeMessageWithDeadline(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
 
@@ -58,7 +72,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			h.handleRequestChunk(s, msg)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			_ = writeMessageWithDeadline(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
 	}
 }
@@ -66,7 +80,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	contentID, err := ParseRequestManifest(msg.Payload)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
+		_ = writeMessageWithDeadline(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
 		return
 	}
 
@@ -74,12 +88,12 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	ctx := context.Background()
 	manifestData, err := h.engine.GetManifestBytes(ctx, contentID)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrContentNotFound, "manifest not found"))
+		_ = writeMessageWithDeadline(s, BuildError(ErrContentNotFound, "manifest not found"))
 		return
 	}
 
 	resp := BuildManifest(contentID, manifestData)
-	if err := WriteMessage(s, resp); err != nil {
+	if err := writeMessageWithDeadline(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}
 }
@@ -87,14 +101,14 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
+		_ = writeMessageWithDeadline(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
 		return
 	}
 
 	ctx := context.Background()
 	chunkData, err := h.engine.GetChunk(ctx, chunkID)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrChunkNotFound, "chunk not found"))
+		_ = writeMessageWithDeadline(s, BuildError(ErrChunkNotFound, "chunk not found"))
 		return
 	}
 
@@ -106,19 +120,22 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 
 	resp, err := BuildChunk(chunkData)
 	if err != nil {
-		WriteMessage(s, BuildError(ErrInternal, "failed to build chunk message"))
+		_ = writeMessageWithDeadline(s, BuildError(ErrInternal, "failed to build chunk message"))
 		return
 	}
 
-	if err := WriteMessage(s, resp); err != nil {
+	if err := writeMessageWithDeadline(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing CHUNK response: %v", err)
 		return
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	_ = s.SetReadDeadline(time.Now().Add(StreamReadDeadline))
 	ackMsg, err := ReadMessage(s)
+	_ = s.SetReadDeadline(time.Time{})
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
+		_ = s.Reset()
 		return
 	}
 	if ackMsg.Type == MsgError {
@@ -128,6 +145,7 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 	if ackMsg.Type != MsgAck {
 		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+		_ = s.Reset()
 		return
 	}
 }
