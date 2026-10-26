@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +47,7 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	exportKeyFile := flag.String("export-key-file", "", "Path to export raw content decryption key (hex)")
 
 	flag.Parse()
 
@@ -110,7 +112,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewLocalKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -235,11 +237,25 @@ func main() {
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	if *exportKeyFile != "" {
+		dir := filepath.Dir(*exportKeyFile)
+		if dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0700)
+			_ = os.Chmod(dir, 0700)
+		}
+		keyHexStr := fmt.Sprintf("%x\n", key)
+		if err := os.WriteFile(*exportKeyFile, []byte(keyHexStr), 0600); err != nil {
+			log.Printf("Warning: Failed to export key file: %v", err)
+		} else {
+			_ = os.Chmod(*exportKeyFile, 0600)
+			log.Printf("Exported decryption key to: %s", *exportKeyFile)
+		}
+	}
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: [REDACTED]\n")
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
