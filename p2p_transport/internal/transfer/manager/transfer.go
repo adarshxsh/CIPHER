@@ -26,14 +26,35 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	SchedulerOpts  []scheduler.Option
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
-	return &TransferManager{
+type TransferManagerOption func(*TransferManager)
+
+// WithThrottle configures worker throttling delay on the transfer scheduler.
+func WithThrottle(d time.Duration) TransferManagerOption {
+	return func(tm *TransferManager) {
+		tm.SchedulerOpts = append(tm.SchedulerOpts, scheduler.WithThrottle(d))
+	}
+}
+
+// WithSchedulerOption adds a scheduler option to the transfer manager.
+func WithSchedulerOption(opt scheduler.Option) TransferManagerOption {
+	return func(tm *TransferManager) {
+		tm.SchedulerOpts = append(tm.SchedulerOpts, opt)
+	}
+}
+
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, opts ...TransferManagerOption) *TransferManager {
+	tm := &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
 	}
+	for _, opt := range opts {
+		opt(tm)
+	}
+	return tm
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
@@ -112,7 +133,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3, tm.SchedulerOpts...) // MaxAttempts = 3
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
