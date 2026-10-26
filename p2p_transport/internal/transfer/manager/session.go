@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"cipher/internal/content/core"
@@ -57,10 +58,58 @@ type FileSessionManager struct {
 }
 
 func NewFileSessionManager(dir string) (*FileSessionManager, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	if err := os.Chmod(dir, 0700); err != nil {
+		return nil, err
+	}
+	m := &FileSessionManager{dir: dir}
+	if err := m.remediateDirectory(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (m *FileSessionManager) remediateDirectory() error {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			ext := filepath.Ext(entry.Name())
+			if ext == ".json" || ext == ".tmp" || strings.HasSuffix(entry.Name(), ".json") || strings.HasSuffix(entry.Name(), ".tmp") {
+				filePath := filepath.Join(m.dir, entry.Name())
+				if err := m.remediateFile(filePath); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (m *FileSessionManager) remediateFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return nil
+	}
+	if info.Mode().Perm() != 0600 {
+		if err := os.Chmod(path, 0600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -69,6 +118,9 @@ func (m *FileSessionManager) getPath(id core.ContentID) string {
 
 func (m *FileSessionManager) Open(id core.ContentID) (*TransferSession, error) {
 	path := m.getPath(id)
+	if err := m.remediateFile(path); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -92,10 +144,16 @@ func (m *FileSessionManager) Save(session *TransferSession) error {
 	path := m.getPath(session.ContentID)
 	// Write to temporary file and rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, b, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, b, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
 }
 
 func (m *FileSessionManager) Close(id core.ContentID) error {
@@ -122,14 +180,23 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 	}
 	var sessions []*TransferSession
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
+		if !entry.IsDir() {
+			filePath := filepath.Join(m.dir, entry.Name())
+			ext := filepath.Ext(entry.Name())
+			if ext == ".json" || ext == ".tmp" || strings.HasSuffix(entry.Name(), ".json") || strings.HasSuffix(entry.Name(), ".tmp") {
+				if err := m.remediateFile(filePath); err != nil {
+					return nil, err
+				}
 			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
+			if ext == ".json" {
+				b, err := os.ReadFile(filePath)
+				if err != nil {
+					continue
+				}
+				var s TransferSession
+				if err := json.Unmarshal(b, &s); err == nil {
+					sessions = append(sessions, &s)
+				}
 			}
 		}
 	}
