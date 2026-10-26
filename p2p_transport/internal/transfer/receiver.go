@@ -20,7 +20,11 @@ import (
 func Receive(s network.Stream) error {
 	defer s.Close()
 
-	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	remotePeer := "unknown"
+	if s.Conn() != nil {
+		remotePeer = s.Conn().RemotePeer().String()
+	}
+	log.Printf("Incoming stream from %s. Preparing to receive...", remotePeer)
 
 	// 1. Read Header
 	var header Header
@@ -28,7 +32,7 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
-	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
+	if (header.Version != ProtocolVersion1 && header.Version != ProtocolVersion2) || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
 	}
 
@@ -72,19 +76,31 @@ func Receive(s network.Stream) error {
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
 
 	// 4. Verify Integrity
+	var expectedChecksum [32]byte
+	if header.Version == ProtocolVersion1 {
+		expectedChecksum = header.Checksum
+	} else {
+		if _, err := io.ReadFull(s, expectedChecksum[:]); err != nil {
+			return fmt.Errorf("failed to read trailing checksum frame: %w", err)
+		}
+	}
+
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	if !bytes.Equal(computedChecksum[:], expectedChecksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", expectedChecksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", expectedChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")
