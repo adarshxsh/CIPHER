@@ -55,39 +55,47 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	}
 
 	// Generate a new encryption key
-	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
-	if _, err := rand.Read(key); err != nil {
+	rawKey := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
+	if _, err := rand.Read(rawKey); err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	// Store key
-	if err := e.keys.Put(ctx, contentID, key); err != nil {
+	if err := e.keys.Put(ctx, contentID, rawKey); err != nil {
+		Wipe(rawKey)
 		return nil, fmt.Errorf("failed to store key: %w", err)
 	}
+	Wipe(rawKey)
 
 	var chunkIDs []core.ChunkID
 	var totalSize uint64
 
-	// Read all chunks, encrypt, hash, and store
-	for chunk := range chunkCh {
-		// Encrypt the chunk
-		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
-			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
+	// Read all chunks, encrypt, hash, and store using closure-scoped key
+	err := e.keys.WithKey(ctx, contentID, func(key []byte) error {
+		for chunk := range chunkCh {
+			// Encrypt the chunk
+			if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+				return fmt.Errorf("failed to encrypt chunk: %w", err)
+			}
+
+			// Hash the ciphertext to get the ChunkID (content-addressing)
+			chunkHash := e.digest.Sum(chunk.Data)
+			var chunkID core.ChunkID
+			copy(chunkID[:], chunkHash[:])
+			chunk.Header.ID = chunkID
+
+			// Store the chunk
+			if err := e.sink.PutChunk(ctx, chunk); err != nil {
+				return fmt.Errorf("failed to store chunk: %w", err)
+			}
+
+			chunkIDs = append(chunkIDs, chunkID)
+			totalSize += uint64(chunk.Header.PlainSize)
 		}
-
-		// Hash the ciphertext to get the ChunkID (content-addressing)
-		chunkHash := e.digest.Sum(chunk.Data)
-		var chunkID core.ChunkID
-		copy(chunkID[:], chunkHash[:])
-		chunk.Header.ID = chunkID
-
-		// Store the chunk
-		if err := e.sink.PutChunk(ctx, chunk); err != nil {
-			return nil, fmt.Errorf("failed to store chunk: %w", err)
-		}
-
-		chunkIDs = append(chunkIDs, chunkID)
-		totalSize += uint64(chunk.Header.PlainSize)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if err := <-errCh; err != nil {
@@ -123,53 +131,45 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, fetches chunks, decrypts them using closure-scoped key handles, verifies integrity, and writes to w.
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
-	// Retrieve key
-	key, err := e.keys.Get(ctx, m.Descriptor.ID)
-	if err != nil {
-		return fmt.Errorf("failed to get content key: %w", err)
-	}
+	return e.keys.WithKey(ctx, m.Descriptor.ID, func(key []byte) error {
+		chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
+		for _, chunkID := range m.ChunkIDs {
+			chunk, err := e.source.GetChunk(ctx, chunkID)
+			if err != nil {
+				return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
+			}
 
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
+			// Verify chunk hash matches ID
+			hash := e.digest.Sum(chunk.Data)
+			if hash != core.Hash(chunkID) {
+				return fmt.Errorf("corrupted chunk %x: hash mismatch", chunkID)
+			}
 
-	for _, chunkID := range m.ChunkIDs {
-		chunk, err := e.source.GetChunk(ctx, chunkID)
-		if err != nil {
-			return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
+			// Decrypt chunk with closure-scoped key
+			if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
+				return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
+			}
+
+			chunks = append(chunks, chunk)
 		}
 
-		// Verify chunk hash matches ID
-		hash := e.digest.Sum(chunk.Data)
-		if hash != core.Hash(chunkID) {
-			return fmt.Errorf("corrupted chunk %x: hash mismatch", chunkID)
+		// Sort by index just in case they were fetched out of order
+		sort.Slice(chunks, func(i, j int) bool {
+			return chunks[i].Header.Index < chunks[j].Header.Index
+		})
+
+		// Write out
+		for _, chunk := range chunks {
+			if _, err := w.Write(chunk.Data); err != nil {
+				return fmt.Errorf("failed to write decrypted chunk: %w", err)
+			}
 		}
 
-		// Decrypt
-		if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
-			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
-		}
-
-		chunks = append(chunks, chunk)
-	}
-
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
+		return nil
 	})
-
-	// Write out
-	for _, chunk := range chunks {
-		if _, err := w.Write(chunk.Data); err != nil {
-			return fmt.Errorf("failed to write decrypted chunk: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // -- Transport Layer APIs --
