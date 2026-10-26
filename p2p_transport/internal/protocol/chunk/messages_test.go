@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +105,50 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_OversizedPayloadForMessageType(t *testing.T) {
+	var buf bytes.Buffer
+	// MsgRequestChunk has max payload size 512. Send size prefix for payload of 1000 bytes.
+	frameSize := uint32(1000 + 3)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgRequestChunk)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for oversized payload, got nil")
+	}
+}
+
+func TestReadMessage_FrameSmallerThanHeader(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(2) // Less than required 3 bytes header
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for frame size smaller than header, got nil")
+	}
+}
+
+func TestReadMessage_ExceedsMaxFrameSize(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(chunk.MaxFrameSize + 1)
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for frame size exceeding MaxFrameSize, got nil")
+	}
 }
