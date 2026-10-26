@@ -1,5 +1,12 @@
 package chunk
 
+import "time"
+
+const (
+	// DefaultStreamTimeout is the default deadline for stream network operations.
+	DefaultStreamTimeout = 15 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
