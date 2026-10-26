@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -33,7 +34,14 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	txCount := 0
+
 	for {
+		if err := s.SetReadDeadline(time.Now().Add(StreamTimeout)); err != nil {
+			log.Printf("[Chunk Protocol] Failed to set read deadline: %v", err)
+			return
+		}
+
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
@@ -59,6 +67,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			return
+		}
+
+		txCount++
+		if txCount >= MaxTransactionsPerStream {
+			log.Printf("[Chunk Protocol] Stream completed (%d transactions handled)", txCount)
+			return
 		}
 	}
 }
@@ -116,6 +131,11 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	if err := s.SetReadDeadline(time.Now().Add(StreamTimeout)); err != nil {
+		log.Printf("[Chunk Protocol] Failed to set read deadline for ACK: %v", err)
+		return
+	}
+
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
