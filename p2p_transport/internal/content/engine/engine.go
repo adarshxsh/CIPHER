@@ -67,27 +67,38 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 	var chunkIDs []core.ChunkID
 	var totalSize uint64
+	var ingestErr error
 
 	// Read all chunks, encrypt, hash, and store
 	for chunk := range chunkCh {
-		// Encrypt the chunk
-		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
-			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
+		if ingestErr == nil {
+			// Encrypt the chunk
+			if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+				ingestErr = fmt.Errorf("failed to encrypt chunk: %w", err)
+			} else {
+				// Hash the ciphertext to get the ChunkID (content-addressing)
+				chunkHash := e.digest.Sum(chunk.Data)
+				var chunkID core.ChunkID
+				copy(chunkID[:], chunkHash[:])
+				chunk.Header.ID = chunkID
+
+				// Store the chunk
+				if err := e.sink.PutChunk(ctx, chunk); err != nil {
+					ingestErr = fmt.Errorf("failed to store chunk: %w", err)
+				} else {
+					chunkIDs = append(chunkIDs, chunkID)
+					totalSize += uint64(chunk.Header.PlainSize)
+				}
+			}
 		}
 
-		// Hash the ciphertext to get the ChunkID (content-addressing)
-		chunkHash := e.digest.Sum(chunk.Data)
-		var chunkID core.ChunkID
-		copy(chunkID[:], chunkHash[:])
-		chunk.Header.ID = chunkID
+		// Release chunk data buffer back to the buffer pool immediately
+		e.chunker.PutBuffer(chunk.Data)
+	}
 
-		// Store the chunk
-		if err := e.sink.PutChunk(ctx, chunk); err != nil {
-			return nil, fmt.Errorf("failed to store chunk: %w", err)
-		}
-
-		chunkIDs = append(chunkIDs, chunkID)
-		totalSize += uint64(chunk.Header.PlainSize)
+	if ingestErr != nil {
+		<-errCh
+		return nil, ingestErr
 	}
 
 	if err := <-errCh; err != nil {
