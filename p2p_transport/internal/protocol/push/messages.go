@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"cipher/internal/content/core"
@@ -22,6 +23,31 @@ const (
 	WriteTimeout = 15 * time.Second
 	AckTimeout   = 30 * time.Second
 )
+
+// FrameBufferPool provides reusable bytes.Buffer instances for push wire frame serialization and deserialization.
+var FrameBufferPool = &sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+// GetFrameBuffer acquires a reset bytes.Buffer from FrameBufferPool.
+func GetFrameBuffer() *bytes.Buffer {
+	buf := FrameBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+// PutFrameBuffer resets and returns a bytes.Buffer to FrameBufferPool.
+func PutFrameBuffer(buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	if buf.Cap() <= int(MaxMessageSize*2) {
+		buf.Reset()
+		FrameBufferPool.Put(buf)
+	}
+}
 
 type PushMessageType uint8
 
@@ -53,7 +79,8 @@ type PushMessage struct {
 }
 
 func WritePushMessage(w io.Writer, msg *PushMessage) error {
-	buf := new(bytes.Buffer)
+	buf := GetFrameBuffer()
+	defer PutFrameBuffer(buf)
 
 	// Envelope: Version (2B), Type (1B)
 	if err := binary.Write(buf, binary.LittleEndian, msg.Version); err != nil {
@@ -70,7 +97,9 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	}
 
 	// 4B size prefix
-	if err := binary.Write(w, binary.LittleEndian, size); err != nil {
+	var sizeBuf [4]byte
+	binary.LittleEndian.PutUint32(sizeBuf[:], size)
+	if _, err := w.Write(sizeBuf[:]); err != nil {
 		return err
 	}
 
@@ -91,32 +120,32 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	buf := GetFrameBuffer()
+	defer PutFrameBuffer(buf)
+
+	if _, err := io.CopyN(buf, r, int64(size)); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
-	}
+	data := buf.Bytes()
+	version := binary.LittleEndian.Uint16(data[0:2])
+	msgType := PushMessageType(data[2])
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
-	}
+	payload := make([]byte, size-3)
+	copy(payload, data[3:])
 
-	return msg, nil
+	return &PushMessage{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
 
 func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID, manifestData []byte) *PushMessage {
-	buf := new(bytes.Buffer)
+	buf := GetFrameBuffer()
+	defer PutFrameBuffer(buf)
 	buf.Write(contentID[:])
 
 	count := uint32(len(assignedChunkIDs))
@@ -127,10 +156,13 @@ func BuildPushManifest(contentID core.ContentID, assignedChunkIDs []core.ChunkID
 	}
 	buf.Write(manifestData)
 
+	payload := make([]byte, buf.Len())
+	copy(payload, buf.Bytes())
+
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushManifest,
-		Payload: buf.Bytes(),
+		Payload: payload,
 	}
 }
 
@@ -177,7 +209,8 @@ func ParsePushManifestAck(payload []byte) (core.ContentID, byte, error) {
 }
 
 func BuildPushChunk(contentID core.ContentID, chunk *core.Chunk) (*PushMessage, error) {
-	buf := new(bytes.Buffer)
+	buf := GetFrameBuffer()
+	defer PutFrameBuffer(buf)
 	buf.Write(contentID[:])
 
 	if err := binary.Write(buf, binary.LittleEndian, &chunk.Header); err != nil {
@@ -185,10 +218,13 @@ func BuildPushChunk(contentID core.ContentID, chunk *core.Chunk) (*PushMessage, 
 	}
 	buf.Write(chunk.Data)
 
+	payload := make([]byte, buf.Len())
+	copy(payload, buf.Bytes())
+
 	return &PushMessage{
 		Version: CurrentPushVersion,
 		Type:    MsgPushChunk,
-		Payload: buf.Bytes(),
+		Payload: payload,
 	}, nil
 }
 

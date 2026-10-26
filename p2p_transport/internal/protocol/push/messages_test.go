@@ -128,3 +128,42 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestFrameBufferPoolConcurrency(t *testing.T) {
+	const goroutines = 50
+	const iterations = 100
+
+	done := make(chan bool, goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			for i := 0; i < iterations; i++ {
+				var cid core.ContentID
+				_, _ = rand.Read(cid[:])
+				msg := BuildPushError(byte(id%255), "test error string")
+
+				var buf bytes.Buffer
+				if err := WritePushMessage(&buf, msg); err != nil {
+					t.Errorf("goroutine %d iteration %d WritePushMessage failed: %v", id, i, err)
+					break
+				}
+
+				readMsg, err := ReadPushMessage(&buf)
+				if err != nil {
+					t.Errorf("goroutine %d iteration %d ReadPushMessage failed: %v", id, i, err)
+					break
+				}
+
+				if readMsg.Version != msg.Version || readMsg.Type != msg.Type {
+					t.Errorf("goroutine %d iteration %d message mismatch", id, i)
+					break
+				}
+			}
+			done <- true
+		}(g)
+	}
+
+	for g := 0; g < goroutines; g++ {
+		<-done
+	}
+}
