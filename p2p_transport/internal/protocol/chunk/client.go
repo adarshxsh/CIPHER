@@ -18,39 +18,67 @@ import (
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	transport *transport.Transport
+	peerID    peer.ID
+	stream    network.Stream
+	engine    *engine.ContentEngine
+	digest    core.Digest
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
 func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
-	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
-	if err != nil {
-		return nil, err
-	}
 	return &Client{
-		stream: stream,
-		engine: eng,
-		digest: verifier.NewSHA256Digest(),
+		transport: t,
+		peerID:    peerID,
+		engine:    eng,
+		digest:    verifier.NewSHA256Digest(),
 	}, nil
 }
 
+func (c *Client) getStream(ctx context.Context) (network.Stream, error) {
+	if c.stream != nil {
+		return c.stream, nil
+	}
+	s, err := c.transport.OpenStream(ctx, c.peerID, protocol.ChunkTransportProtocolID)
+	if err != nil {
+		return nil, err
+	}
+	c.stream = s
+	return s, nil
+}
+
+func (c *Client) closeCurrentStream() {
+	if c.stream != nil {
+		_ = c.stream.Close()
+		c.stream = nil
+	}
+}
+
 func (c *Client) Close() error {
-	return c.stream.Close()
+	c.closeCurrentStream()
+	return nil
 }
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	s, err := c.getStream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stream: %w", err)
+	}
+
 	req := BuildRequestManifest(id)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(s, req); err != nil {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(s)
 	if err != nil {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
+
+	c.closeCurrentStream()
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
@@ -89,17 +117,25 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	s, err := c.getStream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stream: %w", err)
+	}
+
 	req := BuildRequestChunk(chunkID)
-	if err := WriteMessage(c.stream, req); err != nil {
+	if err := WriteMessage(s, req); err != nil {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
-	resp, err := ReadMessage(c.stream)
+	resp, err := ReadMessage(s)
 	if err != nil {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.Type == MsgError {
+		c.closeCurrentStream()
 		code, msg, _ := ParseError(resp.Payload)
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
@@ -108,11 +144,13 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	}
 
 	if resp.Type != MsgChunk {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("expected CHUNK, got %d", resp.Type)
 	}
 
 	chunk, err := ParseChunk(resp.Payload)
 	if err != nil {
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("failed to parse chunk: %w", err)
 	}
 
@@ -120,7 +158,8 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
+		_ = WriteMessage(s, errMsg)
+		c.closeCurrentStream()
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
@@ -129,9 +168,11 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 
 	// Send ACK (optional fire-and-forget)
 	ack := BuildAck(chunkID, 0)
-	if err := WriteMessage(c.stream, ack); err != nil {
+	if err := WriteMessage(s, ack); err != nil {
 		log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
 	}
+
+	c.closeCurrentStream()
 
 	return chunk, nil
 }

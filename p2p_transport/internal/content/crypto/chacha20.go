@@ -32,6 +32,10 @@ func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
 }
 
 func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
+	if len(key) != chacha20poly1305.KeySize {
+		return fmt.Errorf("invalid key size %d: expected %d bytes", len(key), chacha20poly1305.KeySize)
+	}
+
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
@@ -48,6 +52,10 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 }
 
 func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
+	if len(key) != chacha20poly1305.KeySize {
+		return fmt.Errorf("invalid key size %d: expected %d bytes", len(key), chacha20poly1305.KeySize)
+	}
+
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)

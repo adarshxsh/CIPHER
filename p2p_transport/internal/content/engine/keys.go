@@ -34,6 +34,9 @@ func (p *LocalKeyProvider) Get(ctx context.Context, id core.ContentID) ([]byte, 
 }
 
 func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byte) error {
+	if len(key) != 32 {
+		return errors.New("invalid key size: must be 32 bytes")
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	keyCopy := make([]byte, len(key))
