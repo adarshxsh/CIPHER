@@ -62,3 +62,58 @@ func TestDecodeFrame_RejectsOversizedPayloadBeforeAllocation(t *testing.T) {
 		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
 	}
 }
+
+func TestDecodeFrame_RejectsOversizedPayloadsForAllMessageTypes(t *testing.T) {
+	tests := []struct {
+		name        string
+		msgType     chunk.MessageType
+		limit       int
+		exceededBy  uint32
+	}{
+		{
+			name:       "MsgRequestManifest oversized",
+			msgType:    chunk.MsgRequestManifest,
+			limit:      chunk.MaxChunkRequestSize,
+			exceededBy: 1,
+		},
+		{
+			name:       "MsgRequestChunk oversized",
+			msgType:    chunk.MsgRequestChunk,
+			limit:      chunk.MaxChunkRequestSize,
+			exceededBy: 10000,
+		},
+		{
+			name:       "MsgAck oversized",
+			msgType:    chunk.MsgAck,
+			limit:      chunk.HashSize + 1,
+			exceededBy: 1,
+		},
+		{
+			name:       "MsgError oversized",
+			msgType:    chunk.MsgError,
+			limit:      chunk.MaxProtocolErrorSize,
+			exceededBy: 100,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			frameSize := uint32(tc.limit) + tc.exceededBy + 3
+			if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+				t.Fatalf("failed to write size: %v", err)
+			}
+			if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+				t.Fatalf("failed to write version: %v", err)
+			}
+			if err := buf.WriteByte(byte(tc.msgType)); err != nil {
+				t.Fatalf("failed to write msgType: %v", err)
+			}
+
+			_, err := chunk.DecodeFrame(&buf)
+			if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+				t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+			}
+		})
+	}
+}
