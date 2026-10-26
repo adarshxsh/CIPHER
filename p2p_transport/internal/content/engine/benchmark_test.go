@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -42,6 +43,7 @@ func BenchmarkContentEngine_Ingest(b *testing.B) {
 	ctx := context.Background()
 
 	b.SetBytes(int64(dataSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -64,7 +66,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
-	
+
 	store := storage.NewFSStore(tmpDir)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -81,12 +83,20 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	}
 
 	b.SetBytes(int64(dataSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		var outBuf bytes.Buffer
-		if err := eng.Reassemble(ctx, m, &outBuf); err != nil {
+		outFile := filepath.Join(tmpDir, "out_bench.dat")
+		outF, err := os.Create(outFile)
+		if err != nil {
+			b.Fatalf("Create failed: %v", err)
+		}
+		if err := eng.Reassemble(ctx, m, outF); err != nil {
+			outF.Close()
 			b.Fatalf("Reassemble failed: %v", err)
 		}
+		outF.Close()
+		os.Remove(outFile)
 	}
 }
