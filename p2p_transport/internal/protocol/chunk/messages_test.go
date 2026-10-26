@@ -105,3 +105,62 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestSanitizeErrorString_ControlCharactersAndNewlines(t *testing.T) {
+	input := "line1\nline2\rline3\t\x00\x07end"
+	expected := "line1line2line3end"
+	sanitized := chunk.SanitizeErrorString(input)
+	if sanitized != expected {
+		t.Errorf("expected %q, got %q", expected, sanitized)
+	}
+}
+
+func TestSanitizeErrorString_ANSIEscapeSequences(t *testing.T) {
+	input := "\x1b[31mCRITICAL ERROR\x1b[0m: \x1b[1;32mSystem Failure\x1b[0m"
+	expected := "CRITICAL ERROR: System Failure"
+	sanitized := chunk.SanitizeErrorString(input)
+	if sanitized != expected {
+		t.Errorf("expected %q, got %q", expected, sanitized)
+	}
+}
+
+func TestSanitizeErrorString_Truncation(t *testing.T) {
+	// Long message > MaxErrorLogLen (128)
+	longMsg := ""
+	for i := 0; i < 150; i++ {
+		longMsg += "a"
+	}
+	sanitized := chunk.SanitizeErrorString(longMsg)
+
+	if len([]rune(sanitized)) != chunk.MaxErrorLogLen {
+		t.Errorf("expected sanitized length %d, got %d", chunk.MaxErrorLogLen, len([]rune(sanitized)))
+	}
+	if sanitized[len(sanitized)-3:] != "..." {
+		t.Errorf("expected truncated string to end with '...', got %q", sanitized[len(sanitized)-3:])
+	}
+
+	// Exact length 128
+	exactMsg := ""
+	for i := 0; i < 128; i++ {
+		exactMsg += "b"
+	}
+	sanitizedExact := chunk.SanitizeErrorString(exactMsg)
+	if sanitizedExact != exactMsg {
+		t.Errorf("expected exact length message to remain unmodified")
+	}
+}
+
+func TestParseError_SanitizesPayload(t *testing.T) {
+	msg := chunk.BuildError(chunk.ErrBadRequest, "bad\nrequest\x1b[31m!")
+	code, msgStr, err := chunk.ParseError(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected code %v, got %v", chunk.ErrBadRequest, code)
+	}
+	expectedMsg := "badrequest!"
+	if msgStr != expectedMsg {
+		t.Errorf("expected sanitized msg %q, got %q", expectedMsg, msgStr)
+	}
+}
