@@ -2,6 +2,7 @@ package push
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"sync"
@@ -108,6 +109,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 				return
 			}
 			log.Printf("[Push Protocol] Error reading message: %v", err)
+			if errors.Is(err, ErrInvalidProtocolVersion) {
+				_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "unsupported version"))
+			} else if errors.Is(err, ErrUnknownMessageType) {
+				_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "unknown message type"))
+			} else if errors.Is(err, ErrPayloadTooLarge) || errors.Is(err, ErrInvalidPayloadSize) {
+				_ = WritePushMessage(s, BuildPushError(PushStatusMalformed, "payload size exceeds limit"))
+			}
 			return
 		}
 		_ = s.SetReadDeadline(time.Time{})

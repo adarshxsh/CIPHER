@@ -46,6 +46,35 @@ const (
 	PushStatusIOError         byte = 0x07
 )
 
+var (
+	ErrInvalidProtocolVersion = errors.New("invalid protocol version")
+	ErrUnknownMessageType     = errors.New("unknown message type")
+	ErrInvalidPayloadSize     = errors.New("invalid payload size")
+	ErrPayloadTooLarge        = errors.New("payload exceeds protocol limit")
+	ErrTruncatedFrame         = errors.New("truncated protocol frame")
+)
+
+func MaxPayloadSizeForPushMessage(messageType PushMessageType) uint32 {
+	switch messageType {
+	case MsgPushManifest:
+		return MaxManifestSize
+	case MsgPushManifestAck:
+		return 33
+	case MsgPushChunk:
+		return MaxChunkSize
+	case MsgPushChunkAck:
+		return 33
+	case MsgPushBatchComplete:
+		return 32
+	case MsgPushBatchCompleteAck:
+		return 33
+	case MsgPushError:
+		return 2048
+	default:
+		return 0
+	}
+}
+
 type PushMessage struct {
 	Version uint16
 	Type    PushMessageType
@@ -78,39 +107,53 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	return err
 }
 
+const pushFrameHeaderSize = 7
+
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
-		return nil, err
+	if r == nil {
+		return nil, errors.New("push reader: nil reader")
 	}
 
-	if size > MaxMessageSize {
-		return nil, fmt.Errorf("message size %d exceeds maximum frame size %d", size, MaxMessageSize)
-	}
-	if size < 3 { // Must have at least Version (2) + Type (1)
-		return nil, errors.New("message frame too short")
+	var header [pushFrameHeaderSize]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return nil, fmt.Errorf("%w: failed to read frame header: %v", ErrTruncatedFrame, err)
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
+	frameSize := binary.LittleEndian.Uint32(header[0:4])
+	if frameSize < 3 {
+		return nil, fmt.Errorf("%w: frame size %d is smaller than message header", ErrInvalidPayloadSize, frameSize)
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
+	version := binary.LittleEndian.Uint16(header[4:6])
+	if version != CurrentPushVersion {
+		return nil, fmt.Errorf("%w: received=%d supported=%d", ErrInvalidProtocolVersion, version, CurrentPushVersion)
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
+	messageType := PushMessageType(header[6])
+	maxPayloadSize := MaxPayloadSizeForPushMessage(messageType)
+	if maxPayloadSize == 0 {
+		return nil, fmt.Errorf("%w: %d", ErrUnknownMessageType, messageType)
 	}
 
-	return msg, nil
+	declaredSize := frameSize - 3
+	if declaredSize == 0 {
+		return nil, fmt.Errorf("%w: message type %d declared an empty payload", ErrInvalidPayloadSize, messageType)
+	}
+
+	if declaredSize > maxPayloadSize {
+		return nil, fmt.Errorf("%w: message type=%d declared=%d maximum=%d", ErrPayloadTooLarge, messageType, declaredSize, maxPayloadSize)
+	}
+
+	payload := make([]byte, declaredSize)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return nil, fmt.Errorf("%w: expected=%d bytes: %v", ErrTruncatedFrame, declaredSize, err)
+	}
+
+	return &PushMessage{
+		Version: version,
+		Type:    messageType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --

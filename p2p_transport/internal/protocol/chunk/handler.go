@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -41,6 +42,13 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			if errors.Is(err, ErrInvalidProtocolVersion) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			} else if errors.Is(err, ErrUnknownMessageType) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			} else if errors.Is(err, ErrPayloadTooLarge) || errors.Is(err, ErrInvalidPayloadSize) {
+				WriteMessage(s, BuildError(ErrBadRequest, "payload size exceeds limit"))
+			}
 			return
 		}
 
