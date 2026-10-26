@@ -19,6 +19,7 @@ import (
 	"cipher/internal/content/verifier"
 	"cipher/internal/discovery"
 	"cipher/internal/identity"
+	"cipher/internal/keyutil"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/retrieval"
 	"cipher/internal/transfer/manager"
@@ -50,13 +51,16 @@ func main() {
 	ingestFile := flag.String("ingest", "", "Path to file to ingest locally")
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
-	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	keyHex := flag.String("key", "", "Decryption key (hex or file path) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to file containing decryption key for reassembly")
+	keyOut := flag.String("key-out", "", "Path to export secret decryption key file upon ingestion (default: <storePath>/<ContentID>.key)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
+	seed := flag.Bool("seed", true, "Keep peer running after ingest or download")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
@@ -247,24 +251,35 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyPath := *keyOut
+		if keyPath == "" {
+			keyPath = keyutil.DefaultKeyPath(*storePath, m.Descriptor.ID)
+		}
+		if err := keyutil.ExportKey(keyPath, key); err != nil {
+			log.Printf("[Warning] Failed to export key file: %v", err)
+		} else {
+			log.Printf("Decryption key exported to: %s", keyPath)
+		}
+
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: [REDACTED]")
+		log.Printf("    Key File: %s", keyPath)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
 		if *wsPort == 0 {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
-		
-		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
-			"  -p 5001 \\\n" +
-			"  -ws-port 5002 \\\n" +
-			"  -store ./store_b \\\n" +
-			"  -d \"%s\" \\\n" +
-			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+
+		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n"+
+			"  -p 5001 \\\n"+
+			"  -ws-port 5002 \\\n"+
+			"  -store ./store_b \\\n"+
+			"  -d \"%s\" \\\n"+
+			"  -fetch \"%x\" \\\n"+
+			"  -key-file \"%s\" \\\n"+
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyPath)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,10 +383,14 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
-			kBytes, err := hex.DecodeString(*keyHex)
-			if err != nil || len(kBytes) != 32 {
-				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
+		keyInput := *keyFile
+		if keyInput == "" {
+			keyInput = *keyHex
+		}
+		if keyInput != "" {
+			kBytes, err := keyutil.LoadKey(keyInput)
+			if err != nil {
+				log.Fatalf("Invalid key: %v", err)
 			}
 			keys.Put(ctx, contentID, kBytes)
 		}
@@ -403,6 +422,11 @@ func main() {
 			}
 			log.Printf("[✓] Reassembled to: %s", *reassembleOut)
 		}
+	}
+
+	if !*seed {
+		log.Println("Seeding flag is false, exiting peer.")
+		return
 	}
 
 	// Wait for termination signal

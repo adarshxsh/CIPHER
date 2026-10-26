@@ -20,6 +20,7 @@ import (
 	"cipher/internal/discovery"
 	"cipher/internal/distribution"
 	"cipher/internal/identity"
+	"cipher/internal/keyutil"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
 
@@ -46,6 +47,7 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	keyOut := flag.String("key-out", "", "Path to export secret decryption key file (default: <storePath>/<ContentID>.key)")
 
 	flag.Parse()
 
@@ -235,11 +237,21 @@ func main() {
 	}
 
 	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	keyPath := *keyOut
+	if keyPath == "" {
+		keyPath = keyutil.DefaultKeyPath(*storePath, m.Descriptor.ID)
+	}
+	if err := keyutil.ExportKey(keyPath, key); err != nil {
+		log.Printf("[Publisher] Warning: Failed to export key file: %v", err)
+	} else {
+		log.Printf("[Publisher] Decryption key exported to: %s", keyPath)
+	}
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: [REDACTED]\n")
+	fmt.Printf("Key File      : %s\n", keyPath)
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")
@@ -253,7 +265,7 @@ func main() {
 		return
 	}
 
-	log.Println("\n[Publisher] Seeding content over /cipher/chunk/1.0.0. Press Ctrl+C to stop.")
+	log.Println("[Publisher] Seeding content over /cipher/chunk/1.0.0. Press Ctrl+C to stop.")
 
 	// Wait for OS shutdown signal
 	ch := make(chan os.Signal, 1)
