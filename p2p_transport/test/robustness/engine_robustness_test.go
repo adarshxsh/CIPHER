@@ -28,7 +28,7 @@ func setupTestEngine(t *testing.T, chunkSize uint32) (*engine.ContentEngine, str
 	config := core.EngineConfig{ChunkSize: chunkSize}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(tmpDir)
 
 	if err := storage.NewFSStorage(tmpDir); err != nil {
 		t.Fatalf("failed to init storage: %v", err)

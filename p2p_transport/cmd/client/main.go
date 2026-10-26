@@ -34,6 +34,7 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
 	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to symmetric decryption key file with 0600 permissions")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -151,7 +152,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -205,7 +206,26 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
+	if *keyFile != "" {
+		data, err := os.ReadFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to read key file %s: %v", *keyFile, err)
+		}
+		str := strings.TrimSpace(string(data))
+		var kBytes []byte
+		if len(str) == 64 {
+			var decodeErr error
+			kBytes, decodeErr = hex.DecodeString(str)
+			if decodeErr != nil {
+				log.Fatalf("Invalid hex in key file: %v", decodeErr)
+			}
+		} else if len(data) == 32 {
+			kBytes = data
+		} else {
+			log.Fatalf("Invalid key file length: expected 32 raw bytes or 64 hex characters")
+		}
+		keys.Put(ctx, contentID, kBytes)
+	} else if *keyHex != "" {
 		kBytes, err := hex.DecodeString(*keyHex)
 		if err != nil || len(kBytes) != 32 {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")

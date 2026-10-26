@@ -23,8 +23,9 @@ func createTestEngine(t testing.TB) *engine.ContentEngine {
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
-	store := storage.NewFSStore(t.TempDir()) // isolated per engine
+	tmpDir := t.TempDir()
+	keys := engine.NewFSKeyProvider(tmpDir)
+	store := storage.NewFSStore(tmpDir) // isolated per engine
 	return engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 }
 

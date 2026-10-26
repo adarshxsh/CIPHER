@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,7 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to export or import symmetric decryption key file with 0600 permissions")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
@@ -123,7 +125,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -246,10 +248,23 @@ func main() {
 			)
 		}
 
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		if *keyFile != "" {
+			key, err := keys.Get(ctx, m.Descriptor.ID)
+			if err != nil {
+				log.Fatalf("Failed to retrieve key for export: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Dir(*keyFile), 0755); err != nil {
+				log.Fatalf("Failed to create key file directory: %v", err)
+			}
+			if err := os.WriteFile(*keyFile, []byte(hex.EncodeToString(key)+"\n"), 0600); err != nil {
+				log.Fatalf("Failed to write key to file: %v", err)
+			}
+			log.Printf("[✓] Key exported to %s with 0600 permissions", *keyFile)
+		}
+
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: [STORED IN KEYSTORE]")
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +278,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key-file \"key.key\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,7 +383,26 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
+		if *keyFile != "" {
+			data, err := os.ReadFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to read key file %s: %v", *keyFile, err)
+			}
+			str := strings.TrimSpace(string(data))
+			var kBytes []byte
+			if len(str) == 64 {
+				var decodeErr error
+				kBytes, decodeErr = hex.DecodeString(str)
+				if decodeErr != nil {
+					log.Fatalf("Invalid hex in key file: %v", decodeErr)
+				}
+			} else if len(data) == 32 {
+				kBytes = data
+			} else {
+				log.Fatalf("Invalid key file length: expected 32 raw bytes or 64 hex characters")
+			}
+			keys.Put(ctx, contentID, kBytes)
+		} else if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
 			if err != nil || len(kBytes) != 32 {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
