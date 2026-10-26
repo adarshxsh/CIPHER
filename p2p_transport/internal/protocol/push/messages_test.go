@@ -128,3 +128,26 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestReadPushMessage_PreValidation_OversizedPayload(t *testing.T) {
+	// 7-byte header claiming 1MB payload for MsgPushManifestAck (max allowed is 33 bytes)
+	var header [7]byte
+	// Frame length = 1,000,003 (4 bytes LittleEndian)
+	header[0] = 0x03
+	header[1] = 0x24
+	header[2] = 0x0F
+	header[3] = 0x00
+	// Version = 1 (2 bytes LittleEndian)
+	header[4] = 0x01
+	header[5] = 0x00
+	// Type = MsgPushManifestAck (0x11)
+	header[6] = byte(MsgPushManifestAck)
+
+	var buf bytes.Buffer
+	buf.Write(header[:])
+
+	_, err := ReadPushMessage(&buf)
+	if err == nil {
+		t.Fatalf("Expected ReadPushMessage to reject oversized payload on header pre-validation, got nil error")
+	}
+}
