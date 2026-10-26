@@ -8,4 +8,7 @@ const (
 
 	// ChunkTransportProtocolID is the content-addressed transport protocol (Milestone 8).
 	ChunkTransportProtocolID protocol.ID = "/cipher/chunk/1.0.0"
+
+	// PushTransportProtocolID is the remote ingestion and replication protocol (Phase 4).
+	PushTransportProtocolID protocol.ID = "/cipher/push/1.0.0"
 )
