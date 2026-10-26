@@ -6,27 +6,49 @@ import (
 	"log"
 	"math/rand"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
 	"cipher/internal/content/engine"
+	"cipher/internal/identity"
 	"cipher/internal/protocol"
 )
 
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host    host.Host
+	engine  *engine.ContentEngine
+	privKey crypto.PrivKey
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
-	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+	var priv crypto.PrivKey
+	if h != nil && h.Peerstore() != nil {
+		priv = h.Peerstore().PrivKey(h.ID())
 	}
-	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	if priv == nil {
+		var err error
+		priv, err = identity.LoadOrCreate()
+		if err != nil {
+			log.Printf("[Chunk Protocol] Warning: Failed to load identity key: %v", err)
+		}
+	}
+
+	handler := &StreamHandler{
+		host:    h,
+		engine:  eng,
+		privKey: priv,
+	}
+	if h != nil {
+		h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	}
 	return handler
+}
+
+func (h *StreamHandler) SetPrivateKey(priv crypto.PrivKey) {
+	h.privKey = priv
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -78,7 +100,20 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 		return
 	}
 
-	resp := BuildManifest(contentID, manifestData)
+	var sig []byte
+	if h.privKey != nil {
+		signedData := append(contentID[:], manifestData...)
+		sig, err = h.privKey.Sign(signedData)
+		if err != nil {
+			log.Printf("[Chunk Protocol] Error signing manifest for %x: %v", contentID, err)
+			WriteMessage(s, BuildError(ErrInternal, "failed to sign manifest"))
+			return
+		}
+	} else {
+		log.Printf("[Chunk Protocol] Warning: No private key available to sign manifest for %x", contentID)
+	}
+
+	resp := BuildManifest(contentID, sig, manifestData)
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}

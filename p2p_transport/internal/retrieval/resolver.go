@@ -44,7 +44,7 @@ func ResolveManifest(
 
 		if err != nil {
 			log.Printf(
-				"[DHT] Failed to resolve manifest from provider %s: %v",
+				"[DHT] Security warning / resolution failure: Failed to resolve manifest from provider %s: %v",
 				provider,
 				err,
 			)

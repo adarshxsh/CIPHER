@@ -117,22 +117,45 @@ func ParseRequestManifest(payload []byte) (core.ContentID, error) {
 	return id, nil
 }
 
-func BuildManifest(id core.ContentID, data []byte) *Message {
-	payload := append(id[:], data...)
+func BuildManifest(id core.ContentID, signature []byte, data []byte) *Message {
+	sigLen := uint16(len(signature))
+	buf := new(bytes.Buffer)
+	buf.Write(id[:])
+	binary.Write(buf, binary.LittleEndian, sigLen)
+	if sigLen > 0 {
+		buf.Write(signature)
+	}
+	buf.Write(data)
+
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgManifest,
-		Payload: payload,
+		Payload: buf.Bytes(),
 	}
 }
 
-func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
+func ParseManifest(payload []byte) (core.ContentID, []byte, []byte, error) {
 	var id core.ContentID
-	if len(payload) < 32 {
-		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+	if len(payload) < 34 {
+		return id, nil, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
 	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+
+	sigLen := binary.LittleEndian.Uint16(payload[32:34])
+	if len(payload) < 34+int(sigLen) {
+		return id, nil, nil, fmt.Errorf("invalid payload length for signed MANIFEST: %d (sigLen=%d)", len(payload), sigLen)
+	}
+
+	var sig []byte
+	if sigLen > 0 {
+		sig = make([]byte, sigLen)
+		copy(sig, payload[34:34+int(sigLen)])
+	} else {
+		sig = []byte{}
+	}
+
+	manifestData := payload[34+int(sigLen):]
+	return id, sig, manifestData, nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {

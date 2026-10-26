@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -61,12 +62,44 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	respID, sig, data, err := ParseManifest(resp.Payload)
 	if err != nil {
 		return nil, err
 	}
 	if respID != id {
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	if len(sig) == 0 {
+		log.Printf("[Chunk Client] Security Warning: Missing provider signature for manifest from peer %s", c.stream.Conn().RemotePeer())
+		return nil, fmt.Errorf("missing provider signature in manifest response from peer %s", c.stream.Conn().RemotePeer())
+	}
+
+	remotePeer := c.stream.Conn().RemotePeer()
+
+	var pubKey crypto.PubKey
+	if conn := c.stream.Conn(); conn != nil {
+		pubKey = conn.RemotePublicKey()
+	}
+	if pubKey == nil {
+		var err error
+		pubKey, err = remotePeer.ExtractPublicKey()
+		if err != nil || pubKey == nil {
+			log.Printf("[Chunk Client] Security Warning: Failed to extract public key for peer %s: %v", remotePeer, err)
+			return nil, fmt.Errorf("failed to obtain remote public key for peer %s: %w", remotePeer, err)
+		}
+	}
+
+	if !remotePeer.MatchesPublicKey(pubKey) {
+		log.Printf("[Chunk Client] Security Warning: Public key mismatch for peer %s", remotePeer)
+		return nil, fmt.Errorf("public key mismatch for peer %s", remotePeer)
+	}
+
+	signedData := append(respID[:], data...)
+	ok, err := pubKey.Verify(signedData, sig)
+	if err != nil || !ok {
+		log.Printf("[Chunk Client] Security Warning: Invalid provider signature from peer %s for content %x", remotePeer, id)
+		return nil, fmt.Errorf("invalid provider signature from peer %s", remotePeer)
 	}
 
 	return data, nil
