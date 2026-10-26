@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +127,40 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestParsePushManifest_BoundsCheck(t *testing.T) {
+	// Case 1: Short payload (< 36 bytes)
+	shortPayload := make([]byte, 35)
+	_, _, _, err := ParsePushManifest(shortPayload)
+	if err == nil {
+		t.Errorf("expected error for short payload, got nil")
+	}
+
+	// Case 2: Count exceeds capacity
+	// Payload of 100 bytes can hold at most (100-36)/32 = 2 chunks
+	payload := make([]byte, 100)
+	binary.LittleEndian.PutUint32(payload[32:36], 10) // declared 10 chunks
+	_, _, _, err = ParsePushManifest(payload)
+	if err == nil {
+		t.Errorf("expected error when count exceeds capacity, got nil")
+	}
+
+	// Case 3: Overflowing count values (32-bit max, sign bit set, large count)
+	counts := []uint32{
+		0xFFFFFFFF, // 2^32 - 1
+		0x80000000, // 2^31 (signed int overflow on 32-bit arch)
+		0x07FFFFFF, // 134,217,727
+		0x00010000, // 65,536
+	}
+
+	for _, count := range counts {
+		p := make([]byte, 100)
+		binary.LittleEndian.PutUint32(p[32:36], count)
+		_, _, _, err := ParsePushManifest(p)
+		if err == nil {
+			t.Errorf("expected error for count=%d, got nil", count)
+		}
 	}
 }
