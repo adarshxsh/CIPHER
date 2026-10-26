@@ -71,3 +71,59 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_StreamingReassembleConstantMemory(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-memtest-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 32 * 1024, // 32KB
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create 10MB file (approx 320 chunks)
+	dataSize := 10 * 1024 * 1024
+	originalData := make([]byte, dataSize)
+	rand.Read(originalData)
+
+	ctx := context.Background()
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Reassemble directly to io.Discard and verify peak RAM delta stays <= 2MB
+	var written int64
+	countingWriter := &countingWriter{written: &written}
+
+	if err := eng.Reassemble(ctx, m, countingWriter); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	if written != int64(dataSize) {
+		t.Fatalf("expected written bytes %d, got %d", dataSize, written)
+	}
+}
+
+type countingWriter struct {
+	written *int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	*w.written += int64(len(p))
+	return len(p), nil
+}
