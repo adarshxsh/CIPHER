@@ -20,5 +20,4 @@ client_store/
 *.key
 run_*.sh
 temp
-
 my_file.txt

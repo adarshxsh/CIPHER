@@ -9,14 +9,14 @@ const (
 	// StandardChunkSize is the normal plaintext chunk size.
 	StandardChunkSize = 32 * 1024 // 32 KiB
 
-	// ChaCha20NonceSize is the nonce size used by standard ChaCha20-Poly1305.
-	ChaCha20NonceSize = 12
+	// XChaCha20NonceSize is the nonce size used by XChaCha20-Poly1305.
+	XChaCha20NonceSize = 24
 
 	// Poly1305TagSize is the authentication-tag size.
 	Poly1305TagSize = 16
 
 	// EncryptionOverhead is added to every encrypted chunk.
-	EncryptionOverhead = ChaCha20NonceSize + Poly1305TagSize
+	EncryptionOverhead = XChaCha20NonceSize + Poly1305TagSize
 
 	// MaxCiphertextSize is the largest encrypted chunk accepted.
 	MaxCiphertextSize = StandardChunkSize + EncryptionOverhead
@@ -75,9 +75,8 @@ const (
 	// MaxProtocolErrorSize limits encoded protocol error responses.
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
-	// Manifest responses can be larger than request payloads but remain bound
-	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	// MaxManifestSize is the maximum allowed size for a manifest message.
+	MaxManifestSize = 2 * 1024 * 1024
 )
 
 const (
