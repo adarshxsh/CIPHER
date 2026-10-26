@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"sync"
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -22,18 +24,105 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	BaseBackoff time.Duration
+	MaxBackoff  time.Duration
+	MaxQueueCap int
+
+	queue *ChunkQueue
+	mu    sync.Mutex
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
 	return &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		BaseBackoff: 50 * time.Millisecond,
+		MaxBackoff:  5 * time.Second,
+		MaxQueueCap: DefaultMaxQueueCapacity,
 	}
 }
 
+// CalculateBackoff computes exponential delay for task retry based on attempt count.
+func (s *Scheduler) CalculateBackoff(attempts int) time.Duration {
+	if attempts <= 0 {
+		return 0
+	}
+	base := s.BaseBackoff
+	if base <= 0 {
+		base = 50 * time.Millisecond
+	}
+	shift := uint(attempts - 1)
+	if shift > 30 {
+		shift = 30
+	}
+	factor := 1 << shift
+	delay := base * time.Duration(factor)
+	if s.MaxBackoff > 0 && delay > s.MaxBackoff {
+		delay = s.MaxBackoff
+	}
+	return delay
+}
+
+// Requeue applies exponential backoff delay and pushes task back onto the queue.
+func (s *Scheduler) Requeue(ctx context.Context, task ChunkTask) error {
+	s.mu.Lock()
+	q := s.queue
+	s.mu.Unlock()
+
+	if q == nil {
+		return fmt.Errorf("queue not initialized")
+	}
+
+	delay := s.CalculateBackoff(task.Attempts)
+	if delay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
+	if !q.Push(task) {
+		return fmt.Errorf("requeue rejected task: %w", ErrQueueFull)
+	}
+	return nil
+}
+
+// QueueDepth returns the current depth metric of the task queue.
+func (s *Scheduler) QueueDepth() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queue == nil {
+		return 0
+	}
+	return s.queue.Len()
+}
+
+// GetQueueDepth is an alias for QueueDepth to expose queue depth metric.
+func (s *Scheduler) GetQueueDepth() int {
+	return s.QueueDepth()
+}
+
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
+	maxCap := s.MaxQueueCap
+	if maxCap <= 0 {
+		maxCap = DefaultMaxQueueCapacity
+	}
+	queue := NewChunkQueueWithCapacity(tasks, maxCap)
+
+	s.mu.Lock()
+	s.queue = queue
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.queue = nil
+		s.mu.Unlock()
+	}()
+
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
@@ -57,6 +146,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	}
 	
 	pendingTasks := len(tasks)
+	if pendingTasks > maxCap {
+		pendingTasks = maxCap
+	}
 	
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
@@ -77,7 +169,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					res.Task.MissedPeers[res.PeerID] = true
 
 					if len(res.Task.MissedPeers) < len(sources) {
-						queue.Push(res.Task)
+						if !queue.Push(res.Task) {
+							return fmt.Errorf("requeue failed for missed chunk %x: %w", res.Task.ChunkID, ErrQueueFull)
+						}
 						continue
 					}
 					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
@@ -86,7 +180,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				// Real network / integrity error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+					if err := s.Requeue(ctx, res.Task); err != nil {
+						return fmt.Errorf("requeue failed for chunk %x: %w", res.Task.ChunkID, err)
+					}
 				} else {
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
