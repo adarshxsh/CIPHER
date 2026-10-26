@@ -5,9 +5,11 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"golang.org/x/time/rate"
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
@@ -16,17 +18,35 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host       host.Host
+	engine     *engine.ContentEngine
+	logLimiter *rate.Limiter
+	mu         sync.Mutex
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	handler := &StreamHandler{
-		host:   h,
-		engine: eng,
+		host:       h,
+		engine:     eng,
+		logLimiter: rate.NewLimiter(rate.Limit(2), 5),
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func (h *StreamHandler) SetLogLimiter(limiter *rate.Limiter) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.logLimiter = limiter
+}
+
+func (h *StreamHandler) allowErrorLog() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.logLimiter == nil {
+		h.logLimiter = rate.NewLimiter(rate.Limit(2), 5)
+	}
+	return h.logLimiter.Allow()
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -123,7 +143,9 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		if h.allowErrorLog() {
+			log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		}
 		return
 	}
 	if ackMsg.Type != MsgAck {

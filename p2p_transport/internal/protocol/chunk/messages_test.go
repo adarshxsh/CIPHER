@@ -105,3 +105,62 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_SanitizesControlCharacters(t *testing.T) {
+	// Attempted log injection attack via CR, LF, TAB, and null bytes
+	injectionPayload := append([]byte{byte(chunk.ErrBadRequest)}, []byte("bad request\n2026/09/21 [Chunk Protocol] Fake log entry\r\t\x00")...)
+
+	code, sanitizedMsg, err := chunk.ParseError(injectionPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected error code %d, got %d", chunk.ErrBadRequest, code)
+	}
+
+	expected := `bad request\n2026/09/21 [Chunk Protocol] Fake log entry\r\t\u0000`
+	if sanitizedMsg != expected {
+		t.Errorf("expected sanitized message %q, got %q", expected, sanitizedMsg)
+	}
+}
+
+func TestParseError_EnforcesMaxErrorMessageSize(t *testing.T) {
+	// Create payload with message longer than MaxErrorMessageSize (512 bytes)
+	longMsg := make([]byte, 1000)
+	for i := range longMsg {
+		longMsg[i] = 'a'
+	}
+	payload := append([]byte{byte(chunk.ErrInternal)}, longMsg...)
+
+	code, sanitizedMsg, err := chunk.ParseError(payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrInternal {
+		t.Errorf("expected error code %d, got %d", chunk.ErrInternal, code)
+	}
+
+	if len(sanitizedMsg) != chunk.MaxErrorMessageSize {
+		t.Errorf("expected message length %d, got %d", chunk.MaxErrorMessageSize, len(sanitizedMsg))
+	}
+}
+
+func TestParseError_ValidMessagePreserved(t *testing.T) {
+	msg := "manifest not found"
+	errMsg := chunk.BuildError(chunk.ErrContentNotFound, msg)
+
+	code, parsedMsg, err := chunk.ParseError(errMsg.Payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrContentNotFound {
+		t.Errorf("expected error code %d, got %d", chunk.ErrContentNotFound, code)
+	}
+
+	if parsedMsg != msg {
+		t.Errorf("expected %q, got %q", msg, parsedMsg)
+	}
+}
