@@ -14,10 +14,34 @@
 - [x] Milestone 7: Content Engine Foundation (Chunking, Cryptography, Content-Addressed Storage, Manifests)
 - [x] Milestone 8: Content-Addressed Protocol & Integration
 - [x] Milestone 9: Reliable Content Transfer (Session Management, Resume, Retry)
-- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling *(Successfully validated across multiple devices & NATs via public relays!)*
+- [x] Milestone 10: Multi-peer Swarming & Chunk Scheduling *(Validated across multiple devices & NATs via public relays!)*
 
 ## Phase 4: Decentralization & Scaling
-- [ ] Milestone 11: Discovery (mDNS & DHT routing)
-- [ ] Milestone 12: Deduplication, Proof-of-Storage & CDN Cache Placement
-- [ ] Milestone 13: End-to-End Testing & Polish
+- [x] Milestone 11: Decentralized Discovery (Kademlia DHT server mode, CID generation, periodic Provider Republisher daemon)
+- [x] Milestone 12: Remote Ingestion & Multi-Provider Replication Protocol (`/cipher/push/1.0.0`, circular placement planner, global replica invariant tracker)
+- [ ] Milestone 13: Provider Selection & Dynamic Scoring Engine (RTT/bandwidth-based scheduler prioritization)
+- [ ] Milestone 14: Provider Reputation & Byzantine Fault Hardening (Corrupt chunk quarantine & peer blacklisting)
+- [ ] Milestone 15: Tiered Caching & Dynamic Edge Replication (LRU RAM cache + demand-driven CDN replication)
+- [ ] Milestone 16: Observability, Metrics & Telemetry Suite (Prometheus metrics & CLI dashboard)
 
+---
+
+### Command Quick-Start Reference
+
+```bash
+# Push distribution across remote providers with R=2 replication:
+CGO_ENABLED=0 go run cmd/publisher/main.go \
+  -file test_files/test.mp4 \
+  -push \
+  -providers "<P1_ADDR>,<P2_ADDR>,<P3_ADDR>" \
+  -replication 2 \
+  -bootstrap "<BOOTSTRAP_MULTIADDR>" \
+  -seed=false
+
+# Client swarm download via DHT:
+CGO_ENABLED=0 go run cmd/client/main.go \
+  -bootstrap "<BOOTSTRAP_MULTIADDR>" \
+  -fetch "<CONTENT_ID>" \
+  -key "<DECRYPTION_KEY>" \
+  -out downloaded.mp4
+```
