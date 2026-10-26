@@ -135,7 +135,22 @@ The data plane protocol is strictly stateless, binary, and optimized for high th
 
 ---
 
-### 4.3 Swarming & Transfer Orchestration (`internal/transfer`)
+### 4.3 Remote Ingestion & Replication Protocol (`internal/protocol/push` & `internal/distribution`)
+Protocol ID: `/cipher/push/1.0.0`
+
+While `/cipher/chunk/1.0.0` handles stateless public reading, `/cipher/push/1.0.0` provides a dedicated write plane for publishers to push encrypted content to remote providers.
+
+#### Key Characteristics:
+* **Write-Gate Isolation (`-allow-push`)**: Providers can independently enable or disable ingestion without impacting existing chunk downloads.
+* **Assigned Chunk Set Negotiation**: The publisher transmits `MsgPushManifest` with `AssignedChunkIDs[]`. Providers verify that incoming chunks strictly belong to both the manifest and the assigned set before writing to disk.
+* **Atomic & Idempotent CAS Writes**: Chunks are written to temporary staging files, synced (`fsync`), and atomically renamed (`os.Rename`) to `store/ab/cd/<ChunkID>`.
+* **Staged Ingestion (`PENDING` $\to$ `READY`)**: Content remains in a staging area and is only announced to the DHT (`discovery.Provide`) when all assigned chunks are committed.
+* **Multi-Provider Circular Placement**: `distribution.PlanPlacement` assigns chunks to $R$ distinct providers via circular stride.
+* **Global Replication Invariant**: `distribution.GlobalReplicaTracker` enforces that the publisher exits with code 0 **only when** every chunk has $\ge R$ committed replicas across the provider mesh.
+
+---
+
+### 4.4 Swarming & Transfer Orchestration (`internal/transfer`)
 
 ```text
 Application (CLI, Client)
@@ -261,8 +276,11 @@ CIPHER/
 │   ├── internal/
 │   │   ├── content/             # Chunker, Crypto (XChaCha20), Digest, Manifest, FSStore
 │   │   ├── discovery/           # DHT initialization, Provide, FindProviders, Republisher
+│   │   ├── distribution/        # Circular stride placement planner, GlobalReplicaTracker, Uploader
 │   │   ├── identity/            # Ed25519 persistent and custom key management
-│   │   ├── protocol/chunk/      # /cipher/chunk/1.0.0 wire messages, handler, client
+│   │   ├── protocol/
+│   │   │   ├── chunk/           # /cipher/chunk/1.0.0 wire messages, handler, client
+│   │   │   └── push/            # /cipher/push/1.0.0 ingestion wire messages, handler, client
 │   │   ├── retrieval/           # Manifest resolver helper
 │   │   ├── transfer/            # TransferManager, FileSessionManager, Scheduler, Worker pool
 │   │   └── transport/           # libp2p Host creation, Multi-transport, AutoNAT, DCUtR
@@ -273,6 +291,7 @@ CIPHER/
 │   │   └── roadmap.md           # Project roadmap and milestones
 │   └── test/
 │       └── robustness/          # 1000-iteration engine robustness tests
+├── test_remote_push.sh          # Multi-provider push & fault tolerance test (Phase 4)
 ├── test_roles.sh                # Automated role integration test script
 ├── test_provider_independent.sh # Provider independence & restart persistence test script
 └── test_transfer.sh             # Legacy peer transfer script

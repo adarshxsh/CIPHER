@@ -12,9 +12,12 @@ test_files/
 # Test Artifacts
 .gocache/
 store*
+client_store/
 .finalStore
 *.bin
 *.log
+*.dat
+*.key
 run_*.sh
 temp
 
