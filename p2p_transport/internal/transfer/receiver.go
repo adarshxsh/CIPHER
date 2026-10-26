@@ -17,7 +17,7 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
+func Receive(s network.Stream) (err error) {
 	defer s.Close()
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
@@ -38,14 +38,29 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
-	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
+	cleanFilename := filepath.Base(filepath.Clean(header.Filename))
+	if cleanFilename == "" || cleanFilename == "." || cleanFilename == "/" || cleanFilename == "\\" {
+		cleanFilename = "downloaded_file"
+	}
 
-	outFile, err := os.Create(outPath)
+	outPath := filepath.Join(downloadsDir, cleanFilename)
+	tmpPath := outPath + ".tmp"
+	log.Printf("Receiving: %s (%.2f MB) into %s", cleanFilename, float64(header.FileSize)/(1024*1024), outPath)
+
+	outFile, err := os.Create(tmpPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	defer outFile.Close()
+
+	fileClosed := false
+	defer func() {
+		if !fileClosed {
+			outFile.Close()
+		}
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
 
 	startTime := time.Now()
 
@@ -68,17 +83,34 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
 	}
 
-	duration := time.Since(startTime)
-	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
+	// 4. Read Post-Transfer Checksum Trailer
+	var trailerChecksum [32]byte
+	if _, err := io.ReadFull(s, trailerChecksum[:]); err != nil {
+		return fmt.Errorf("failed to read checksum trailer: %w", err)
+	}
 
-	// 4. Verify Integrity
+	duration := time.Since(startTime)
+	throughputMB := 0.0
+	if duration.Seconds() > 0 {
+		throughputMB = (float64(received) / (1024 * 1024)) / duration.Seconds()
+	}
+
+	// 5. Verify Integrity
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+	if !bytes.Equal(computedChecksum[:], trailerChecksum[:]) {
+		log.Printf("[WARNING] Checksum mismatch! Expected trailer %x, got computed %x", trailerChecksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected trailer %x, got computed %x", trailerChecksum, computedChecksum)
+	}
+
+	if err := outFile.Close(); err != nil {
+		return fmt.Errorf("failed to close output file: %w", err)
+	}
+	fileClosed = true
+
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return fmt.Errorf("failed to finalize output file: %w", err)
 	}
 
 	// Determine Connection Type
@@ -89,7 +121,7 @@ func Receive(s network.Stream) error {
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
