@@ -4,11 +4,19 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 )
 
 const (
-	ProtocolVersion1 byte = 1
+	ProtocolVersion1    byte = 1
 	MsgTypeFileTransfer byte = 1
+
+	DefaultTransferTimeout = 15 * time.Second
+)
+
+var (
+	ReadTimeout  = DefaultTransferTimeout
+	WriteTimeout = DefaultTransferTimeout
 )
 
 // Header represents the binary metadata sent before the file contents.
