@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/mattn/go-isatty"
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -125,6 +127,9 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	// Tracking metrics
 	peerContributions := make(map[string]int)
 
+	isInteractive := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	var lastUpdate time.Time
+
 	// 6. Handle Progress
 	for res := range completions {
 		if res.Task.Index < len(sess.Completed) {
@@ -140,7 +145,14 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 			log.Printf("[TransferManager] Warning: failed to save session: %v", err)
 		}
 
-		fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%)", completedCount, sess.TotalChunks, float64(completedCount)/float64(sess.TotalChunks)*100)
+		if isInteractive {
+			fmt.Printf("\r\033[K[Progress] %d/%d chunks (%.1f%%)", completedCount, sess.TotalChunks, float64(completedCount)/float64(sess.TotalChunks)*100)
+		} else {
+			if time.Since(lastUpdate) >= 3*time.Second || completedCount == sess.TotalChunks {
+				fmt.Printf("[Progress] %d/%d chunks (%.1f%%)\n", completedCount, sess.TotalChunks, float64(completedCount)/float64(sess.TotalChunks)*100)
+				lastUpdate = time.Now()
+			}
+		}
 	}
 
 	fmt.Println()
