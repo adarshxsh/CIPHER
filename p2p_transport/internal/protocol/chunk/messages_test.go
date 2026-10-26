@@ -105,3 +105,19 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseManifest_MaxManifestSize(t *testing.T) {
+	// Valid manifest payload
+	validPayload := make([]byte, chunk.MaxManifestSize)
+	_, _, err := chunk.ParseManifest(validPayload)
+	if err != nil {
+		t.Fatalf("expected ParseManifest to succeed for payload size MaxManifestSize, got %v", err)
+	}
+
+	// Oversized manifest payload
+	oversizedPayload := make([]byte, chunk.MaxManifestSize+1)
+	_, _, err = chunk.ParseManifest(oversizedPayload)
+	if err == nil {
+		t.Fatalf("expected error from ParseManifest for payload size exceeding MaxManifestSize, got nil")
+	}
+}
