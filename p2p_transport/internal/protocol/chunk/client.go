@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 	"cipher/internal/transport"
@@ -67,6 +68,14 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 	}
 	if respID != id {
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	computedID, _, err := manifest.CalculateContentID(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate manifest ContentID digest: %w", err)
+	}
+	if computedID != id {
+		return nil, fmt.Errorf("manifest ContentID digest mismatch: expected %x, got %x", id, computedID)
 	}
 
 	return data, nil

@@ -1,8 +1,10 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+	"fmt"
+
 	"cipher/internal/content/core"
 )
 
@@ -42,6 +44,55 @@ type UserMetadata struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+// NormalizeJSON normalizes manifest JSON content to ensure deterministic key ordering
+// and excludes the ContentID field inside descriptor so that the derived digest is self-consistent.
+func NormalizeJSON(data []byte) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON for normalization: %w", err)
+	}
+
+	if desc, ok := raw["descriptor"].(map[string]any); ok {
+		delete(desc, "id")
+	}
+
+	canonical, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal normalized JSON: %w", err)
+	}
+
+	return canonical, nil
+}
+
+// CalculateContentID computes the SHA-256 digest over normalized manifest JSON content.
+func CalculateContentID(data []byte) (core.ContentID, []byte, error) {
+	canonical, err := NormalizeJSON(data)
+	if err != nil {
+		return core.ContentID{}, nil, err
+	}
+
+	hash := sha256.Sum256(canonical)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	return id, canonical, nil
+}
+
+func (m *Manifest) CanonicalBytes() ([]byte, error) {
+	raw, err := m.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	return NormalizeJSON(raw)
+}
+
+func (m *Manifest) CalculateContentID() (core.ContentID, []byte, error) {
+	raw, err := m.Serialize()
+	if err != nil {
+		return core.ContentID{}, nil, err
+	}
+	return CalculateContentID(raw)
+}
+
 func (m *Manifest) Serialize() ([]byte, error) {
 	return json.Marshal(m)
 }
@@ -52,4 +103,23 @@ func Deserialize(data []byte) (*Manifest, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+func DeserializeAndVerify(data []byte, expectedID core.ContentID) (*Manifest, error) {
+	calculatedID, _, err := CalculateContentID(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate manifest ContentID digest: %w", err)
+	}
+
+	if calculatedID != expectedID {
+		return nil, fmt.Errorf("manifest ContentID mismatch: expected %x, got %x", expectedID, calculatedID)
+	}
+
+	m, err := Deserialize(data)
+	if err != nil {
+		return nil, err
+	}
+
+	m.Descriptor.ID = calculatedID
+	return m, nil
 }
