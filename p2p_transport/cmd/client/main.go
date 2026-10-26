@@ -210,7 +210,12 @@ func main() {
 		if err != nil || len(kBytes) != 32 {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
-		keys.Put(ctx, contentID, kBytes)
+		sKey, err := core.NewSecretKey(kBytes)
+		if err != nil {
+			log.Fatalf("Failed to create secret key: %v", err)
+		}
+		defer sKey.Destroy()
+		keys.Put(ctx, contentID, sKey)
 	}
 
 	// 6. Data Plane: Resolve Manifest

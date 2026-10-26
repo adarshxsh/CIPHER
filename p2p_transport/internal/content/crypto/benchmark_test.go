@@ -11,8 +11,11 @@ import (
 func BenchmarkChaCha20Encryptor(b *testing.B) {
 	enc := crypto.NewChaCha20Encryptor()
 	
-	key := make([]byte, 32)
-	rand.Read(key)
+	key, err := core.NewRandomSecretKey(32)
+	if err != nil {
+		b.Fatalf("failed to create key: %v", err)
+	}
+	defer key.Destroy()
 
 	chunkSize := 256 * 1024
 	data := make([]byte, chunkSize)
