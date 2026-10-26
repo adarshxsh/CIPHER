@@ -1,6 +1,6 @@
 #!/bin/bash
 cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+rm -rf store_a store_b test.mp4 out.mp4 peer_a.log
 export CGO_ENABLED=0
 go build -o bin/peer ./cmd/peer
 
