@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/reputation"
 	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 )
@@ -26,14 +27,27 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	Tracker        *reputation.PeerReputationTracker
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
-	return &TransferManager{
+type TransferManagerOption func(*TransferManager)
+
+func WithManagerTracker(tracker *reputation.PeerReputationTracker) TransferManagerOption {
+	return func(tm *TransferManager) {
+		tm.Tracker = tracker
+	}
+}
+
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, opts ...TransferManagerOption) *TransferManager {
+	tm := &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
 	}
+	for _, opt := range opts {
+		opt(tm)
+	}
+	return tm
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
@@ -113,6 +127,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	// 5. Run Scheduler
 	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched.Tracker = tm.Tracker
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)

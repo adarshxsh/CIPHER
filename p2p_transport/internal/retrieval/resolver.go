@@ -1,18 +1,32 @@
 package retrieval
 
 import (
-	"cipher/internal/content/core"
-	"cipher/internal/content/engine"
-	"cipher/internal/content/manifest"
-	"cipher/internal/protocol/chunk"
-	"cipher/internal/transport"
 	"context"
 	"fmt"
 	"log"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+
+	"cipher/internal/content/core"
+	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
+	"cipher/internal/protocol/chunk"
+	"cipher/internal/reputation"
+	"cipher/internal/transport"
 )
+
+type ResolveOption func(*resolveOptions)
+
+type resolveOptions struct {
+	tracker *reputation.PeerReputationTracker
+}
+
+func WithResolverTracker(tracker *reputation.PeerReputationTracker) ResolveOption {
+	return func(o *resolveOptions) {
+		o.tracker = tracker
+	}
+}
 
 // ResolveManifest takes a content ID, queries the DHT for providers who have that content, and attempts to retrieve the manifest from those providers, it connects to each provider, creates a chunk client, and requests the manifest. If successful, it returns the manifest; otherwise, it returns an error after trying all providers.
 func ResolveManifest(
@@ -22,19 +36,31 @@ func ResolveManifest(
 	t *transport.Transport,
 	eng *engine.ContentEngine,
 	providers []peer.ID,
+	opts ...ResolveOption,
 ) (*manifest.Manifest, error) {
+	var ro resolveOptions
+	for _, opt := range opts {
+		opt(&ro)
+	}
 
 	var lastErr error
 
 	for _, provider := range providers {
+		if ro.tracker != nil && ro.tracker.IsBanned(provider) {
+			log.Printf("[DHT] Skipping provider %s due to bad reputation score", provider)
+			continue
+		}
 
-		client, err := chunk.NewClient(ctx, t, provider, eng)
+		client, err := chunk.NewClient(ctx, t, provider, eng, chunk.WithTracker(ro.tracker))
 		if err != nil {
 			log.Printf(
 				"[DHT] Failed to create chunk client for %s: %v",
 				provider,
 				err,
 			)
+			if ro.tracker != nil {
+				ro.tracker.RecordConnectionFailure(provider)
+			}
 			lastErr = err
 			continue
 		}
@@ -48,6 +74,9 @@ func ResolveManifest(
 				provider,
 				err,
 			)
+			if ro.tracker != nil {
+				ro.tracker.RecordConnectionFailure(provider)
+			}
 			lastErr = err
 			continue
 		}
@@ -59,8 +88,15 @@ func ResolveManifest(
 				provider,
 				err,
 			)
+			if ro.tracker != nil {
+				ro.tracker.RecordIntegrityFault(provider)
+			}
 			lastErr = err
 			continue
+		}
+
+		if ro.tracker != nil {
+			ro.tracker.RecordSuccess(provider)
 		}
 
 		log.Printf(

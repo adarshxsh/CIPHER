@@ -12,28 +12,56 @@ import (
 	"cipher/internal/content/engine"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
+	"cipher/internal/reputation"
 	"cipher/internal/transport"
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream  network.Stream
+	engine  *engine.ContentEngine
+	digest  core.Digest
+	peerID  peer.ID
+	tracker *reputation.PeerReputationTracker
+}
+
+type ClientOption func(*Client)
+
+func WithTracker(tracker *reputation.PeerReputationTracker) ClientOption {
+	return func(c *Client) {
+		c.tracker = tracker
+	}
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
-func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
+func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine, opts ...ClientOption) (*Client, error) {
 	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
+	c := &Client{
 		stream: stream,
 		engine: eng,
 		digest: verifier.NewSHA256Digest(),
-	}, nil
+		peerID: peerID,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
+func (c *Client) SetTracker(tracker *reputation.PeerReputationTracker) {
+	c.tracker = tracker
+}
+
+func (c *Client) Tracker() *reputation.PeerReputationTracker {
+	return c.tracker
+}
+
+func (c *Client) PeerID() peer.ID {
+	return c.peerID
 }
 
 func (c *Client) Close() error {
@@ -44,29 +72,51 @@ func (c *Client) Close() error {
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.Type == MsgError {
 		code, msg, _ := ParseError(resp.Payload)
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
 	if resp.Type != MsgManifest {
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, err
 	}
 	if respID != id {
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	if c.tracker != nil {
+		c.tracker.RecordSuccess(c.peerID)
 	}
 
 	return data, nil
@@ -91,11 +141,17 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
 	req := BuildRequestChunk(chunkID)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -104,15 +160,24 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
+		if c.tracker != nil {
+			c.tracker.RecordConnectionFailure(c.peerID)
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
 	if resp.Type != MsgChunk {
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, fmt.Errorf("expected CHUNK, got %d", resp.Type)
 	}
 
 	chunk, err := ParseChunk(resp.Payload)
 	if err != nil {
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, fmt.Errorf("failed to parse chunk: %w", err)
 	}
 
@@ -120,7 +185,11 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
 		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
+		_ = WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
+		if c.tracker != nil {
+			c.tracker.RecordIntegrityFault(c.peerID)
+		}
 		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
 	}
 
@@ -131,6 +200,10 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	ack := BuildAck(chunkID, 0)
 	if err := WriteMessage(c.stream, ack); err != nil {
 		log.Printf("[Chunk Protocol] Failed to send ACK for %x: %v", chunkID, err)
+	}
+
+	if c.tracker != nil {
+		c.tracker.RecordSuccess(c.peerID)
 	}
 
 	return chunk, nil
