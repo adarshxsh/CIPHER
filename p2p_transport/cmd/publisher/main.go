@@ -214,7 +214,8 @@ func main() {
 			log.Fatalf("Failed to plan chunk placement: %v", err)
 		}
 
-		tracker := distribution.NewGlobalReplicaTracker(effectiveReplication)
+		tracker := distribution.NewGlobalReplicaTracker(effectiveReplication, plan.Manifest.ChunkIDs)
+		defer tracker.Release()
 		pushCtx, pushCancel := context.WithTimeout(ctx, *pushTimeout)
 		defer pushCancel()
 

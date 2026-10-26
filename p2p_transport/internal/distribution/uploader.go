@@ -42,7 +42,8 @@ func Distribute(
 
 	allChunks := plan.Manifest.ChunkIDs
 
-	// Initialize tracker state for initial plan
+	// Pre-allocate tracker state for all chunks in the plan
+	tracker.Preallocate(allChunks)
 	for chunkID, providers := range plan.Assignments {
 		for _, p := range providers {
 			tracker.SetStatus(chunkID, p, ReplicaPending)
@@ -98,9 +99,7 @@ func Distribute(
 				if needed <= 0 {
 					break
 				}
-				tracker.mu.RLock()
-				status := tracker.state[cid][p]
-				tracker.mu.RUnlock()
+				status := tracker.GetStatus(cid, p)
 
 				if status != ReplicaCommitted && status != ReplicaUploading {
 					reassignments[p] = append(reassignments[p], cid)
