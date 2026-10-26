@@ -44,8 +44,10 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	keyFile := flag.String("key-file", "", "Path to key file")
 
 	flag.Parse()
+	_ = keyFile
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,7 +106,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewFSKeyProvider(*storePath)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
