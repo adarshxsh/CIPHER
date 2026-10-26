@@ -69,33 +69,48 @@ func WriteMessage(w io.Writer, msg *Message) error {
 }
 
 func ReadMessage(r io.Reader) (*Message, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(r, sizeBuf[:]); err != nil {
 		return nil, err
 	}
+	size := binary.LittleEndian.Uint32(sizeBuf[:])
 
-	if size > 2*1024*1024 { // 2MB max frame size
+	if size > MaxFrameSize { // 2MB max frame size
 		return nil, errors.New("message exceeds maximum frame size")
 	}
+	if size < 3 {
+		return nil, errors.New("message frame too short")
+	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	var envBuf [3]byte
+	if _, err := io.ReadFull(r, envBuf[:]); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &Message{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
+	version := binary.LittleEndian.Uint16(envBuf[0:2])
+	msgType := MessageType(envBuf[2])
+
+	payloadSize := size - 3
+	maxPayload := MaxPayloadSizeForMessage(msgType)
+	if maxPayload > 0 && int(payloadSize) > maxPayload {
+		return nil, fmt.Errorf("%w: payload size %d exceeds maximum limit %d for message type %d", ErrPayloadTooLarge, payloadSize, maxPayload, msgType)
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
+	if maxPayload == 0 && payloadSize > 0 {
+		return nil, fmt.Errorf("%w: payload size %d for unknown message type %d", ErrPayloadTooLarge, payloadSize, msgType)
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	buf.Read(msg.Payload)
+	payload := make([]byte, payloadSize)
+	if payloadSize > 0 {
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
+	}
 
-	return msg, nil
+	return &Message{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --

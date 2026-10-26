@@ -2,6 +2,8 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +106,25 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_RejectsInflatedFrameHeaderBeforeAllocation(t *testing.T) {
+	var buf bytes.Buffer
+	// Claim payload size of ~2MB for a small MsgRequestChunk (limit = 512 bytes)
+	frameSize := uint32(2000000)
+	binary.Write(&buf, binary.LittleEndian, frameSize)
+	binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion)
+	buf.WriteByte(byte(chunk.MsgRequestChunk))
+
+	// Do not write 2MB of payload data to the buffer.
+	// If ReadMessage attempted to allocate or read 2MB payload before validation,
+	// it would fail with truncated frame or EOF, but it should fail with ErrPayloadTooLarge first.
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for inflated frame header, got nil")
+	}
+	if !errors.Is(err, chunk.ErrPayloadTooLarge) {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
 }

@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -126,5 +127,20 @@ func TestFrameSizeLimits(t *testing.T) {
 	err := WritePushMessage(buf, msg)
 	if err == nil {
 		t.Fatalf("expected error for oversized message, got nil")
+	}
+}
+
+func TestReadPushMessage_RejectsInflatedFrameHeaderBeforeAllocation(t *testing.T) {
+	var buf bytes.Buffer
+	// Claim payload size of 2MB for a small MsgPushBatchComplete (limit = 32 bytes)
+	frameSize := uint32(2000000)
+	_ = binary.Write(&buf, binary.LittleEndian, frameSize)
+	_ = binary.Write(&buf, binary.LittleEndian, CurrentPushVersion)
+	buf.WriteByte(byte(MsgPushBatchComplete))
+
+	// Do not write 2MB payload to the buffer.
+	_, err := ReadPushMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected error for inflated push frame header, got nil")
 	}
 }
