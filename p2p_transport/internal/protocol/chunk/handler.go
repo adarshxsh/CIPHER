@@ -5,15 +5,58 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"golang.org/x/time/rate"
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
 
 var TestCorruptProb float64
+
+// streamLogger applies a per-stream token bucket rate limiter to error logs.
+type streamLogger struct {
+	remotePeer peer.ID
+	limiter    *rate.Limiter
+	suppressed int
+	mu         sync.Mutex
+}
+
+func newStreamLogger(peerID peer.ID) *streamLogger {
+	return &streamLogger{
+		remotePeer: peerID,
+		limiter:    rate.NewLimiter(rate.Limit(5), 5), // 5 logs per second, burst 5
+	}
+}
+
+func (sl *streamLogger) logError(format string, args ...interface{}) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	if sl.limiter.Allow() {
+		if sl.suppressed > 0 {
+			log.Printf("[Chunk Protocol] Rate limit reset for peer %s: suppressed %d log messages", sl.remotePeer, sl.suppressed)
+			sl.suppressed = 0
+		}
+		log.Printf(format, args...)
+	} else {
+		sl.suppressed++
+	}
+}
+
+func (sl *streamLogger) flush() {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	if sl.suppressed > 0 {
+		log.Printf("[Chunk Protocol] Rate limit reset for peer %s: suppressed %d log messages", sl.remotePeer, sl.suppressed)
+		sl.suppressed = 0
+	}
+}
 
 type StreamHandler struct {
 	host   host.Host
@@ -31,39 +74,43 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	remotePeer := s.Conn().RemotePeer()
+	sl := newStreamLogger(remotePeer)
+	defer sl.flush()
+
+	log.Printf("[Chunk Protocol] New stream from %s", remotePeer)
 
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", remotePeer)
 				return
 			}
-			log.Printf("[Chunk Protocol] Error reading message: %v", err)
+			sl.logError("[Chunk Protocol] Error reading message: %v", err)
 			return
 		}
 
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
+			sl.logError("[Chunk Protocol] Unsupported version %d", msg.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
 
 		switch msg.Type {
 		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
+			h.handleRequestManifest(s, msg, sl)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, sl)
 		default:
-			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
+			sl.logError("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
 	}
 }
 
-func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message, sl *streamLogger) {
 	contentID, err := ParseRequestManifest(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_MANIFEST"))
@@ -80,11 +127,11 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 
 	resp := BuildManifest(contentID, manifestData)
 	if err := WriteMessage(s, resp); err != nil {
-		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
+		sl.logError("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, sl *streamLogger) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -111,23 +158,23 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	if err := WriteMessage(s, resp); err != nil {
-		log.Printf("[Chunk Protocol] Error writing CHUNK response: %v", err)
+		sl.logError("[Chunk Protocol] Error writing CHUNK response: %v", err)
 		return
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
-		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
+		sl.logError("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		sl.logError("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
 	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+		sl.logError("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
 		return
 	}
 }
