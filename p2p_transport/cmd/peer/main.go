@@ -143,7 +143,7 @@ func main() {
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
-		log.Fatalf("Failed to create session manager: %v", err)
+		log.Fatalf("Failed to create session manager (check permissions for %s/sessions): %v", *storePath, err)
 	}
 
 	if *transferStatus {

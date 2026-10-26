@@ -55,7 +55,7 @@ func main() {
 	// 1. Session management commands that do not need network
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
-		log.Fatalf("Failed to initialize session manager: %v", err)
+		log.Fatalf("Failed to initialize session manager (check permissions for %s/sessions): %v", *storePath, err)
 	}
 
 	if *transferStatus {
