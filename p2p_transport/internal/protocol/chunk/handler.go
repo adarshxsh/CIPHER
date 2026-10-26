@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -34,14 +35,20 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		frame, err := DecodeFrame(s)
 		if err != nil {
-			if err == io.EOF || err.Error() == "stream reset" {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || err.Error() == "stream reset" {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
 			return
+		}
+
+		msg := &Message{
+			Version: frame.Version,
+			Type:    frame.MessageType,
+			Payload: frame.Payload,
 		}
 
 		if msg.Version != CurrentMessageVersion {
@@ -116,18 +123,18 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
-	ackMsg, err := ReadMessage(s)
+	ackFrame, err := DecodeFrame(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
-	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
+	if ackFrame.MessageType == MsgError {
+		code, msgStr, _ := ParseError(ackFrame.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
-	if ackMsg.Type != MsgAck {
-		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackMsg.Type)
+	if ackFrame.MessageType != MsgAck {
+		log.Printf("[Chunk Protocol] Expected ACK, got type %d", ackFrame.MessageType)
 		return
 	}
 }
