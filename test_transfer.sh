@@ -19,8 +19,11 @@ echo "Content ID: $CONTENT_ID"
 echo "Key:        $KEY"
 echo "Address:    $ADDR"
 
-./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4
+./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4 > peer_b.log 2>&1 &
+PEER_B_PID=$!
 
-kill $PEER_A_PID 2>/dev/null || true
+sleep 3
+
+kill $PEER_A_PID $PEER_B_PID 2>/dev/null || true
 echo "--- out.mp4 ---"
 cat out.mp4

@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -36,7 +37,7 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
-			if err == io.EOF || err.Error() == "stream reset" {
+			if errors.Is(err, io.EOF) || err.Error() == "stream reset" {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
 				return
 			}
