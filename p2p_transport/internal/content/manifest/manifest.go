@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	
 	"cipher/internal/content/core"
@@ -44,6 +45,21 @@ type UserMetadata struct {
 
 func (m *Manifest) Serialize() ([]byte, error) {
 	return json.Marshal(m)
+}
+
+// ComputeContentID calculates the SHA-256 cryptographic digest of the canonical manifest payload.
+// It zeroes out Descriptor.ID prior to serialization to guarantee deterministic hashing.
+func (m *Manifest) ComputeContentID() (core.ContentID, error) {
+	mCopy := *m
+	mCopy.Descriptor.ID = core.ContentID{}
+	data, err := mCopy.Serialize()
+	if err != nil {
+		return core.ContentID{}, err
+	}
+	hash := sha256.Sum256(data)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	return id, nil
 }
 
 func Deserialize(data []byte) (*Manifest, error) {

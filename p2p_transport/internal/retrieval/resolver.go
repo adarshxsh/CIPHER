@@ -63,6 +63,16 @@ func ResolveManifest(
 			continue
 		}
 
+		calcID, err := m.ComputeContentID()
+		if err != nil || calcID != id {
+			log.Printf(
+				"[DHT] Provider %s returned manifest with mismatched digest",
+				provider,
+			)
+			lastErr = fmt.Errorf("manifest digest mismatch from provider %s", provider)
+			continue
+		}
+
 		log.Printf(
 			"[DHT] Successfully resolved manifest from provider %s",
 			provider,
