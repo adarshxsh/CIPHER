@@ -18,8 +18,8 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// NewNode creates a new libp2p host.
-func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool) (host.Host, *dht.IpfsDHT, error) {
+// NewNode creates a new libp2p host with resource management enabled.
+func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKey, relayAddr string, forceRelay bool, extraOpts ...libp2p.Option) (host.Host, *dht.IpfsDHT, error) {
 	addr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort)
 
 	listenAddrs := []string{addr}
@@ -28,10 +28,17 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	rm, err := NewResourceManager(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ResourceManager(rm),
 	}
+	opts = append(opts, extraOpts...)
 
 	if priv != nil {
 		opts = append(opts, libp2p.Identity(priv))

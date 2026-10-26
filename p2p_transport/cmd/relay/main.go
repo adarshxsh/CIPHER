@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"cipher/internal/identity"
+	"cipher/internal/transport"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -26,6 +27,11 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
+	rm, err := transport.NewResourceManager(nil)
+	if err != nil {
+		log.Fatalf("Failed to create resource manager: %v", err)
+	}
+
 	// Listen on TCP 4001, UDP 4002 (QUIC), and TCP 4004 (WebSocket)
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(
@@ -35,6 +41,7 @@ func main() {
 		),
 		libp2p.Identity(priv),
 		libp2p.EnableNATService(),
+		libp2p.ResourceManager(rm),
 	}
 
 	h, err := libp2p.New(opts...)

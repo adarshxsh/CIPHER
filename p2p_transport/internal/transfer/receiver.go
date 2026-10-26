@@ -19,6 +19,9 @@ import (
 // Receive accepts an incoming file transfer from the remote peer.
 func Receive(s network.Stream) error {
 	defer s.Close()
+	if scope := s.Scope(); scope != nil {
+		_ = scope.SetService("cipher-file-transfer")
+	}
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 

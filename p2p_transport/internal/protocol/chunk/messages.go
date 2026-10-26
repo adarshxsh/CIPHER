@@ -7,8 +7,14 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/libp2p/go-libp2p/core/network"
+
 	"cipher/internal/content/core"
 )
+
+type scopedReader interface {
+	Scope() network.StreamScope
+}
 
 const (
 	CurrentMessageVersion uint16 = 1
@@ -76,6 +82,15 @@ func ReadMessage(r io.Reader) (*Message, error) {
 
 	if size > 2*1024*1024 { // 2MB max frame size
 		return nil, errors.New("message exceeds maximum frame size")
+	}
+
+	if sr, ok := r.(scopedReader); ok && sr != nil {
+		if scope := sr.Scope(); scope != nil {
+			if err := scope.ReserveMemory(int(size), network.ReservationPriorityAlways); err != nil {
+				return nil, fmt.Errorf("resource manager memory limit exceeded: %w", err)
+			}
+			defer scope.ReleaseMemory(int(size))
+		}
 	}
 
 	data := make([]byte, size)
