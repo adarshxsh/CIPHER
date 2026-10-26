@@ -51,6 +51,7 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch from target peer")
 	reassembleOut := flag.String("reassemble", "", "Output path to reassemble the fetched ContentID")
 	keyHex := flag.String("key", "", "Decryption key (hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to decryption key file for reassembly")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading")
 	transferStatus := flag.Bool("transfer-status", false, "List all active transfer sessions")
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
@@ -123,7 +124,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewLocalKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -246,10 +247,9 @@ func main() {
 			)
 		}
 
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Decryption Key: [REDACTED - Saved to %s/keys/%x.key]", *storePath, m.Descriptor.ID)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +263,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key-file \"%s/keys/%x.key\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, *storePath, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -368,7 +368,13 @@ func main() {
 			}
 		}
 
-		if *keyHex != "" {
+		if *keyFile != "" {
+			kBytes, err := engine.LoadKeyFromFile(*keyFile)
+			if err != nil {
+				log.Fatalf("Failed to load key file %s: %v", *keyFile, err)
+			}
+			keys.Put(ctx, contentID, kBytes)
+		} else if *keyHex != "" {
 			kBytes, err := hex.DecodeString(*keyHex)
 			if err != nil || len(kBytes) != 32 {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")

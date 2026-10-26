@@ -34,6 +34,7 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
 	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to decryption key file for reassembly")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -151,7 +152,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewLocalKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -205,7 +206,13 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
+	if *keyFile != "" {
+		kBytes, err := engine.LoadKeyFromFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to load key file %s: %v", *keyFile, err)
+		}
+		keys.Put(ctx, contentID, kBytes)
+	} else if *keyHex != "" {
 		kBytes, err := hex.DecodeString(*keyHex)
 		if err != nil || len(kBytes) != 32 {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
@@ -231,8 +238,8 @@ func main() {
 
 	// 8. Content Engine: Decrypt & Reassemble
 	if *reassembleOut != "" {
-		if *keyHex == "" {
-			log.Printf("Warning: No decryption key provided (-key). Attempting reassembly with cached keys...")
+		if *keyHex == "" && *keyFile == "" {
+			log.Printf("Warning: No decryption key provided (-key / -key-file). Attempting reassembly with cached keys...")
 		}
 		outF, err := os.Create(*reassembleOut)
 		if err != nil {
