@@ -47,7 +47,17 @@ func main() {
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
 
+	republishRate := flag.Float64("republish-rate", 5.0, "Rate limit for DHT republish/provide announcements (ops/sec)")
+	republishWorkers := flag.Int("republish-workers", 4, "Number of worker goroutines for DHT republishing")
+	lookupRate := flag.Float64("lookup-rate", 10.0, "Rate limit for DHT provider lookup queries (ops/sec)")
+
 	flag.Parse()
+
+	discovery.Configure(discovery.Config{
+		RepublishRate:    *republishRate,
+		RepublishWorkers: *republishWorkers,
+		LookupRate:       *lookupRate,
+	})
 
 	if *filePath == "" {
 		log.Fatalf("Error: -file <path> is required to publish content")

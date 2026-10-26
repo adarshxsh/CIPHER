@@ -50,7 +50,17 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
 
+	republishRate := flag.Float64("republish-rate", 5.0, "Rate limit for DHT republish/provide announcements (ops/sec)")
+	republishWorkers := flag.Int("republish-workers", 4, "Number of worker goroutines for DHT republishing")
+	lookupRate := flag.Float64("lookup-rate", 10.0, "Rate limit for DHT provider lookup queries (ops/sec)")
+
 	flag.Parse()
+
+	discovery.Configure(discovery.Config{
+		RepublishRate:    *republishRate,
+		RepublishWorkers: *republishWorkers,
+		LookupRate:       *lookupRate,
+	})
 
 	// 1. Session management commands that do not need network
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
