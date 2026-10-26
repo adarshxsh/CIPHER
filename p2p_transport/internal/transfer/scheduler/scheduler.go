@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -36,6 +37,8 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
+	var wg sync.WaitGroup
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
@@ -45,10 +48,15 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			continue
 		}
 		activeWorkers++
+		wg.Add(1)
 		go func(src Source, c *chunk.Client) {
+			defer wg.Done()
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			_ = runWorker(ctx, src, c, s.Engine, queue, results)
+			select {
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			case <-ctx.Done():
+			}
 		}(source, client)
 	}
 	
@@ -61,6 +69,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
+			wg.Wait()
 			return ctx.Err()
 		case res := <-results:
 			if res.Error != nil {
@@ -88,16 +97,24 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				if res.Task.Attempts < s.MaxAttempts {
 					queue.Push(res.Task)
 				} else {
+					wg.Wait()
 					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
 				}
 			} else {
 				// Success
-				completions <- res
+				select {
+				case completions <- res:
+				case <-ctx.Done():
+					wg.Wait()
+					return ctx.Err()
+				}
 				pendingTasks--
 			}
 		}
 	}
 	
+	wg.Wait()
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
