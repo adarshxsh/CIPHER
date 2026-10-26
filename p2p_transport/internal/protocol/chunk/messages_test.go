@@ -105,3 +105,123 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestReadMessage_RejectsOversizedPayload(t *testing.T) {
+	testCases := []struct {
+		name        string
+		msgType     chunk.MessageType
+		payloadLen  int
+		shouldPass  bool
+	}{
+		{
+			name:       "RequestChunk within limit",
+			msgType:    chunk.MsgRequestChunk,
+			payloadLen: 512,
+			shouldPass: true,
+		},
+		{
+			name:       "RequestChunk exceeding limit by 1 byte",
+			msgType:    chunk.MsgRequestChunk,
+			payloadLen: 513,
+			shouldPass: false,
+		},
+		{
+			name:       "Ack within limit",
+			msgType:    chunk.MsgAck,
+			payloadLen: 33,
+			shouldPass: true,
+		},
+		{
+			name:       "Ack exceeding limit by 1 byte",
+			msgType:    chunk.MsgAck,
+			payloadLen: 34,
+			shouldPass: false,
+		},
+		{
+			name:       "Unknown message type with 0 bytes payload",
+			msgType:    chunk.MessageType(0xFE),
+			payloadLen: 0,
+			shouldPass: true,
+		},
+		{
+			name:       "Unknown message type with >0 bytes payload",
+			msgType:    chunk.MessageType(0xFE),
+			payloadLen: 1,
+			shouldPass: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &chunk.Message{
+				Version: chunk.CurrentMessageVersion,
+				Type:    tc.msgType,
+				Payload: make([]byte, tc.payloadLen),
+			}
+			var buf bytes.Buffer
+			if err := chunk.WriteMessage(&buf, msg); err != nil {
+				t.Fatalf("WriteMessage failed: %v", err)
+			}
+
+			parsedMsg, err := chunk.ReadMessage(&buf)
+			if tc.shouldPass {
+				if err != nil {
+					t.Fatalf("expected success, got error: %v", err)
+				}
+				if parsedMsg.Type != tc.msgType {
+					t.Errorf("expected msg type %v, got %v", tc.msgType, parsedMsg.Type)
+				}
+				if len(parsedMsg.Payload) != tc.payloadLen {
+					t.Errorf("expected payload len %d, got %d", tc.payloadLen, len(parsedMsg.Payload))
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error for oversized payload, got nil")
+				}
+			}
+		})
+	}
+}
+
+func TestReadMessage_ZeroAllocationOnOversizedPayload(t *testing.T) {
+	// Attacker sends 2MB frame length for a MsgRequestChunk (max payload 512 bytes).
+	// Header consists of 4-byte size (2,097,152), 2-byte version (1), 1-byte type (MsgRequestChunk).
+	// Crucially, NO payload bytes are written into the buffer.
+	var buf bytes.Buffer
+	var frameSize uint32 = 2 * 1024 * 1024
+	buf.Write([]byte{
+		byte(frameSize), byte(frameSize >> 8), byte(frameSize >> 16), byte(frameSize >> 24),
+		byte(chunk.CurrentMessageVersion), byte(chunk.CurrentMessageVersion >> 8),
+		byte(chunk.MsgRequestChunk),
+	})
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Error should be ErrPayloadTooLarge, NOT io.ErrUnexpectedEOF or truncated frame reading payload
+	if !bytes.Equal([]byte(err.Error()), []byte("payload exceeds protocol limit")) && err.Error() == "EOF" {
+		t.Fatalf("ReadMessage attempted to read payload bytes instead of failing at header check: %v", err)
+	}
+}
+
+func TestReadMessage_InvalidFrameSizes(t *testing.T) {
+	// Size < 3 bytes (smaller than envelope header)
+	var buf bytes.Buffer
+	buf.Write([]byte{0x02, 0x00, 0x00, 0x00}) // Size 2
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("expected error for frame size < 3, got nil")
+	}
+
+	// Size > MaxFrameSize (2MB)
+	buf.Reset()
+	var hugeSize uint32 = 2*1024*1024 + 1
+	buf.Write([]byte{
+		byte(hugeSize), byte(hugeSize >> 8), byte(hugeSize >> 16), byte(hugeSize >> 24),
+	})
+	_, err = chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Error("expected error for frame size > 2MB, got nil")
+	}
+}
