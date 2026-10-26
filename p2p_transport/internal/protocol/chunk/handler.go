@@ -33,7 +33,14 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
 
+	var messageCount int
+	var transactionCount int
+
 	for {
+		if messageCount >= MaxMessagesPerStream || transactionCount >= MaxTransactionsPerStream {
+			return
+		}
+
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
@@ -44,21 +51,36 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 			return
 		}
 
+		messageCount++
+		if messageCount > MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Message count limit exceeded (%d > %d) from %s", messageCount, MaxMessagesPerStream, s.Conn().RemotePeer())
+			s.Reset()
+			return
+		}
+
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
-			return
+			transactionCount++
+		} else {
+			switch msg.Type {
+			case MsgRequestManifest:
+				h.handleRequestManifest(s, msg)
+				transactionCount++
+			case MsgRequestChunk:
+				h.handleRequestChunk(s, msg, &messageCount)
+				transactionCount++
+			default:
+				log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+				transactionCount++
+			}
 		}
 
-		switch msg.Type {
-		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
-		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
-		default:
-			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+		if transactionCount >= MaxTransactionsPerStream {
+			log.Printf("[Chunk Protocol] Transaction limit reached (%d >= %d), closing stream from %s", transactionCount, MaxTransactionsPerStream, s.Conn().RemotePeer())
+			return
 		}
 	}
 }
@@ -84,7 +106,7 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, messageCount *int) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -116,10 +138,22 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 
 	// 5. Wait for ACK synchronously (sequential protocol requirement)
+	if messageCount != nil && *messageCount >= MaxMessagesPerStream {
+		s.Reset()
+		return
+	}
 	ackMsg, err := ReadMessage(s)
 	if err != nil {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
+	}
+	if messageCount != nil {
+		*messageCount++
+		if *messageCount > MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Message count limit exceeded on ACK (%d > %d)", *messageCount, MaxMessagesPerStream)
+			s.Reset()
+			return
+		}
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
