@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 )
 
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
@@ -130,6 +131,9 @@ func (s *FSStorage) GetManifestBytes(ctx context.Context, id core.ContentID) ([]
 }
 
 func (s *FSStorage) PutManifestBytes(ctx context.Context, id core.ContentID, data []byte) error {
+	if len(data) > manifest.MaxManifestSizeBytes {
+		return fmt.Errorf("failed to write manifest: %w", manifest.ErrManifestTooLarge)
+	}
 	path := s.manifestPath(id)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create manifest dir: %w", err)
