@@ -16,6 +16,7 @@ type WorkerResult struct {
 }
 
 var TestThrottle time.Duration
+var PeerCooldown time.Duration = 100 * time.Millisecond
 
 func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
 	for {
@@ -38,6 +39,13 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			if PeerCooldown > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(PeerCooldown):
+				}
+			}
 			continue
 		}
 
@@ -47,6 +55,13 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
 			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			if PeerCooldown > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(PeerCooldown):
+				}
+			}
 			continue
 		}
 
