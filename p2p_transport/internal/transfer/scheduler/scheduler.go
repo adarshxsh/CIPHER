@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
@@ -22,18 +23,54 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	MinBackoff  time.Duration
+	MaxBackoff  time.Duration
+	MaxQueueCap int
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+	if maxAttempts <= 0 {
+		maxAttempts = 10
+	}
 	return &Scheduler{
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		MinBackoff:  100 * time.Millisecond,
+		MaxBackoff:  5 * time.Second,
+		MaxQueueCap: DefaultMaxQueueCapacity,
 	}
 }
 
+func CalculateBackoff(attempt int, minBackoff, maxBackoff time.Duration) time.Duration {
+	if minBackoff <= 0 {
+		minBackoff = 100 * time.Millisecond
+	}
+	if maxBackoff <= 0 {
+		maxBackoff = 5 * time.Second
+	}
+	if attempt <= 1 {
+		return minBackoff
+	}
+	shift := uint(attempt - 1)
+	if shift > 30 {
+		return maxBackoff
+	}
+	backoff := minBackoff * time.Duration(1<<shift)
+	if backoff > maxBackoff || backoff < 0 {
+		return maxBackoff
+	}
+	return backoff
+}
+
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
-	queue := NewChunkQueue(tasks)
+	queueCap := s.MaxQueueCap
+	if queueCap <= 0 {
+		queueCap = DefaultMaxQueueCapacity
+	}
+	queue := NewChunkQueueWithCapacity(tasks, queueCap)
+	defer queue.Close()
+
 	results := make(chan WorkerResult, len(sources)*2)
 	
 	// Start workers
@@ -57,6 +94,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	}
 	
 	pendingTasks := len(tasks)
+	maxAttempts := s.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 10
+	}
 	
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
@@ -85,10 +126,23 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 
 				// Real network / integrity error: count attempts
 				res.Task.Attempts++
-				if res.Task.Attempts < s.MaxAttempts {
-					queue.Push(res.Task)
+				if res.Task.Attempts < maxAttempts {
+					delay := CalculateBackoff(res.Task.Attempts, s.MinBackoff, s.MaxBackoff)
+					go func(task ChunkTask, backoff time.Duration) {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(backoff):
+							if err := queue.Push(task); err != nil {
+								select {
+								case results <- WorkerResult{Task: task, Error: fmt.Errorf("requeue failed for chunk %x: %w", task.ChunkID, err)}:
+								case <-ctx.Done():
+								}
+							}
+						}
+					}(res.Task, delay)
 				} else {
-					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, s.MaxAttempts, res.Error)
+					return fmt.Errorf("chunk %x failed after %d attempts: %w", res.Task.ChunkID, maxAttempts, res.Error)
 				}
 			} else {
 				// Success
