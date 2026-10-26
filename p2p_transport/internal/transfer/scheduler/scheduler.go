@@ -22,6 +22,7 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Tracker     *PeerTracker
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -29,10 +30,14 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		Tracker:     NewPeerTracker(),
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	if s.Tracker == nil {
+		s.Tracker = NewPeerTracker()
+	}
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
@@ -42,12 +47,17 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
+			s.Tracker.RecordTimeout(source.PeerID)
 			continue
 		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
-			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			defer func() {
+				if c != nil {
+					c.Close()
+				}
+			}()
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Tracker, s.Transport)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
