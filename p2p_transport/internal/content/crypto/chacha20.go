@@ -31,14 +31,20 @@ func (e *ChaCha20Encryptor) generateNonce(index uint32) []byte {
 	return nonce
 }
 
-func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
+func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk, dst []byte) error {
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
 	}
 
 	nonce := e.generateNonce(chunk.Header.Index)
-	ciphertext := aead.Seal(nil, nonce, chunk.Data, nil)
+
+	var out []byte
+	if dst != nil {
+		out = dst[:0]
+	}
+
+	ciphertext := aead.Seal(out, nonce, chunk.Data, nil)
 
 	copy(chunk.Header.Nonce[:], nonce)
 	chunk.Header.CipherSize = uint32(len(ciphertext))
@@ -47,7 +53,7 @@ func (e *ChaCha20Encryptor) EncryptChunk(key []byte, chunk *core.Chunk) error {
 	return nil
 }
 
-func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
+func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk, dst []byte) error {
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return fmt.Errorf("failed to create cipher: %w", err)
@@ -57,7 +63,12 @@ func (e *ChaCha20Encryptor) DecryptChunk(key []byte, chunk *core.Chunk) error {
 		return errors.New("cipher size mismatch in header")
 	}
 
-	plaintext, err := aead.Open(nil, chunk.Header.Nonce[:], chunk.Data, nil)
+	var out []byte
+	if dst != nil {
+		out = dst[:0]
+	}
+
+	plaintext, err := aead.Open(out, chunk.Header.Nonce[:], chunk.Data, nil)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt chunk: %w", err)
 	}
