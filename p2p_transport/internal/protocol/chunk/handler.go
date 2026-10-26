@@ -4,20 +4,27 @@ import (
 	"context"
 	"io"
 	"log"
+	"math"
 	"math/rand"
+	"sync/atomic"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
 )
 
-var TestCorruptProb float64
+var (
+	TestCorruptProb     float64
+	testCorruptProbBits uint64
+)
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host        host.Host
+	engine      *engine.ContentEngine
+	corruptBits uint64
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
@@ -27,6 +34,21 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
+}
+
+func (h *StreamHandler) SetCorruptProbability(prob float64) {
+	atomic.StoreUint64(&h.corruptBits, math.Float64bits(prob))
+}
+
+func (h *StreamHandler) getCorruptProbability() float64 {
+	prob := math.Float64frombits(atomic.LoadUint64(&h.corruptBits))
+	if prob == 0 {
+		prob = math.Float64frombits(atomic.LoadUint64(&testCorruptProbBits))
+		if prob == 0 {
+			prob = TestCorruptProb
+		}
+	}
+	return prob
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
@@ -98,8 +120,13 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 
-	if TestCorruptProb > 0 && rand.Float64() < TestCorruptProb && len(chunkData.Data) > 0 {
-		// Corrupt the chunk for testing
+	prob := h.getCorruptProbability()
+	if prob > 0 && rand.Float64() < prob && len(chunkData.Data) > 0 {
+		// Clone chunkData so we don't mutate underlying engine storage
+		chunkData = &core.Chunk{
+			Header: chunkData.Header,
+			Data:   append([]byte(nil), chunkData.Data...),
+		}
 		log.Printf("[TESTING] Corrupting chunk %x", chunkID)
 		chunkData.Data[0] ^= 0xFF
 	}
