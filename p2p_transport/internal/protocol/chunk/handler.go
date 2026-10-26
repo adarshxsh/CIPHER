@@ -11,6 +11,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	"cipher/internal/transport"
 )
 
 var TestCorruptProb float64
@@ -18,26 +19,33 @@ var TestCorruptProb float64
 type StreamHandler struct {
 	host   host.Host
 	engine *engine.ContentEngine
+	policy transport.StreamPolicy
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+	return NewStreamHandlerWithPolicy(h, eng, transport.DefaultStreamPolicy)
+}
+
+func NewStreamHandlerWithPolicy(h host.Host, eng *engine.ContentEngine, policy transport.StreamPolicy) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
+		policy: policy,
 	}
 	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
 	return handler
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
-	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	ts := transport.NewTimeoutStream(s, h.policy)
+	defer ts.Close()
+	log.Printf("[Chunk Protocol] New stream from %s", ts.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		msg, err := ReadMessage(ts)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", ts.Conn().RemotePeer())
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
@@ -47,18 +55,18 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		if msg.Version != CurrentMessageVersion {
 			// Older or incompatible version
 			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+			WriteMessage(ts, BuildError(ErrUnsupportedMessage, "unsupported message version"))
 			return
 		}
 
 		switch msg.Type {
 		case MsgRequestManifest:
-			h.handleRequestManifest(s, msg)
+			h.handleRequestManifest(ts, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(ts, msg)
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			WriteMessage(ts, BuildError(ErrUnsupportedMessage, "unsupported message type"))
 		}
 	}
 }
