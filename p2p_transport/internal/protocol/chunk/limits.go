@@ -1,5 +1,15 @@
 package chunk
 
+import (
+	"time"
+)
+
+var (
+	// ReadTimeout and WriteTimeout set the transport deadlines per message/operation.
+	ReadTimeout  = 15 * time.Second
+	WriteTimeout = 15 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
