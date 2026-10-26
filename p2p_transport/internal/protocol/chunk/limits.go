@@ -1,5 +1,7 @@
 package chunk
 
+import "time"
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
@@ -86,6 +88,12 @@ const (
 	MaxChunksPerRequest      = 1
 	MaxTransactionsPerStream = 1
 	MaxMessagesPerStream     = 4
+)
+
+var (
+	// StreamReadTimeout and StreamWriteTimeout govern stream I/O deadlines.
+	StreamReadTimeout  = 30 * time.Second
+	StreamWriteTimeout = 30 * time.Second
 )
 
 const (
