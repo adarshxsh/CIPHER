@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log"
@@ -123,7 +124,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -247,24 +248,24 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyFP := sha256.Sum256(key)
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key Fingerprint: %x", keyFP[:8])
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
 		if *wsPort == 0 {
 			wsAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", *port, h.ID())
 		}
-		
-		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n" +
-			"  -p 5001 \\\n" +
-			"  -ws-port 5002 \\\n" +
-			"  -store ./store_b \\\n" +
-			"  -d \"%s\" \\\n" +
-			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+
+		fmt.Printf("CGO_ENABLED=0 go run cmd/peer/main.go \\\n"+
+			"  -p 5001 \\\n"+
+			"  -ws-port 5002 \\\n"+
+			"  -store ./store_b \\\n"+
+			"  -d \"%s\" \\\n"+
+			"  -fetch \"%x\" \\\n"+
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 

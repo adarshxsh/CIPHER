@@ -65,7 +65,7 @@ echo "\n[Step 5/6] Publisher pushes 2 MB file across Providers with Replication 
     -bootstrap "$BOOT_ADDR" -seed=false > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
+KEY=$(od -An -tx1 -v ./store_pub/keys/$CONTENT_ID.key | tr -d ' \n')
 
 echo "Publisher Push Completed Successfully:"
 echo "  - ContentID:      $CONTENT_ID"
