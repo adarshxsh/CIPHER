@@ -41,8 +41,40 @@ type Encryptor interface {
 	DecryptChunk(key []byte, chunk *Chunk) error
 }
 
+type KeyHandle struct {
+	key []byte
+}
+
+func NewKeyHandle(key []byte) *KeyHandle {
+	return &KeyHandle{key: key}
+}
+
+func (h *KeyHandle) Bytes() []byte {
+	if h == nil {
+		return nil
+	}
+	return h.key
+}
+
+func (h *KeyHandle) Release() {
+	if h != nil && h.key != nil {
+		for i := range h.key {
+			h.key[i] = 0
+		}
+		h.key = nil
+	}
+}
+
+func (h *KeyHandle) Zeroize() {
+	h.Release()
+}
+
+func (h *KeyHandle) Close() {
+	h.Release()
+}
+
 type KeyProvider interface {
-	Get(ctx context.Context, id ContentID) ([]byte, error)
+	Get(ctx context.Context, id ContentID) (*KeyHandle, error)
 	Put(ctx context.Context, id ContentID, key []byte) error
 	Delete(ctx context.Context, id ContentID) error
 }
