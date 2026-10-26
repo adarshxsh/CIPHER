@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 	"cipher/internal/transport"
@@ -61,12 +62,33 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 		return nil, fmt.Errorf("expected MANIFEST, got %d", resp.Type)
 	}
 
-	respID, data, err := ParseManifest(resp.Payload)
+	respID, att, data, err := ParseManifest(resp.Payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: failed to parse manifest response: %v", ErrPermissionDenied, err)
 	}
 	if respID != id {
-		return nil, fmt.Errorf("content ID mismatch in response")
+		return nil, fmt.Errorf("%w: content ID mismatch in response", ErrPermissionDenied)
+	}
+
+	// 1. Verify Provider Hosting Attestation
+	if att == nil {
+		return nil, fmt.Errorf("%w: missing provider hosting attestation", ErrPermissionDenied)
+	}
+	remotePeerID := c.stream.Conn().RemotePeer()
+	if err := att.Verify(id, remotePeerID); err != nil {
+		return nil, fmt.Errorf("%w: provider attestation verification failed: %v", ErrPermissionDenied, err)
+	}
+
+	// 2. Verify Publisher Manifest Signature
+	m, err := manifest.Deserialize(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to deserialize manifest JSON: %v", ErrPermissionDenied, err)
+	}
+	if err := m.VerifyPublisher(); err != nil {
+		return nil, fmt.Errorf("%w: publisher signature verification failed: %v", ErrPermissionDenied, err)
+	}
+	if m.Descriptor.ID != id {
+		return nil, fmt.Errorf("%w: manifest descriptor ID mismatch", ErrPermissionDenied)
 	}
 
 	return data, nil

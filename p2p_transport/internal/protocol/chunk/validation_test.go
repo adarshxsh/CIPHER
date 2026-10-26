@@ -99,7 +99,7 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	var received core.ContentID
 	received[0] = 0x02
 
-	manifestMsg := chunk.BuildManifest(received, []byte("manifest"))
+	manifestMsg := chunk.BuildManifest(received, nil, []byte("manifest"))
 	err := chunk.ValidateManifestForRequest(requested, manifestMsg.Payload)
 	if !errors.Is(err, chunk.ErrContentMismatch) {
 		t.Fatalf("expected ErrContentMismatch, got %v", err)

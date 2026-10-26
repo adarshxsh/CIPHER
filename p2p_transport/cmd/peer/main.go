@@ -127,6 +127,7 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+	eng.SetPublisherKey(priv)
 
 	// Apply testing flags
 	if *corruptProb > 0 {

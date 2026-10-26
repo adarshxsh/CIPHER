@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -78,7 +79,15 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 		return
 	}
 
-	resp := BuildManifest(contentID, manifestData)
+	privKey := h.host.Peerstore().PrivKey(h.host.ID())
+	att, err := NewProviderAttestation(contentID, h.host.ID(), time.Now().Unix(), privKey)
+	if err != nil {
+		log.Printf("[Chunk Protocol] Failed to create provider attestation: %v", err)
+		WriteMessage(s, BuildError(ErrInternal, "failed to create provider attestation"))
+		return
+	}
+
+	resp := BuildManifest(contentID, att, manifestData)
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}

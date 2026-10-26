@@ -26,6 +26,9 @@ var (
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
 	ErrInvalidManifestPayload = errors.New("invalid manifest payload")
+	ErrAccessDenied           = errors.New("permission denied")
+	ErrInvalidSignature       = errors.New("invalid cryptographic signature")
+	ErrExpiredAttestation     = errors.New("provider attestation expired")
 )
 
 type ContentInfo struct {
@@ -225,7 +228,7 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, _, _, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
@@ -296,7 +299,7 @@ func isKnownErrorCode(code ErrorCode) bool {
 	case ErrContentNotFound,
 		ErrChunkNotFound,
 		ErrInvalidManifest,
-		ErrPermissionDenied,
+		ErrCodePermissionDenied,
 		ErrInternal,
 		ErrIntegrityMismatch,
 		ErrBadRequest,
