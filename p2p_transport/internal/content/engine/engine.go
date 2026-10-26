@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"sort"
@@ -48,21 +49,10 @@ func NewContentEngine(
 func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.ContentType) (*manifest.Manifest, error) {
 	chunkCh, errCh := e.chunker.Split(r)
 
-	// Generate a unique ContentID for this upload
-	var contentID core.ContentID
-	if _, err := rand.Read(contentID[:]); err != nil {
-		return nil, fmt.Errorf("failed to generate content id: %w", err)
-	}
-
 	// Generate a new encryption key
 	key := make([]byte, 32) // ChaCha20-Poly1305 takes a 32-byte key
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
-	}
-
-	// Store key
-	if err := e.keys.Put(ctx, contentID, key); err != nil {
-		return nil, fmt.Errorf("failed to store key: %w", err)
 	}
 
 	var chunkIDs []core.ChunkID
@@ -105,7 +95,7 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	m := &manifest.Manifest{
 		Version: 1,
 		Descriptor: manifest.ContentDescriptor{
-			ID:   contentID,
+			ID:   core.ContentID{}, // Zeroed ID for canonical calculation
 			Type: mtype,
 			Size: totalSize,
 		},
@@ -118,6 +108,25 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 			ChunkNonceSize: 12,
 			KeyID:          "embedded",
 		},
+	}
+
+	// Derive ContentID as sha256.Sum256 of canonical manifest payload bytes
+	mBytes, err := m.Serialize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize manifest: %w", err)
+	}
+	contentID := sha256.Sum256(mBytes)
+	m.Descriptor.ID = contentID
+
+	// Store key under derived contentID
+	if err := e.keys.Put(ctx, contentID, key); err != nil {
+		return nil, fmt.Errorf("failed to store key: %w", err)
+	}
+
+	if e.manifestStore != nil {
+		if err := e.manifestStore.PutManifestBytes(ctx, contentID, mBytes); err != nil {
+			return nil, fmt.Errorf("failed to store manifest bytes: %w", err)
+		}
 	}
 
 	return m, nil

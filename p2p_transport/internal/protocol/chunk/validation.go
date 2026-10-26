@@ -2,6 +2,8 @@ package chunk
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -225,13 +227,18 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, manifestData, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	computedHash := sha256.Sum256(manifestData)
+	if subtle.ConstantTimeCompare(requested[:], computedHash[:]) != 1 {
+		return fmt.Errorf("manifest multihash mismatch: %w", ErrContentMismatch)
 	}
 
 	return nil
