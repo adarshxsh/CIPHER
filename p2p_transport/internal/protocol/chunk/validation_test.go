@@ -129,3 +129,37 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_OversizedPayloadRejection(t *testing.T) {
+	// 1. Valid size payload
+	validPayload := make([]byte, chunk.ContentIDSize+100)
+	if err := chunk.ValidateManifestPayload(validPayload); err != nil {
+		t.Fatalf("expected valid payload to pass, got: %v", err)
+	}
+
+	// 2. Exact max payload size
+	exactMaxPayload := make([]byte, chunk.ContentIDSize+chunk.MaxManifestSize)
+	if err := chunk.ValidateManifestPayload(exactMaxPayload); err != nil {
+		t.Fatalf("expected exact max payload to pass, got: %v", err)
+	}
+
+	// 3. Oversized payload
+	oversizedPayload := make([]byte, chunk.ContentIDSize+chunk.MaxManifestSize+1)
+	err := chunk.ValidateManifestPayload(oversizedPayload)
+	if err == nil {
+		t.Fatal("expected error for oversized manifest payload, got nil")
+	}
+	if !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidPayloadLength, got: %v", err)
+	}
+
+	// 4. Too short payload
+	tooShortPayload := make([]byte, chunk.ContentIDSize-1)
+	err = chunk.ValidateManifestPayload(tooShortPayload)
+	if err == nil {
+		t.Fatal("expected error for too short manifest payload, got nil")
+	}
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload, got: %v", err)
+	}
+}

@@ -2,8 +2,24 @@ package manifest
 
 import (
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+
 	"cipher/internal/content/core"
+)
+
+var (
+	ErrEmptyManifest     = errors.New("empty manifest data")
+	ErrManifestTooLarge  = errors.New("manifest data exceeds maximum size")
+	ErrInvalidChunkCount = errors.New("chunk count exceeds maximum supported limit")
+)
+
+const (
+	// MaxManifestSize is the maximum allowed byte length for serialized manifest JSON data.
+	MaxManifestSize = 2 * 1024 * 1024 // 2 MiB
+
+	// MaxSupportedChunkCount prevents absurd chunk array lengths.
+	MaxSupportedChunkCount uint64 = 1 << 32
 )
 
 type ContentType string
@@ -47,9 +63,21 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if len(data) == 0 {
+		return nil, ErrEmptyManifest
+	}
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("%w: received=%d maximum=%d", ErrManifestTooLarge, len(data), MaxManifestSize)
+	}
+
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+
+	if uint64(len(m.ChunkIDs)) > MaxSupportedChunkCount {
+		return nil, fmt.Errorf("%w: received=%d maximum=%d", ErrInvalidChunkCount, len(m.ChunkIDs), MaxSupportedChunkCount)
+	}
+
 	return &m, nil
 }
