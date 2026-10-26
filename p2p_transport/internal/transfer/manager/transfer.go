@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/reputation"
 	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 )
@@ -26,6 +27,7 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	Reputation     *reputation.PeerReputationManager
 }
 
 func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
@@ -33,6 +35,7 @@ func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transpo
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		Reputation:     reputation.NewPeerReputationManager(),
 	}
 }
 
@@ -113,6 +116,10 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	// 5. Run Scheduler
 	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	if tm.Reputation == nil {
+		tm.Reputation = reputation.NewPeerReputationManager()
+	}
+	sched.Reputation = tm.Reputation
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
