@@ -6,9 +6,10 @@ import (
 )
 
 type ChunkTask struct {
-	Index    int
-	ChunkID  core.ChunkID
-	Attempts int
+	Index       int
+	ChunkID     core.ChunkID
+	Attempts    int
+	MissedPeers map[string]bool
 }
 
 type ChunkQueue struct {

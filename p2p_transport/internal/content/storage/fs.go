@@ -55,23 +55,34 @@ func (s *FSStorage) PutChunk(ctx context.Context, chunk *core.Chunk) error {
 		return fmt.Errorf("failed to create shard dir: %w", err)
 	}
 
-	f, err := os.Create(path)
+	tmpPath := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	// Serialize Header
 	if err := binary.Write(f, binary.LittleEndian, &chunk.Header); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write chunk header: %w", err)
 	}
 
 	// Write Data
 	if _, err := f.Write(chunk.Data); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write chunk data: %w", err)
 	}
 
-	return nil
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to fsync chunk: %w", err)
+	}
+	f.Close()
+
+	return os.Rename(tmpPath, path)
 }
 
 func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk, error) {

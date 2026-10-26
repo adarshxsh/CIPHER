@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	
@@ -68,7 +69,21 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					continue
 				}
 				
-				// Requeue logic
+				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
+				if errors.Is(res.Error, chunk.ErrRemoteChunkNotFound) {
+					if res.Task.MissedPeers == nil {
+						res.Task.MissedPeers = make(map[string]bool)
+					}
+					res.Task.MissedPeers[res.PeerID] = true
+
+					if len(res.Task.MissedPeers) < len(sources) {
+						queue.Push(res.Task)
+						continue
+					}
+					return fmt.Errorf("chunk %x not found across any candidate providers (%d/%d checked)", res.Task.ChunkID, len(res.Task.MissedPeers), len(sources))
+				}
+
+				// Real network / integrity error: count attempts
 				res.Task.Attempts++
 				if res.Task.Attempts < s.MaxAttempts {
 					queue.Push(res.Task)
