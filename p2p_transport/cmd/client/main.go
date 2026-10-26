@@ -34,6 +34,8 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
 	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to import decryption key from a file")
+	keyOut := flag.String("key-out", "", "Path to export decryption key to a file")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -151,7 +153,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -205,12 +207,20 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
-		kBytes, err := hex.DecodeString(*keyHex)
-		if err != nil || len(kBytes) != 32 {
-			log.Fatalf("Invalid key format (must be 32-byte hex)")
-		}
+	kBytes, err := engine.ParseKeyFlags(*keyFile, *keyHex)
+	if err != nil {
+		log.Fatalf("Invalid key argument: %v", err)
+	}
+	if len(kBytes) == 32 {
 		keys.Put(ctx, contentID, kBytes)
+	}
+	if *keyOut != "" {
+		k, err := keys.Get(ctx, contentID)
+		if err == nil && len(k) == 32 {
+			if err := engine.WriteKeyFile(*keyOut, k); err != nil {
+				log.Fatalf("Failed to export key to %s: %v", *keyOut, err)
+			}
+		}
 	}
 
 	// 6. Data Plane: Resolve Manifest
@@ -231,8 +241,8 @@ func main() {
 
 	// 8. Content Engine: Decrypt & Reassemble
 	if *reassembleOut != "" {
-		if *keyHex == "" {
-			log.Printf("Warning: No decryption key provided (-key). Attempting reassembly with cached keys...")
+		if *keyHex == "" && *keyFile == "" {
+			log.Printf("Warning: No decryption key provided (-key-file or -key). Attempting reassembly with cached keys...")
 		}
 		outF, err := os.Create(*reassembleOut)
 		if err != nil {

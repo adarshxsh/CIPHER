@@ -46,6 +46,8 @@ func main() {
 	replication := flag.Int("replication", 2, "Replication factor R (replicas per chunk across providers)")
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
+	keyOut := flag.String("key-out", "", "Path to export decryption key to a file")
+	keyFile := flag.String("key-file", "", "Path to import decryption key from a file")
 
 	flag.Parse()
 
@@ -110,7 +112,7 @@ func main() {
 	config := core.EngineConfig{ChunkSize: uint32((*chunkSizeKB) * 1024)}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := engine.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -234,12 +236,28 @@ func main() {
 		}
 	}
 
-	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	if *keyFile != "" {
+		if kBytes, err := engine.ParseKeyFlags(*keyFile, ""); err == nil && len(kBytes) == 32 {
+			_ = keys.Put(ctx, m.Descriptor.ID, kBytes)
+		} else if err != nil {
+			log.Fatalf("Failed to import key from -key-file: %v", err)
+		}
+	}
+
+	keyDisplay := "[REDACTED]"
+	if *keyOut != "" {
+		if keyBytes, err := keys.Get(ctx, m.Descriptor.ID); err == nil && len(keyBytes) == 32 {
+			if err := engine.WriteKeyFile(*keyOut, keyBytes); err != nil {
+				log.Fatalf("Failed to export key to -key-out: %v", err)
+			}
+			keyDisplay = "[SAVED TO FILE]"
+		}
+	}
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: %s\n", keyDisplay)
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")

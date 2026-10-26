@@ -9,7 +9,7 @@ echo "         CIPHER Role-Based Architecture Test             "
 echo "=========================================================="
 
 rm -rf store_publisher store_provider store_client test_input.dat test_output.dat test_output_dht.dat
-rm -f publisher.log provider.log client.log bootstrap.log
+rm -f publisher.log provider.log client.log bootstrap.log client_dht.log key.txt
 
 export CGO_ENABLED=0
 
@@ -25,7 +25,7 @@ ORIGINAL_HASH=$(shasum -a 256 test_input.dat | awk '{print $1}')
 echo "Payload SHA-256: $ORIGINAL_HASH (1 MB)"
 
 echo "[3/5] Starting Publisher to ingest and seed content..."
-./bin/publisher -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat > publisher.log 2>&1 &
+./bin/publisher -p 45001 -ws-port 45002 -identity ./store_publisher/identity.key -store ./store_publisher -file test_input.dat -key-out key.txt > publisher.log 2>&1 &
 PUB_PID=$!
 
 cleanup() {
@@ -36,21 +36,20 @@ trap cleanup EXIT
 sleep 2
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
 PUB_ADDR=$(grep "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
 
-if [ -z "$CONTENT_ID" ] || [ -z "$KEY" ] || [ -z "$PUB_ADDR" ]; then
-    echo "Error: Failed to parse publisher parameters from log:"
+if [ -z "$CONTENT_ID" ] || [ ! -f key.txt ] || [ -z "$PUB_ADDR" ]; then
+    echo "Error: Failed to parse publisher parameters or find key.txt from publisher:"
     cat publisher.log
     exit 1
 fi
 
 echo "  - ContentID: $CONTENT_ID"
-echo "  - Key:       $KEY"
+echo "  - Key:       Saved to key.txt"
 echo "  - Address:   $PUB_ADDR"
 
 echo "[4/5] Running Client to fetch, verify, and reassemble content..."
-./bin/client -p 55001 -ws-port 55002 -identity ./store_client/identity.key -store ./store_client -d "$PUB_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output.dat > client.log 2>&1
+./bin/client -p 55001 -ws-port 55002 -identity ./store_client/identity.key -store ./store_client -d "$PUB_ADDR" -fetch "$CONTENT_ID" -key-file key.txt -out test_output.dat > client.log 2>&1
 
 DOWNLOADED_HASH=$(shasum -a 256 test_output.dat | awk '{print $1}')
 echo "Downloaded SHA-256: $DOWNLOADED_HASH"
@@ -77,7 +76,7 @@ PROV_PID=$!
 sleep 2
 
 # Run Client using ONLY DHT discovery (no direct -d flag)
-./bin/client -p 55010 -ws-port 55011 -identity ./store_client2/identity.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_output_dht.dat > client_dht.log 2>&1
+./bin/client -p 55010 -ws-port 55011 -identity ./store_client2/identity.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file key.txt -out test_output_dht.dat > client_dht.log 2>&1
 
 DHT_DOWNLOADED_HASH=$(shasum -a 256 test_output_dht.dat | awk '{print $1}')
 echo "DHT Downloaded SHA-256: $DHT_DOWNLOADED_HASH"
