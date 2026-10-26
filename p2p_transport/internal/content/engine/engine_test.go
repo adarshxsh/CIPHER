@@ -71,3 +71,63 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_CanonicalContentIDDerivation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-digest-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	ctx := context.Background()
+	data := []byte("hello world canonical manifest digest test")
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	computedHash := dig.Sum(mBytes)
+	var expectedID core.ContentID
+	copy(expectedID[:], computedHash[:])
+
+	if m.Descriptor.ID != expectedID {
+		t.Fatalf("ContentID mismatch: got %x, expected %x", m.Descriptor.ID, expectedID)
+	}
+
+	// Verify key and manifest are stored under derived ContentID
+	_, err = keys.Get(ctx, m.Descriptor.ID)
+	if err != nil {
+		t.Fatalf("Key not stored under derived ContentID: %v", err)
+	}
+
+	retrievedManifestBytes, err := eng.GetManifestBytes(ctx, m.Descriptor.ID)
+	if err != nil {
+		t.Fatalf("Manifest bytes not stored under derived ContentID: %v", err)
+	}
+
+	mDeserialized, err := manifest.Deserialize(retrievedManifestBytes)
+	if err != nil {
+		t.Fatalf("Failed to deserialize retrieved manifest bytes: %v", err)
+	}
+
+	if mDeserialized.Descriptor.ID != m.Descriptor.ID {
+		t.Fatalf("Deserialized manifest ID mismatch: got %x, expected %x", mDeserialized.Descriptor.ID, m.Descriptor.ID)
+	}
+}

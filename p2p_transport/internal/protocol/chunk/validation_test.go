@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
+	"cipher/internal/content/verifier"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +129,53 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_ValidAndTamperedPayloads(t *testing.T) {
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 1024,
+		},
+		Crypto: manifest.CryptoDescriptor{
+			Algorithm: "ChaCha20-Poly1305",
+			Version:   1,
+		},
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	hash := verifier.NewSHA256Digest().Sum(mBytes)
+	var contentID core.ContentID
+	copy(contentID[:], hash[:])
+
+	// 1. Valid Manifest Message
+	msg := chunk.BuildManifest(contentID, mBytes)
+	if err := chunk.ValidateManifestForRequest(contentID, msg.Payload); err != nil {
+		t.Fatalf("valid manifest should pass validation: %v", err)
+	}
+
+	// 2. Tampered Manifest Body (modified chunk size or content)
+	tamperedBytes := append([]byte(nil), mBytes...)
+	tamperedBytes[len(tamperedBytes)-1] ^= 0xFF
+	tamperedMsg := chunk.BuildManifest(contentID, tamperedBytes)
+
+	err = chunk.ValidateManifestForRequest(contentID, tamperedMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("tampered manifest payload should produce ErrContentMismatch, got: %v", err)
+	}
+
+	// 3. Mismatched Header ContentID with valid body
+	var wrongID core.ContentID
+	wrongID[0] = 0xEE
+	wrongHeaderMsg := chunk.BuildManifest(wrongID, mBytes)
+	err = chunk.ValidateManifestForRequest(contentID, wrongHeaderMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("wrong header ContentID should produce ErrContentMismatch, got: %v", err)
 	}
 }

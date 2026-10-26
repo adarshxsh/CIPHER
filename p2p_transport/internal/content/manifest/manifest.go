@@ -1,10 +1,15 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+
 	"cipher/internal/content/core"
 )
+
+var ErrInvalidManifestID = errors.New("inner descriptor ID does not match computed hash")
 
 type ContentType string
 
@@ -43,7 +48,9 @@ type UserMetadata struct {
 }
 
 func (m *Manifest) Serialize() ([]byte, error) {
-	return json.Marshal(m)
+	mCopy := *m
+	mCopy.Descriptor.ID = core.ContentID{}
+	return json.Marshal(&mCopy)
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
@@ -51,5 +58,23 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+	rawInnerID := m.Descriptor.ID
+
+	mCopy := m
+	mCopy.Descriptor.ID = core.ContentID{}
+	canonicalBytes, err := json.Marshal(&mCopy)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(canonicalBytes)
+	var computedID core.ContentID
+	copy(computedID[:], hash[:])
+
+	if rawInnerID != (core.ContentID{}) && rawInnerID != computedID {
+		return nil, fmt.Errorf("%w: expected %x, got %x", ErrInvalidManifestID, computedID, rawInnerID)
+	}
+
+	m.Descriptor.ID = computedID
 	return &m, nil
 }
+
