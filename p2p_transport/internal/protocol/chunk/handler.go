@@ -9,7 +9,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 
+	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 )
 
@@ -75,6 +77,12 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	manifestData, err := h.engine.GetManifestBytes(ctx, contentID)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrContentNotFound, "manifest not found"))
+		return
+	}
+
+	dig := verifier.NewSHA256Digest()
+	if dig.Sum(manifestData) != core.Hash(contentID) {
+		WriteMessage(s, BuildError(ErrIntegrityMismatch, "stored manifest corrupted"))
 		return
 	}
 

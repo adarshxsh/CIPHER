@@ -1,8 +1,11 @@
 package manifest
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
-	
+	"errors"
+
 	"cipher/internal/content/core"
 )
 
@@ -42,8 +45,32 @@ type UserMetadata struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+// Serialize returns the deterministic canonical JSON byte slice for the Manifest.
 func (m *Manifest) Serialize() ([]byte, error) {
-	return json.Marshal(m)
+	return SerializeCanonical(m)
+}
+
+// SerializeCanonical serializes a Manifest into canonical JSON (sorted keys, compact spacing).
+func SerializeCanonical(m *Manifest) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("nil manifest")
+	}
+	mCopy := *m
+	mCopy.Descriptor.ID = core.ContentID{}
+
+	raw, err := json.Marshal(&mCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	var generic interface{}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&generic); err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(generic)
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
@@ -51,5 +78,7 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
+	h := sha256.Sum256(data)
+	copy(m.Descriptor.ID[:], h[:])
 	return &m, nil
 }

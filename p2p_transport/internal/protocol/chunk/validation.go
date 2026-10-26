@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/verifier"
 )
 
 var (
@@ -22,6 +23,7 @@ var (
 	ErrInvalidErrorCode       = errors.New("invalid error code")
 	ErrInvalidErrorMessage    = errors.New("invalid error message")
 	ErrContentMismatch        = errors.New("content ID does not match request")
+	ErrManifestIntegrity      = errors.New("manifest integrity mismatch")
 	ErrChunkMismatch          = errors.New("chunk ID does not match request")
 	ErrChunkIndexMismatch     = errors.New("chunk index does not match request")
 	ErrInvalidChunkIndex      = errors.New("invalid chunk index")
@@ -225,13 +227,19 @@ func ValidateManifestForRequest(requested core.ContentID, payload []byte) error 
 		return err
 	}
 
-	received, _, err := ParseManifest(payload)
+	received, manifestData, err := ParseManifest(payload)
 	if err != nil {
 		return err
 	}
 
 	if received != requested {
 		return fmt.Errorf("manifest: %w", ErrContentMismatch)
+	}
+
+	dig := verifier.NewSHA256Digest()
+	hash := dig.Sum(manifestData)
+	if hash != core.Hash(requested) {
+		return fmt.Errorf("manifest digest mismatch: %w", ErrManifestIntegrity)
 	}
 
 	return nil
