@@ -47,6 +47,10 @@ func main() {
 	push := flag.Bool("push", false, "Push chunks to remote providers over /cipher/push/1.0.0 and exit")
 	pushTimeout := flag.Duration("push-timeout", 5*time.Minute, "Timeout for remote push distribution")
 
+	minConns := flag.Int("min-conns", 100, "Minimum connection watermark for ConnectionManager")
+	maxConns := flag.Int("max-conns", 400, "Maximum connection watermark for ConnectionManager")
+	memLimitMB := flag.Int("memory-limit-mb", 0, "Memory limit in MB for ResourceManager (0 for autoconfigured caps)")
+
 	flag.Parse()
 
 	if *filePath == "" {
@@ -69,7 +73,11 @@ func main() {
 	}
 
 	// 2. Start libp2p host and DHT
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay,
+		transport.WithMinConns(*minConns),
+		transport.WithMaxConns(*maxConns),
+		transport.WithMemoryLimitMB(*memLimitMB),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}

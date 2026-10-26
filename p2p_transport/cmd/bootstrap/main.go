@@ -28,6 +28,9 @@ func main() {
 	)
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	minConns := flag.Int("min-conns", 100, "Minimum connection watermark for ConnectionManager")
+	maxConns := flag.Int("max-conns", 400, "Maximum connection watermark for ConnectionManager")
+	memLimitMB := flag.Int("memory-limit-mb", 0, "Memory limit in MB for ResourceManager (0 for autoconfigured caps)")
 
 	// parse the cmd line args passed
 	flag.Parse()
@@ -46,7 +49,11 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false)
+	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false,
+		transport.WithMinConns(*minConns),
+		transport.WithMaxConns(*maxConns),
+		transport.WithMemoryLimitMB(*memLimitMB),
+	)
 	if err != nil {
 		log.Fatalf(
 			"Failed to create bootstrap node: %v",
