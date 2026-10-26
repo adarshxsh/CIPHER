@@ -56,6 +56,14 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("manifest size %d != expected %d", m.Descriptor.Size, len(originalData))
 	}
 
+	expectedID, err := m.ComputeContentID()
+	if err != nil {
+		t.Fatalf("failed to compute manifest digest: %v", err)
+	}
+	if m.Descriptor.ID != expectedID {
+		t.Errorf("manifest ContentID %x != computed SHA-256 digest %x", m.Descriptor.ID, expectedID)
+	}
+
 	expectedChunks := (len(originalData) + int(config.ChunkSize) - 1) / int(config.ChunkSize)
 	if len(m.ChunkIDs) != expectedChunks {
 		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
