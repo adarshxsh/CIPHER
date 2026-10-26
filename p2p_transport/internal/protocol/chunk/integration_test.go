@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"log"
+	"os"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/p2p/net/mock"
@@ -13,10 +18,11 @@ import (
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
-	"cipher/internal/transport"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
+	"cipher/internal/protocol"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
@@ -129,5 +135,104 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 	}
 	if err.Error() != "remote error (code 1): manifest not found" {
 		t.Errorf("Unexpected error msg: %v", err)
+	}
+}
+
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func TestStreamHandler_SanitizesIncomingErrorLogs(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	var logBuf safeBuffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	ctx := context.Background()
+	s, err := h2.NewStream(ctx, h1.ID(), protocol.ChunkTransportProtocolID)
+	if err != nil {
+		t.Fatalf("NewStream failed: %v", err)
+	}
+
+	errMsg := chunk.BuildError(chunk.ErrBadRequest, "Bad Request\nLine 2\r\nInject Fake Log Line\x00Control")
+	if err := chunk.WriteMessage(s, errMsg); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	s.Close()
+
+	output := logBuf.String()
+	if !strings.Contains(output, `Bad Request\\nLine 2\\r\\nInject Fake Log Line\\x00Control`) {
+		t.Errorf("Expected sanitized error message in log output, got: %q", output)
+	}
+}
+
+func TestStreamHandler_SanitizesChunkAckErrorLog(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	var logBuf safeBuffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	ctx := context.Background()
+	var chunkID core.ChunkID
+	chunkID[0] = 0xAA
+	eng1.PutChunk(ctx, &core.Chunk{
+		Header: core.ChunkHeader{
+			Version:    chunk.CurrentMessageVersion,
+			ID:         chunkID,
+			PlainSize:  15,
+			CipherSize: 15,
+		},
+		Data: []byte("test_chunk_data"),
+	})
+
+	s, err := h2.NewStream(ctx, h1.ID(), protocol.ChunkTransportProtocolID)
+	if err != nil {
+		t.Fatalf("NewStream failed: %v", err)
+	}
+	defer s.Close()
+
+	req := chunk.BuildRequestChunk(chunkID)
+	if err := chunk.WriteMessage(s, req); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
+
+	resp, err := chunk.ReadMessage(s)
+	if err != nil {
+		t.Fatalf("ReadMessage failed: %v", err)
+	}
+	if resp.Type != chunk.MsgChunk {
+		t.Fatalf("Expected CHUNK, got %v", resp.Type)
+	}
+
+	errMsg := chunk.BuildError(chunk.ErrIntegrityMismatch, "Corrupted!\nMultiline\r\nInject\x00")
+	if err := chunk.WriteMessage(s, errMsg); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	output := logBuf.String()
+	if !strings.Contains(output, `Corrupted!\\nMultiline\\r\\nInject\\x00`) {
+		t.Errorf("Expected sanitized error in ACK log output, got: %q", output)
 	}
 }

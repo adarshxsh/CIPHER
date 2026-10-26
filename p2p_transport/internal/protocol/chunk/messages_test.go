@@ -105,3 +105,61 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_ValidationAndSanitization(t *testing.T) {
+	// 1. Empty payload
+	_, _, err := chunk.ParseError([]byte{})
+	if err == nil {
+		t.Error("expected error for empty payload, got nil")
+	}
+
+	// 2. Unknown error code
+	_, _, err = chunk.ParseError([]byte{0xFF, 't', 'e', 's', 't'})
+	if err == nil {
+		t.Error("expected error for unknown error code, got nil")
+	}
+
+	// 3. Oversized payload (> 512 bytes message)
+	oversized := make([]byte, chunk.MaxErrorMessageSize+2)
+	oversized[0] = byte(chunk.ErrBadRequest)
+	for i := 1; i < len(oversized); i++ {
+		oversized[i] = 'a'
+	}
+	_, _, err = chunk.ParseError(oversized)
+	if err == nil {
+		t.Error("expected error for oversized error payload, got nil")
+	}
+
+	// 4. Control characters and newlines in payload
+	rawPayload := append([]byte{byte(chunk.ErrBadRequest)}, []byte("Error:\nLine 2\r\n\tTab\x00Null\x1b[31mRed")...)
+	code, msg, err := chunk.ParseError(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected code %v, got %v", chunk.ErrBadRequest, code)
+	}
+	expected := `Error:\nLine 2\r\n\tTab\x00Null\x1b[31mRed`
+	if msg != expected {
+		t.Errorf("expected sanitized msg %q, got %q", expected, msg)
+	}
+}
+
+func TestSanitizeErrorMessage(t *testing.T) {
+	input := "Hello\nWorld\r\nFoo\tBar\x00\x1b[1m"
+	sanitized := chunk.SanitizeErrorMessage(input)
+	expected := `Hello\nWorld\r\nFoo\tBar\x00\x1b[1m`
+	if sanitized != expected {
+		t.Errorf("expected %q, got %q", expected, sanitized)
+	}
+
+	// Test truncation if > MaxErrorMessageSize
+	longMsg := make([]byte, 600)
+	for i := range longMsg {
+		longMsg[i] = 'X'
+	}
+	sanitizedLong := chunk.SanitizeErrorMessage(string(longMsg))
+	if len(sanitizedLong) != chunk.MaxErrorMessageSize {
+		t.Errorf("expected length %d, got %d", chunk.MaxErrorMessageSize, len(sanitizedLong))
+	}
+}
