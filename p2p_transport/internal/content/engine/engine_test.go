@@ -71,3 +71,36 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+type errSink struct{}
+
+func (s *errSink) PutChunk(ctx context.Context, chunk *core.Chunk) error {
+	if chunk.Header.Index >= 1 {
+		return os.ErrPermission // fail on chunk 1
+	}
+	return nil
+}
+
+func TestContentEngine_ErrorHandling_BufferDrain(t *testing.T) {
+	config := core.EngineConfig{
+		ChunkSize:        1024,
+		ChannelBufferCap: 16,
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+	store := storage.NewFSStore(t.TempDir())
+	sink := &errSink{}
+
+	eng := NewContentEngine(config, enc, dig, store, sink, keys, store)
+
+	// Create data for ~5 chunks
+	data := make([]byte, 1024*5)
+	reader := bytes.NewReader(data)
+
+	_, err := eng.Ingest(context.Background(), reader, manifest.TypeFile)
+	if err == nil {
+		t.Fatalf("expected error from failing sink, got nil")
+	}
+}

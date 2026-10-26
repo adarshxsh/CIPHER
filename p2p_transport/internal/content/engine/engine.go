@@ -70,24 +70,43 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 
 	// Read all chunks, encrypt, hash, and store
 	for chunk := range chunkCh {
-		// Encrypt the chunk
-		if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
-			return nil, fmt.Errorf("failed to encrypt chunk: %w", err)
+		plainBuf := chunk.Data
+
+		processErr := func() error {
+			defer func() {
+				e.chunker.PutBuffer(plainBuf)
+				chunk.Data = nil
+			}()
+
+			// Encrypt the chunk
+			if err := e.encryptor.EncryptChunk(key, chunk); err != nil {
+				return fmt.Errorf("failed to encrypt chunk: %w", err)
+			}
+
+			// Hash the ciphertext to get the ChunkID (content-addressing)
+			chunkHash := e.digest.Sum(chunk.Data)
+			var chunkID core.ChunkID
+			copy(chunkID[:], chunkHash[:])
+			chunk.Header.ID = chunkID
+
+			// Store the chunk
+			if err := e.sink.PutChunk(ctx, chunk); err != nil {
+				return fmt.Errorf("failed to store chunk: %w", err)
+			}
+
+			chunkIDs = append(chunkIDs, chunkID)
+			totalSize += uint64(chunk.Header.PlainSize)
+			return nil
+		}()
+
+		if processErr != nil {
+			for remChunk := range chunkCh {
+				e.chunker.PutBuffer(remChunk.Data)
+				remChunk.Data = nil
+			}
+			<-errCh
+			return nil, processErr
 		}
-
-		// Hash the ciphertext to get the ChunkID (content-addressing)
-		chunkHash := e.digest.Sum(chunk.Data)
-		var chunkID core.ChunkID
-		copy(chunkID[:], chunkHash[:])
-		chunk.Header.ID = chunkID
-
-		// Store the chunk
-		if err := e.sink.PutChunk(ctx, chunk); err != nil {
-			return nil, fmt.Errorf("failed to store chunk: %w", err)
-		}
-
-		chunkIDs = append(chunkIDs, chunkID)
-		totalSize += uint64(chunk.Header.PlainSize)
 	}
 
 	if err := <-errCh; err != nil {
