@@ -8,18 +8,20 @@ import (
 	"cipher/internal/content/core"
 )
 
-func TestChaCha20Encryptor(t *testing.T) {
+func TestChaCha20Encryptor_EncryptDecrypt(t *testing.T) {
 	enc := NewChaCha20Encryptor()
 
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
 
-	originalData := []byte("hello decentralized encrypted cdn")
+	originalData := []byte("hello decentralized encrypted cdn with xchacha20")
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
 			PlainSize: uint32(len(originalData)),
 		},
-		Data: append([]byte(nil), originalData...), // copy
+		Data: append([]byte(nil), originalData...),
 	}
 
 	// Encrypt
@@ -33,6 +35,12 @@ func TestChaCha20Encryptor(t *testing.T) {
 
 	if bytes.Equal(chunk.Data, originalData) {
 		t.Errorf("ciphertext is identical to plaintext")
+	}
+
+	// Verify nonce is 24 bytes and non-zero
+	var zeroNonce [24]byte
+	if chunk.Header.Nonce == zeroNonce {
+		t.Errorf("expected non-zero random nonce")
 	}
 
 	// Decrypt
@@ -49,10 +57,84 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 }
 
+func TestChaCha20Encryptor_RandomNonces(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	originalData := []byte("identical payload across multiple chunk encryptions")
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     0,
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     0, // same index
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk1: %v", err)
+	}
+
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk2: %v", err)
+	}
+
+	if chunk1.Header.Nonce == chunk2.Header.Nonce {
+		t.Errorf("encrypting the same chunk twice produced identical nonces: %x", chunk1.Header.Nonce)
+	}
+
+	if bytes.Equal(chunk1.Data, chunk2.Data) {
+		t.Errorf("encrypting the same chunk twice produced identical ciphertexts")
+	}
+}
+
+func TestChaCha20Encryptor_TamperedNonce(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	originalData := []byte("tamper nonce authentication test payload")
+	chunk := &core.Chunk{
+		Header: core.ChunkHeader{
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	if err := enc.EncryptChunk(key, chunk); err != nil {
+		t.Fatalf("failed to encrypt: %v", err)
+	}
+
+	// Tamper with the nonce
+	chunk.Header.Nonce[0] ^= 0xFF
+
+	err := enc.DecryptChunk(key, chunk)
+	if err == nil {
+		t.Errorf("expected decryption/authentication to fail for tampered nonce")
+	}
+}
+
 func TestChaCha20Encryptor_Corruption(t *testing.T) {
 	enc := NewChaCha20Encryptor()
 	key := make([]byte, 32)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
 
 	chunk := &core.Chunk{
 		Header: core.ChunkHeader{
@@ -61,9 +143,11 @@ func TestChaCha20Encryptor_Corruption(t *testing.T) {
 		Data: []byte("hello"),
 	}
 
-	enc.EncryptChunk(key, chunk)
+	if err := enc.EncryptChunk(key, chunk); err != nil {
+		t.Fatalf("failed to encrypt: %v", err)
+	}
 
-	// Corrupt
+	// Corrupt ciphertext
 	chunk.Data[0] ^= 0xFF
 
 	err := enc.DecryptChunk(key, chunk)
