@@ -44,6 +44,8 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	pushMaxSessions := flag.Int("push-max-sessions", 1000, "Maximum active pending push sessions capacity")
+	pushSessionTTL := flag.Duration("push-session-ttl", 30*time.Minute, "Push session idle TTL timeout")
 
 	flag.Parse()
 
@@ -127,10 +129,15 @@ func main() {
 			}
 		}
 	}
-	push.NewStreamHandler(h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList)
+	pushHandler := push.NewStreamHandler(
+		h, eng, kdht, *allowPush, push.AuthPolicy(*pushAuthPolicy), allowedPublishersList,
+		push.WithMaxSessions(*pushMaxSessions),
+		push.WithSessionTTL(*pushSessionTTL),
+	)
 
-	// 7. Start Control-Plane DHT Announcements
+	// 7. Start Control-Plane DHT Announcements & Push Sweeper
 	if *allowPush {
+		pushHandler.StartSweeper(ctx)
 		discovery.StartStorageProviderHeartbeat(ctx, kdht, 10*time.Minute)
 	}
 
