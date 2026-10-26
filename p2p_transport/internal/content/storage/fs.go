@@ -17,6 +17,23 @@ type FSStorage struct {
 	baseDir string
 }
 
+const (
+	// ChunkHeaderSize is the fixed binary layout dimension of core.ChunkHeader (66 bytes).
+	ChunkHeaderSize = 66
+
+	// StandardChunkSize is the normal plaintext chunk size (32 KiB).
+	StandardChunkSize = 32 * 1024
+
+	// EncryptionOverhead includes nonce (12 bytes) + authentication tag (16 bytes).
+	EncryptionOverhead = 12 + 16
+
+	// MaxCiphertextSize is the largest encrypted chunk accepted (32800 bytes).
+	MaxCiphertextSize = StandardChunkSize + EncryptionOverhead
+
+	// MaxFrameSize is the maximum allowed file/frame size in the protocol (2 MiB).
+	MaxFrameSize = 2 * 1024 * 1024
+)
+
 func NewFSStorage(baseDir string) error {
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return err
@@ -94,24 +111,49 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+
+	fileSize := info.Size()
+
+	if fileSize < ChunkHeaderSize {
+		return nil, fmt.Errorf("chunk file size %d is less than header size %d", fileSize, ChunkHeaderSize)
+	}
+
+	if fileSize > MaxFrameSize {
+		return nil, fmt.Errorf("chunk file size %d exceeds maximum frame size %d", fileSize, MaxFrameSize)
+	}
+
+	payloadFromFile := fileSize - ChunkHeaderSize
+
 	chunk := &core.Chunk{}
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read chunk data: %w", err)
+	payloadSize := chunk.Header.CipherSize
+	if payloadSize == 0 {
+		payloadSize = chunk.Header.PlainSize
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
-	chunk.Data = data
+	if int64(payloadSize) > MaxFrameSize-ChunkHeaderSize {
+		return nil, fmt.Errorf("header payload size %d exceeds maximum allowed bound %d", payloadSize, MaxFrameSize-ChunkHeaderSize)
+	}
 
+	if int64(payloadSize) != payloadFromFile {
+		return nil, fmt.Errorf("chunk header payload size %d does not match file payload size %d", payloadSize, payloadFromFile)
+	}
+
+	data := make([]byte, payloadSize)
+	if payloadSize > 0 {
+		if _, err := io.ReadFull(f, data); err != nil {
+			return nil, fmt.Errorf("failed to read chunk data: %w", err)
+		}
+	}
+
+	chunk.Data = data
 	return chunk, nil
 }
 
