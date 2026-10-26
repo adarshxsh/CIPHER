@@ -51,7 +51,7 @@ const (
 	MaxFilenameSize     = 255
 	MaxMIMETypeSize     = 128
 	MaxMetadataSize     = 2 * 1024
-	MaxErrorMessageSize = 512
+	MaxErrorMessageSize = 256
 )
 
 const (
@@ -86,6 +86,7 @@ const (
 	MaxChunksPerRequest      = 1
 	MaxTransactionsPerStream = 1
 	MaxMessagesPerStream     = 4
+	DefaultMaxErrorLogsPerStream = 5
 )
 
 const (

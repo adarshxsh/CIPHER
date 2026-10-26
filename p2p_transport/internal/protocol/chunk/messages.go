@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +208,90 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+const maxErrorPayloadStringLength = 256
+const hexDigits = "0123456789abcdef"
+
+func appendHexByte(sb *strings.Builder, b byte) {
+	sb.WriteString("\\x")
+	sb.WriteByte(hexDigits[b>>4])
+	sb.WriteByte(hexDigits[b&0x0f])
+}
+
+func sanitizeErrorString(b []byte) string {
+	if len(b) > maxErrorPayloadStringLength {
+		b = b[:maxErrorPayloadStringLength]
+	}
+
+	needsSanitize := false
+	for _, ch := range b {
+		if ch < 0x20 || ch == 0x7f {
+			needsSanitize = true
+			break
+		}
+	}
+
+	if !needsSanitize {
+		for i := 0; i < len(b); {
+			r, size := utf8.DecodeRune(b[i:])
+			if r == utf8.RuneError || !unicode.IsPrint(r) {
+				needsSanitize = true
+				break
+			}
+			i += size
+		}
+	}
+
+	if !needsSanitize {
+		return string(b)
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(b) * 2)
+
+	for i := 0; i < len(b); {
+		ch := b[i]
+		if ch < 0x20 || ch == 0x7f {
+			switch ch {
+			case '\n':
+				sb.WriteString(`\n`)
+			case '\r':
+				sb.WriteString(`\r`)
+			case '\t':
+				sb.WriteString(`\t`)
+			case '\b':
+				sb.WriteString(`\b`)
+			case '\f':
+				sb.WriteString(`\f`)
+			case '\v':
+				sb.WriteString(`\v`)
+			default:
+				appendHexByte(&sb, ch)
+			}
+			i++
+		} else if ch < 0x80 {
+			sb.WriteByte(ch)
+			i++
+		} else {
+			r, size := utf8.DecodeRune(b[i:])
+			if r == utf8.RuneError || !unicode.IsPrint(r) {
+				for k := 0; k < size; k++ {
+					appendHexByte(&sb, b[i+k])
+				}
+			} else {
+				sb.WriteRune(r)
+			}
+			i += size
+		}
+	}
+
+	return sb.String()
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	msgBytes := payload[1:]
+	return code, sanitizeErrorString(msgBytes), nil
 }

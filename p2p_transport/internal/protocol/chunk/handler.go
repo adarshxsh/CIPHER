@@ -16,8 +16,9 @@ import (
 var TestCorruptProb float64
 
 type StreamHandler struct {
-	host   host.Host
-	engine *engine.ContentEngine
+	host         host.Host
+	engine       *engine.ContentEngine
+	MaxErrorLogs int
 }
 
 func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
@@ -29,9 +30,22 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 	return handler
 }
 
+func (h *StreamHandler) shouldLogError(count *int) bool {
+	maxLogs := h.MaxErrorLogs
+	if maxLogs <= 0 {
+		maxLogs = DefaultMaxErrorLogsPerStream
+	}
+	if *count < maxLogs {
+		*count++
+		return true
+	}
+	return false
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
 	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	errorLogCount := 0
 
 	for {
 		msg, err := ReadMessage(s)
@@ -55,7 +69,12 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		case MsgRequestManifest:
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, &errorLogCount)
+		case MsgError:
+			code, msgStr, _ := ParseError(msg.Payload)
+			if h.shouldLogError(&errorLogCount) {
+				log.Printf("[Chunk Protocol] Peer reported error: [%d] %s", code, msgStr)
+			}
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
@@ -84,7 +103,7 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, errorLogCount *int) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -123,7 +142,9 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 	}
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
-		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		if h.shouldLogError(errorLogCount) {
+			log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
+		}
 		return
 	}
 	if ackMsg.Type != MsgAck {
