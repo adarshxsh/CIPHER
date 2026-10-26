@@ -32,6 +32,13 @@ func NewContentEngine(
 	keys core.KeyProvider,
 	manifestStore core.ManifestStore,
 ) *ContentEngine {
+	type keyLoader interface {
+		Load() error
+	}
+	if loader, ok := keys.(keyLoader); ok {
+		_ = loader.Load()
+	}
+
 	return &ContentEngine{
 		config:        config,
 		chunker:       chunker.NewChunker(config),
