@@ -11,6 +11,7 @@ import (
 
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol"
+	"cipher/internal/transport"
 )
 
 var TestCorruptProb float64
@@ -20,21 +21,29 @@ type StreamHandler struct {
 	engine *engine.ContentEngine
 }
 
-func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
+func NewStreamHandler(h host.Host, eng *engine.ContentEngine, opts ...transport.TimeoutOption) *StreamHandler {
 	handler := &StreamHandler{
 		host:   h,
 		engine: eng,
 	}
-	h.SetStreamHandler(protocol.ChunkTransportProtocolID, handler.handleStream)
+	if h != nil {
+		transport.SetStreamHandler(h, protocol.ChunkTransportProtocolID, handler.handleStream, opts...)
+	}
 	return handler
 }
 
+// HandleStream processes an incoming stream using TimeoutStream wrapper.
+func (h *StreamHandler) HandleStream(s network.Stream) {
+	h.handleStream(s)
+}
+
 func (h *StreamHandler) handleStream(s network.Stream) {
-	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	ts := transport.NewTimeoutStream(s)
+	defer ts.Close()
+	log.Printf("[Chunk Protocol] New stream from %s", ts.Conn().RemotePeer())
 
 	for {
-		msg, err := ReadMessage(s)
+		msg, err := ReadMessage(ts)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
 				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
