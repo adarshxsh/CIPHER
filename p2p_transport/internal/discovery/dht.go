@@ -9,13 +9,21 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
-// NewDHT creates and returns a Kademlia DHT bound to the given host.
-// mode should be dht.ModeServer for peers (they help route/store records too,
-// matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+// NewDHT creates and returns a Kademlia DHT bound to the given host
+// with multiaddress range filtering and IP validation configured by default.
+func NewDHT(h host.Host, mode dht.ModeOpt, extraOpts ...dht.Option) (*dht.IpfsDHT, error) {
+	opts := []dht.Option{
+		dht.Mode(mode),
+		dht.AddressFilter(func(addrs []ma.Multiaddr) []ma.Multiaddr {
+			return FilterMultiaddrs(addrs, DefaultFilterOptions)
+		}),
+	}
+	opts = append(opts, extraOpts...)
+
+	kdht, err := dht.New(h, opts...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
