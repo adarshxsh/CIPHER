@@ -211,6 +211,7 @@ func main() {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
 		keys.Put(ctx, contentID, kBytes)
+		core.ZeroBytes(kBytes)
 	}
 
 	// 6. Data Plane: Resolve Manifest

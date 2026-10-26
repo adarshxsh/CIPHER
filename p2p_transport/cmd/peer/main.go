@@ -246,10 +246,14 @@ func main() {
 			)
 		}
 
-		key, _ := keys.Get(ctx, m.Descriptor.ID)
+		keyBytes := []byte(nil)
+		if kh, err := keys.Get(ctx, m.Descriptor.ID); err == nil {
+			defer kh.Close()
+			keyBytes = kh.Bytes()
+		}
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: %x", keyBytes)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -264,7 +268,7 @@ func main() {
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
 			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyBytes)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -374,6 +378,7 @@ func main() {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
 			keys.Put(ctx, contentID, kBytes)
+			core.ZeroBytes(kBytes)
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.
