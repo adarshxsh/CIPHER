@@ -1,11 +1,11 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
-	"sort"
 
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
@@ -123,7 +123,9 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 	return m, nil
 }
 
-// Reassemble reads the manifest, fetches chunks, decrypts them, verifies integrity, and writes to w.
+// Reassemble reads the manifest, fetches chunks sequentially, decrypts them, verifies integrity,
+// and writes chunk bytes directly to w using a 64KB fixed-size streaming buffer without buffering in RAM.
+// Upon completion, it flushes and syncs the destination file handle.
 func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w io.Writer) error {
 	// Retrieve key
 	key, err := e.keys.Get(ctx, m.Descriptor.ID)
@@ -131,13 +133,12 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 		return fmt.Errorf("failed to get content key: %w", err)
 	}
 
-	// Fetch all chunks, decrypt and verify
-	// For simplicity in Milestone 7, we fetch sequentially.
-	// But chunks can be fetched in parallel. We'll store them in a slice and sort by index.
-
-	chunks := make([]*core.Chunk, 0, len(m.ChunkIDs))
+	// Requirement 2: Fixed-size streaming buffer (64KB)
+	const streamingBufferSize = 64 * 1024
+	bw := bufio.NewWriterSize(w, streamingBufferSize)
 
 	for _, chunkID := range m.ChunkIDs {
+		// Requirement 1: Stream chunk bytes directly to destination
 		chunk, err := e.source.GetChunk(ctx, chunkID)
 		if err != nil {
 			return fmt.Errorf("failed to get chunk %x: %w", chunkID, err)
@@ -149,26 +150,63 @@ func (e *ContentEngine) Reassemble(ctx context.Context, m *manifest.Manifest, w 
 			return fmt.Errorf("corrupted chunk %x: hash mismatch", chunkID)
 		}
 
-		// Decrypt
+		// Decrypt chunk in place
 		if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
 			return fmt.Errorf("failed to decrypt chunk %x: %w", chunkID, err)
 		}
 
-		chunks = append(chunks, chunk)
+		// Requirement 1: Write chunk bytes directly to destination buffer/handle
+		if _, err := bw.Write(chunk.Data); err != nil {
+			return fmt.Errorf("failed to write decrypted chunk: %w", err)
+		}
+
+		// Release memory immediately to ensure flat O(1) memory overhead
+		chunk.Data = nil
 	}
 
-	// Sort by index just in case they were fetched out of order
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Header.Index < chunks[j].Header.Index
-	})
+	// Requirement 3: System must flush and sync file handles upon completion
+	if err := bw.Flush(); err != nil {
+		return fmt.Errorf("failed to flush buffer: %w", err)
+	}
 
-	// Write out
-	for _, chunk := range chunks {
-		if _, err := w.Write(chunk.Data); err != nil {
-			return fmt.Errorf("failed to write decrypted chunk: %w", err)
+	type syncer interface {
+		Sync() error
+	}
+	if s, ok := w.(syncer); ok {
+		if err := s.Sync(); err != nil {
+			return fmt.Errorf("failed to sync file: %w", err)
 		}
 	}
 
+	return nil
+}
+
+// ReassembleChunkAt decrypts a chunk and writes it directly to wAt at chunk.Header.Offset.
+// This supports concurrent chunk receipt and out-of-order writes via sparse file offsets.
+func (e *ContentEngine) ReassembleChunkAt(ctx context.Context, contentID core.ContentID, chunk *core.Chunk, wAt io.WriterAt) error {
+	key, err := e.keys.Get(ctx, contentID)
+	if err != nil {
+		return fmt.Errorf("failed to get content key: %w", err)
+	}
+
+	// Verify chunk hash matches ID
+	hash := e.digest.Sum(chunk.Data)
+	if hash != core.Hash(chunk.Header.ID) {
+		return fmt.Errorf("corrupted chunk %x: hash mismatch", chunk.Header.ID)
+	}
+
+	// Decrypt
+	if err := e.encryptor.DecryptChunk(key, chunk); err != nil {
+		return fmt.Errorf("failed to decrypt chunk %x: %w", chunk.Header.ID, err)
+	}
+
+	// Sparse write out-of-order chunk directly at destination file offset
+	if _, err := wAt.WriteAt(chunk.Data, chunk.Header.Offset); err != nil {
+		return fmt.Errorf("failed to write chunk %x at offset %d: %w", chunk.Header.ID, chunk.Header.Offset, err)
+	}
+
+	// Clear chunk memory immediately
+	chunk.Data = nil
 	return nil
 }
 
