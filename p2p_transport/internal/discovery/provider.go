@@ -4,10 +4,20 @@ import (
 	"cipher/internal/content/core"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+// Default settings for republisher worker pool and item timeout.
+const DefaultMaxRepublishWorkers = 10
+
+var (
+	MaxRepublishWorkers  = DefaultMaxRepublishWorkers
+	RepublishItemTimeout = 15 * time.Second
+	provideFn            = Provide
 )
 
 // StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
@@ -129,10 +139,54 @@ func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestSto
 		return
 	}
 
-	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
-	for _, id := range manifests {
-		if err := Provide(ctx, kdht, id); err != nil {
-			fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
-		}
+	if ctx.Err() != nil {
+		return
 	}
+
+	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
+
+	workers := MaxRepublishWorkers
+	if workers <= 0 {
+		workers = DefaultMaxRepublishWorkers
+	}
+	if workers > len(manifests) {
+		workers = len(manifests)
+	}
+
+	jobs := make(chan core.ContentID, len(manifests))
+	for _, id := range manifests {
+		jobs <- id
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case id, ok := <-jobs:
+					if !ok {
+						return
+					}
+
+					itemCtx, cancel := context.WithTimeout(ctx, RepublishItemTimeout)
+					err := provideFn(itemCtx, kdht, id)
+					cancel()
+
+					if err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
