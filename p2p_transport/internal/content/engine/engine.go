@@ -10,17 +10,20 @@ import (
 	"cipher/internal/content/chunker"
 	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 )
 
 type ContentEngine struct {
-	config    core.EngineConfig
-	chunker   *chunker.Chunker
-	encryptor core.Encryptor
-	digest    core.Digest
-	source    core.ChunkSource
-	sink      core.ChunkSink
+	config       core.EngineConfig
+	chunker      *chunker.Chunker
+	encryptor    core.Encryptor
+	digest       core.Digest
+	source       core.ChunkSource
+	sink         core.ChunkSink
 	manifestStore core.ManifestStore
-	keys      core.KeyProvider
+	keys         core.KeyProvider
+	publisherKey libp2pcrypto.PrivKey
 }
 
 func NewContentEngine(
@@ -42,6 +45,16 @@ func NewContentEngine(
 		manifestStore: manifestStore,
 		keys:          keys,
 	}
+}
+
+// SetPublisherKey sets the publisher private key used to sign ingested manifests.
+func (e *ContentEngine) SetPublisherKey(key libp2pcrypto.PrivKey) {
+	e.publisherKey = key
+}
+
+// GetPublisherKey returns the publisher private key if set.
+func (e *ContentEngine) GetPublisherKey() libp2pcrypto.PrivKey {
+	return e.publisherKey
 }
 
 // Ingest reads a file, chunks it, encrypts it, stores it, and returns the manifest.
@@ -118,6 +131,19 @@ func (e *ContentEngine) Ingest(ctx context.Context, r io.Reader, mtype manifest.
 			ChunkNonceSize: 12,
 			KeyID:          "embedded",
 		},
+	}
+
+	pubKey := e.publisherKey
+	if pubKey == nil {
+		var err error
+		pubKey, _, err = libp2pcrypto.GenerateKeyPair(libp2pcrypto.Ed25519, -1)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate publisher key: %w", err)
+		}
+	}
+
+	if err := m.Sign(pubKey); err != nil {
+		return nil, fmt.Errorf("failed to sign manifest: %w", err)
 	}
 
 	return m, nil
