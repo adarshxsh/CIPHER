@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
@@ -33,11 +34,16 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
-	// Start workers
+	var wg sync.WaitGroup
 	activeWorkers := 0
+
+	// Start workers
 	for _, source := range sources {
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
@@ -45,16 +51,26 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			continue
 		}
 		activeWorkers++
+		wg.Add(1)
 		go func(src Source, c *chunk.Client) {
+			defer wg.Done()
 			defer c.Close()
 			runWorker(ctx, src, c, s.Engine, queue, results)
-			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
+			select {
+			case results <- WorkerResult{Error: fmt.Errorf("worker_done")}:
+			case <-ctx.Done():
+			}
 		}(source, client)
 	}
 	
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
+
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	
 	pendingTasks := len(tasks)
 	
@@ -92,7 +108,11 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
-				completions <- res
+				select {
+				case completions <- res:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				pendingTasks--
 			}
 		}
