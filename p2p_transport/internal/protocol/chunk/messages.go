@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +208,109 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+const (
+	MaxErrorStringLength = 256
+	TruncationMarker     = "..."
+)
+
+// SanitizeErrorString replaces newlines, ANSI control codes, ASCII control characters,
+// and non-printable bytes with safe escaped representations.
+func SanitizeErrorString(s string) string {
+	if !needsSanitization(s) {
+		return s
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(s))
+
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&sb, "\\x%02x", s[i])
+			i++
+			continue
+		}
+		i += size
+
+		switch r {
+		case '\n':
+			sb.WriteString("\\n")
+		case '\r':
+			sb.WriteString("\\r")
+		case '\t':
+			sb.WriteString("\\t")
+		default:
+			if r < 0x20 || r == 0x7f || !unicode.IsPrint(r) {
+				if r <= 0xFF {
+					fmt.Fprintf(&sb, "\\x%02x", r)
+				} else {
+					fmt.Fprintf(&sb, "\\u%04x", r)
+				}
+			} else {
+				sb.WriteRune(r)
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+func needsSanitization(s string) bool {
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			return true
+		}
+		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 || r == 0x7f || !unicode.IsPrint(r) {
+			return true
+		}
+		i += size
+	}
+	return false
+}
+
+func truncateToRuneBoundary(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
+		maxLen--
+	}
+	return s[:maxLen]
+}
+
+// SanitizeAndTruncateErrorString sanitizes and truncates error payload strings to maxLen (default 256 bytes).
+// Exceeding strings are truncated and marked with a visual truncation marker ("...").
+func SanitizeAndTruncateErrorString(s string, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = MaxErrorStringLength
+	}
+
+	truncated := false
+	if len(s) > maxLen {
+		s = truncateToRuneBoundary(s, maxLen)
+		truncated = true
+	}
+
+	sanitized := SanitizeErrorString(s)
+
+	if len(sanitized) > maxLen {
+		sanitized = truncateToRuneBoundary(sanitized, maxLen)
+		truncated = true
+	}
+
+	if truncated {
+		return sanitized + TruncationMarker
+	}
+	return sanitized
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+	code := ErrorCode(payload[0])
+	rawMsg := string(payload[1:])
+	sanitizedMsg := SanitizeAndTruncateErrorString(rawMsg, MaxErrorStringLength)
+	return code, sanitizedMsg, nil
 }
