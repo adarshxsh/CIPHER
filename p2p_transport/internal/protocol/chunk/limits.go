@@ -111,7 +111,7 @@ func MaxPayloadSizeForMessage(messageType MessageType) int {
 		return MaxChunkRequestSize
 
 	case MsgManifest:
-		return MaxManifestSize
+		return ContentIDSize + MaxManifestSize
 
 	case MsgRequestChunk:
 		return MaxChunkRequestSize

@@ -128,3 +128,15 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+func TestParsePushManifest_MaxManifestSize(t *testing.T) {
+	var contentID core.ContentID
+	assigned := []core.ChunkID{}
+	oversizedManifestJSON := make([]byte, MaxManifestSize+1)
+
+	msg := BuildPushManifest(contentID, assigned, oversizedManifestJSON)
+	_, _, _, err := ParsePushManifest(msg.Payload)
+	if err == nil {
+		t.Fatal("expected ParsePushManifest to reject oversized manifest payload, got nil")
+	}
+}
