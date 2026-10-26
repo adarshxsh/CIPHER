@@ -17,15 +17,32 @@ type WorkerResult struct {
 
 var TestThrottle time.Duration
 
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult, rep *ReputationManager) {
+	peerIDStr := source.PeerID.String()
 	for {
+		if rep != nil && rep.IsBanned(peerIDStr) {
+			return
+		}
+
 		task, ok := queue.Next()
 		if !ok {
 			return // Queue empty
 		}
-		
+
+		if rep != nil && rep.IsBanned(peerIDStr) {
+			queue.Push(task)
+			return
+		}
+
+		if source.Available != nil {
+			if _, has := source.Available[task.ChunkID]; !has {
+				// We don't think this source has the chunk.
+				// For now, we still try since discovery isn't fully robust.
+			}
+		}
+
 		// If this source already returned candidate miss for this task, requeue and yield
-		if task.MissedPeers != nil && task.MissedPeers[source.PeerID.String()] {
+		if task.MissedPeers != nil && task.MissedPeers[peerIDStr] {
 			queue.Push(task)
 			select {
 			case <-ctx.Done():
@@ -34,10 +51,10 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			}
 			continue
 		}
-		
+
 		chunkData, err := client.FetchChunk(ctx, task.ChunkID)
 		if err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			results <- WorkerResult{Task: task, Error: err, PeerID: peerIDStr}
 			continue
 		}
 
@@ -46,10 +63,10 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {
-			results <- WorkerResult{Task: task, Error: err, PeerID: source.PeerID.String()}
+			results <- WorkerResult{Task: task, Error: err, PeerID: peerIDStr}
 			continue
 		}
 
-		results <- WorkerResult{Task: task, Error: nil, PeerID: source.PeerID.String()}
+		results <- WorkerResult{Task: task, Error: nil, PeerID: peerIDStr}
 	}
 }

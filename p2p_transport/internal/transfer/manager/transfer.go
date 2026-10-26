@@ -26,6 +26,7 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	Reputation     *scheduler.ReputationManager
 }
 
 func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
@@ -33,6 +34,7 @@ func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transpo
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		Reputation:     scheduler.NewReputationManager(scheduler.DefaultReputationConfig()),
 	}
 }
 
@@ -113,6 +115,9 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 
 	// 5. Run Scheduler
 	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	if tm.Reputation != nil {
+		sched.Reputation = tm.Reputation
+	}
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
