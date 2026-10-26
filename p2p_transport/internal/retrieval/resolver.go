@@ -4,6 +4,7 @@ import (
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
+	"cipher/internal/discovery"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
 	"context"
@@ -27,6 +28,18 @@ func ResolveManifest(
 	var lastErr error
 
 	for _, provider := range providers {
+
+		if kdht != nil {
+			if err := discovery.VerifyProviderForContent(ctx, kdht, id, provider); err != nil {
+				log.Printf(
+					"[DHT] Rejecting provider %s: signature/expiry verification failed: %v",
+					provider,
+					err,
+				)
+				lastErr = err
+				continue
+			}
+		}
 
 		client, err := chunk.NewClient(ctx, t, provider, eng)
 		if err != nil {

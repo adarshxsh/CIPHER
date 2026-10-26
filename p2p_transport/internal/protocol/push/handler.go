@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -305,7 +306,11 @@ func (h *StreamHandler) handlePushBatchComplete(s network.Stream, msg *PushMessa
 		go func() {
 			dhtCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if err := discovery.Provide(dhtCtx, h.kdht, contentID); err != nil {
+			var priv crypto.PrivKey
+			if h.host != nil {
+				priv = h.host.Peerstore().PrivKey(h.host.ID())
+			}
+			if err := discovery.Provide(dhtCtx, h.kdht, priv, contentID); err != nil {
 				log.Printf("[Push Protocol] Warning: Failed to announce %x on DHT: %v", contentID, err)
 			} else {
 				log.Printf("[Push Protocol] [✓] Successfully announced ContentID %x on DHT", contentID)
