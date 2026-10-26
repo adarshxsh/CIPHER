@@ -22,6 +22,7 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Reputation  *ReputationTracker
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -29,6 +30,7 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		Reputation:  NewReputationTracker(),
 	}
 }
 
@@ -36,9 +38,18 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
 	
+	if s.Reputation == nil {
+		s.Reputation = NewReputationTracker()
+	}
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
+		if s.Reputation.IsExcluded(source.PeerID.String()) {
+			log.Printf("[Scheduler] Excluding peer %s with health score %.1f (< 30)", source.PeerID, s.Reputation.GetScore(source.PeerID.String()))
+			continue
+		}
+
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
@@ -47,7 +58,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Reputation)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
