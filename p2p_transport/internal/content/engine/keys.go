@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/crypto"
 )
 
 // LocalKeyProvider is an in-memory implementation of core.KeyProvider.
@@ -23,6 +24,9 @@ func NewLocalKeyProvider() *LocalKeyProvider {
 func (p *LocalKeyProvider) Get(ctx context.Context, id core.ContentID) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.keys == nil {
+		return nil, errors.New("key provider closed")
+	}
 	key, exists := p.keys[id]
 	if !exists {
 		return nil, errors.New("key not found")
@@ -36,6 +40,12 @@ func (p *LocalKeyProvider) Get(ctx context.Context, id core.ContentID) ([]byte, 
 func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.keys == nil {
+		p.keys = make(map[core.ContentID][]byte)
+	}
+	if existing, exists := p.keys[id]; exists {
+		crypto.Zeroize(existing)
+	}
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
 	p.keys[id] = keyCopy
@@ -45,6 +55,26 @@ func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byt
 func (p *LocalKeyProvider) Delete(ctx context.Context, id core.ContentID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.keys, id)
+	if p.keys == nil {
+		return nil
+	}
+	if key, exists := p.keys[id]; exists {
+		crypto.Zeroize(key)
+		delete(p.keys, id)
+	}
+	return nil
+}
+
+func (p *LocalKeyProvider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.keys == nil {
+		return nil
+	}
+	for id, key := range p.keys {
+		crypto.Zeroize(key)
+		delete(p.keys, id)
+	}
+	p.keys = nil
 	return nil
 }

@@ -124,6 +124,7 @@ func main() {
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
 	keys := engine.NewLocalKeyProvider()
+	defer keys.Close()
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -265,6 +266,7 @@ func main() {
 			"  -fetch \"%x\" \\\n" +
 			"  -key \"%x\" \\\n" +
 			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+		crypto.Zeroize(key)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
@@ -374,6 +376,7 @@ func main() {
 				log.Fatalf("Invalid key hex format or length (must be 32 bytes)")
 			}
 			keys.Put(ctx, contentID, kBytes)
+			crypto.Zeroize(kBytes)
 		}
 
 		// ResolveManifest is a new function that encapsulates the logic of resolving the manifest from the target peers.

@@ -45,6 +45,7 @@ type KeyProvider interface {
 	Get(ctx context.Context, id ContentID) ([]byte, error)
 	Put(ctx context.Context, id ContentID, key []byte) error
 	Delete(ctx context.Context, id ContentID) error
+	Close() error
 }
 
 type Scheduler interface{}
