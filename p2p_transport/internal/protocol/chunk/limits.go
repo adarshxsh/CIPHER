@@ -1,5 +1,9 @@
 package chunk
 
+import (
+	"cipher/internal/content/core"
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
@@ -19,7 +23,7 @@ const (
 	EncryptionOverhead = ChaCha20NonceSize + Poly1305TagSize
 
 	// MaxCiphertextSize is the largest encrypted chunk accepted.
-	MaxCiphertextSize = StandardChunkSize + EncryptionOverhead
+	MaxCiphertextSize = core.MaxCiphertextSize
 )
 
 const (

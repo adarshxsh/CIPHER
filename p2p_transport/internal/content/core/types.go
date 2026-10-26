@@ -2,6 +2,14 @@ package core
 
 import "context"
 
+const (
+	// MaxCiphertextSize is the maximum allowed encrypted chunk payload size.
+	MaxCiphertextSize = 2 * 1024 * 1024
+
+	// MaxManifestSize is the maximum allowed manifest file size.
+	MaxManifestSize = 2*1024*1024 - 3
+)
+
 type ChunkID [32]byte
 type ContentID [32]byte
 type Hash [32]byte
