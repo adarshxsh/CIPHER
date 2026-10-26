@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/content/manifest"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol"
 	"cipher/internal/transport"
@@ -63,10 +64,28 @@ func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error)
 
 	respID, data, err := ParseManifest(resp.Payload)
 	if err != nil {
+		c.stream.Reset()
 		return nil, err
 	}
 	if respID != id {
+		c.stream.Reset()
 		return nil, fmt.Errorf("content ID mismatch in response")
+	}
+
+	m, err := manifest.Deserialize(data)
+	if err != nil {
+		c.stream.Reset()
+		return nil, fmt.Errorf("failed to deserialize manifest: %w", err)
+	}
+
+	if !m.Verify() {
+		c.stream.Reset()
+		return nil, fmt.Errorf("invalid or unauthenticated manifest signature")
+	}
+
+	if m.Descriptor.ID != id {
+		c.stream.Reset()
+		return nil, fmt.Errorf("manifest descriptor ID mismatch")
 	}
 
 	return data, nil
