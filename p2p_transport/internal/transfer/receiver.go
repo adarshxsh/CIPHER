@@ -3,12 +3,15 @@ package transfer
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
@@ -38,7 +41,10 @@ func Receive(s network.Stream) error {
 		return fmt.Errorf("failed to create downloads directory: %w", err)
 	}
 
-	outPath := filepath.Join(downloadsDir, header.Filename)
+	outPath, err := SanitizeAndValidatePath(header.Filename, downloadsDir)
+	if err != nil {
+		return fmt.Errorf("invalid header filename or path containment failure: %w", err)
+	}
 	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
@@ -94,4 +100,56 @@ func Receive(s network.Stream) error {
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
 	return nil
+}
+
+// SanitizeAndValidatePath sanitizes the wire header filename and verifies that
+// the target output path resides strictly within the downloads directory.
+func SanitizeAndValidatePath(filename string, downloadsDir string) (string, error) {
+	if len(filename) == 0 {
+		return "", errors.New("filename cannot be empty")
+	}
+
+	for _, r := range filename {
+		if r == '\x00' || unicode.IsControl(r) {
+			return "", fmt.Errorf("filename contains invalid character: %q", r)
+		}
+	}
+
+	// Normalize backslashes to forward slashes
+	normalized := strings.ReplaceAll(filename, "\\", "/")
+	cleaned := filepath.Clean(normalized)
+
+	// Strip volume name if present (e.g., "C:")
+	vol := filepath.VolumeName(cleaned)
+	pathNoVol := strings.TrimPrefix(cleaned, vol)
+
+	base := filepath.Base(pathNoVol)
+	if base == "." || base == ".." || base == "/" || base == "\\" || base == "" || strings.TrimSpace(base) == "" {
+		return "", fmt.Errorf("invalid or traversal filename: %q", filename)
+	}
+
+	absDownloadsDir, err := filepath.Abs(downloadsDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for downloads directory: %w", err)
+	}
+	cleanDownloadsDir := filepath.Clean(absDownloadsDir)
+
+	outPath := filepath.Join(cleanDownloadsDir, base)
+	absOutPath, err := filepath.Abs(outPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for target file: %w", err)
+	}
+	cleanOutPath := filepath.Clean(absOutPath)
+
+	rel, err := filepath.Rel(cleanDownloadsDir, cleanOutPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path traversal detected: %q is not contained within %q", cleanOutPath, cleanDownloadsDir)
+	}
+
+	expectedPrefix := cleanDownloadsDir + string(os.PathSeparator)
+	if !strings.HasPrefix(cleanOutPath, expectedPrefix) {
+		return "", fmt.Errorf("path containment failed: %q is outside %q", cleanOutPath, cleanDownloadsDir)
+	}
+
+	return cleanOutPath, nil
 }
