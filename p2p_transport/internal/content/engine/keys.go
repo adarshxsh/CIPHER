@@ -45,6 +45,11 @@ func (p *LocalKeyProvider) Put(ctx context.Context, id core.ContentID, key []byt
 func (p *LocalKeyProvider) Delete(ctx context.Context, id core.ContentID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.keys, id)
+	if b, ok := p.keys[id]; ok {
+		for i := range b {
+			b[i] = 0
+		}
+		delete(p.keys, id)
+	}
 	return nil
 }
