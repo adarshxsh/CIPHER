@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -104,4 +105,23 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestReadMessage_OversizedControlMessage(t *testing.T) {
+	var buf bytes.Buffer
+	frameSize := uint32(2 * 1024 * 1024) // 2MB
+	if err := binary.Write(&buf, binary.LittleEndian, frameSize); err != nil {
+		t.Fatalf("failed to write frame size: %v", err)
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, chunk.CurrentMessageVersion); err != nil {
+		t.Fatalf("failed to write version: %v", err)
+	}
+	if err := buf.WriteByte(byte(chunk.MsgAck)); err != nil {
+		t.Fatalf("failed to write message type: %v", err)
+	}
+
+	_, err := chunk.ReadMessage(&buf)
+	if err == nil {
+		t.Fatalf("expected ReadMessage to reject oversized MsgAck control frame, got nil error")
+	}
 }

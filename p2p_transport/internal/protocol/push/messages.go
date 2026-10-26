@@ -78,12 +78,36 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	return err
 }
 
+// MaxPayloadSizeForPushMessage returns the maximum payload size accepted for a
+// particular push protocol message type.
+func MaxPayloadSizeForPushMessage(msgType PushMessageType) int {
+	switch msgType {
+	case MsgPushManifest:
+		return int(MaxManifestSize)
+	case MsgPushManifestAck:
+		return 33
+	case MsgPushChunk:
+		return int(MaxChunkSize)
+	case MsgPushChunkAck:
+		return 33
+	case MsgPushBatchComplete:
+		return 32
+	case MsgPushBatchCompleteAck:
+		return 33
+	case MsgPushError:
+		return 1024
+	default:
+		return int(MaxMessageSize - 3)
+	}
+}
+
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
-	var size uint32
-	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+	var header [7]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
 
+	size := binary.LittleEndian.Uint32(header[0:4])
 	if size > MaxMessageSize {
 		return nil, fmt.Errorf("message size %d exceeds maximum frame size %d", size, MaxMessageSize)
 	}
@@ -91,26 +115,34 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, err
+	version := binary.LittleEndian.Uint16(header[4:6])
+	if version == 0 {
+		return nil, errors.New("invalid protocol version")
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
+	msgType := PushMessageType(header[6])
+	maxPayload := MaxPayloadSizeForPushMessage(msgType)
+	if maxPayload <= 0 {
+		maxPayload = int(MaxMessageSize - 3)
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
-		return nil, err
+	payloadSize := size - 3
+	if int(payloadSize) > maxPayload {
+		return nil, fmt.Errorf("payload size %d exceeds limit %d for push message type %d", payloadSize, maxPayload, msgType)
 	}
 
-	return msg, nil
+	payload := make([]byte, payloadSize)
+	if payloadSize > 0 {
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
+	}
+
+	return &PushMessage{
+		Version: version,
+		Type:    msgType,
+		Payload: payload,
+	}, nil
 }
 
 // -- Payload Builders & Parsers --
