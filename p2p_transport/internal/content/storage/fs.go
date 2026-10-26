@@ -85,8 +85,20 @@ func (s *FSStorage) PutChunk(ctx context.Context, chunk *core.Chunk) error {
 	return os.Rename(tmpPath, path)
 }
 
-func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk, error) {
-	path := s.pathForChunk(id)
+// MaxChunkSize defines the upper limit for chunk file size (1MB).
+const MaxChunkSize = core.MaxChunkSize
+
+// ReadChunk reads a chunk file from disk after verifying its size against MaxChunkSize,
+// ensuring buffer allocation occurs only after size validation passes.
+func ReadChunk(path string) (*core.Chunk, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.Size() > MaxChunkSize {
+		return nil, fmt.Errorf("chunk file size %d exceeds MaxChunkSize limit (%d)", info.Size(), MaxChunkSize)
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -99,20 +111,28 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	headerSize := int64(binary.Size(chunk.Header))
+	if info.Size() < headerSize {
+		return nil, fmt.Errorf("chunk file size %d smaller than header size %d", info.Size(), headerSize)
+	}
+
+	dataSize := info.Size() - headerSize
+	data := make([]byte, dataSize)
+	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
 	chunk.Data = data
-
 	return chunk, nil
+}
+
+func (s *FSStorage) ReadChunk(path string) (*core.Chunk, error) {
+	return ReadChunk(path)
+}
+
+func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk, error) {
+	path := s.pathForChunk(id)
+	return ReadChunk(path)
 }
 
 func (s *FSStorage) manifestPath(id core.ContentID) string {

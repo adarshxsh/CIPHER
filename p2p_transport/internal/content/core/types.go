@@ -2,6 +2,9 @@ package core
 
 import "context"
 
+// MaxChunkSize defines the upper limit for chunk file size (1MB).
+const MaxChunkSize int64 = 1 * 1024 * 1024
+
 type ChunkID [32]byte
 type ContentID [32]byte
 type Hash [32]byte
