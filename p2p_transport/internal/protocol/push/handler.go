@@ -25,6 +25,9 @@ type AuthPolicy string
 const (
 	AuthPolicyOpen      AuthPolicy = "open"
 	AuthPolicyAllowlist AuthPolicy = "allowlist"
+
+	DefaultSessionTTL    = 10 * time.Minute
+	DefaultSweepInterval = 1 * time.Minute
 )
 
 type PendingSession struct {
@@ -48,6 +51,30 @@ type StreamHandler struct {
 
 	sessionsMu sync.RWMutex
 	sessions   map[core.ContentID]*PendingSession
+
+	ttl           time.Duration
+	sweepInterval time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+}
+
+type StreamHandlerOption func(*StreamHandler)
+
+func WithSessionTTL(ttl time.Duration) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		if ttl > 0 {
+			h.ttl = ttl
+		}
+	}
+}
+
+func WithSweepInterval(interval time.Duration) StreamHandlerOption {
+	return func(h *StreamHandler) {
+		if interval > 0 {
+			h.sweepInterval = interval
+		}
+	}
 }
 
 func NewStreamHandler(
@@ -57,11 +84,14 @@ func NewStreamHandler(
 	allowPush bool,
 	authPolicy AuthPolicy,
 	allowedPublishers []peer.ID,
+	opts ...StreamHandlerOption,
 ) *StreamHandler {
 	allowedMap := make(map[peer.ID]struct{})
 	for _, pid := range allowedPublishers {
 		allowedMap[pid] = struct{}{}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	handler := &StreamHandler{
 		host:              h,
@@ -72,10 +102,60 @@ func NewStreamHandler(
 		authPolicy:        authPolicy,
 		allowedPublishers: allowedMap,
 		sessions:          make(map[core.ContentID]*PendingSession),
+		ttl:               DefaultSessionTTL,
+		sweepInterval:     DefaultSweepInterval,
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
-	h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	for _, opt := range opts {
+		opt(handler)
+	}
+
+	handler.wg.Add(1)
+	go handler.startSweeper()
+
+	if h != nil {
+		h.SetStreamHandler(protocol.PushTransportProtocolID, handler.handleStream)
+	}
 	return handler
+}
+
+func (h *StreamHandler) startSweeper() {
+	defer h.wg.Done()
+	ticker := time.NewTicker(h.sweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-ticker.C:
+			h.SweepExpiredSessions()
+		}
+	}
+}
+
+func (h *StreamHandler) SweepExpiredSessions() int {
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+
+	now := time.Now()
+	purgedCount := 0
+	for contentID, session := range h.sessions {
+		if now.Sub(session.UpdatedAt) > h.ttl {
+			delete(h.sessions, contentID)
+			log.Printf("[Push Protocol] Purged expired push session for ContentID %x", contentID)
+			purgedCount++
+		}
+	}
+	return purgedCount
+}
+
+func (h *StreamHandler) Close() error {
+	h.cancel()
+	h.wg.Wait()
+	return nil
 }
 
 func (h *StreamHandler) handleStream(s network.Stream) {
