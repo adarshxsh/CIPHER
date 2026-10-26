@@ -15,9 +15,7 @@ type WorkerResult struct {
 	PeerID string // To track contribution
 }
 
-var TestThrottle time.Duration
-
-func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult) {
+func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *engine.ContentEngine, queue *ChunkQueue, results chan<- WorkerResult, cfg Config) {
 	for {
 		task, ok := queue.Next()
 		if !ok {
@@ -41,8 +39,8 @@ func runWorker(ctx context.Context, source Source, client *chunk.Client, eng *en
 			continue
 		}
 
-		if TestThrottle > 0 {
-			time.Sleep(TestThrottle)
+		if cfg.Throttle > 0 {
+			time.Sleep(cfg.Throttle)
 		}
 
 		if err := eng.PutChunk(ctx, chunkData); err != nil {

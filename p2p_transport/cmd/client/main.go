@@ -155,8 +155,9 @@ func main() {
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
+	schedCfg := scheduler.Config{MaxAttempts: 3}
 	if *throttle == "2MB" {
-		scheduler.TestThrottle = 500 * time.Millisecond
+		schedCfg.Throttle = 500 * time.Millisecond
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
 
@@ -223,7 +224,7 @@ func main() {
 
 	// 7. Data Plane: Parallel Swarming Chunk Download
 	log.Printf("Downloading %d chunks from %d provider(s)...", len(m.ChunkIDs), len(targetPeers))
-	tm := manager.NewTransferManager(sm, eng, t)
+	tm := manager.NewTransferManager(sm, eng, t, schedCfg)
 	if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 		log.Fatalf("Download failed: %v", err)
 	}

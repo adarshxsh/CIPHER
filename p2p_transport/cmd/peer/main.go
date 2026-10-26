@@ -129,17 +129,18 @@ func main() {
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
 	// Apply testing flags
+	chunkCfg := chunk.HandlerConfig{}
 	if *corruptProb > 0 {
-		chunk.TestCorruptProb = *corruptProb
+		chunkCfg.CorruptProb = *corruptProb
 		log.Printf("[TESTING] Chunk corruption probability set to %.2f", *corruptProb)
 	}
+	schedCfg := scheduler.Config{MaxAttempts: 3}
 	if *throttle == "2MB" {
-		// 2MB/s = 8 chunks/sec (256KB each). Sleep 125ms per chunk.
-		scheduler.TestThrottle = 500 * time.Millisecond
+		schedCfg.Throttle = 500 * time.Millisecond
 		log.Printf("[TESTING] Throttling enabled (2MB/s)")
 	}
 
-	chunk.NewStreamHandler(h, eng) // mp duplicate, have called it again later
+	chunk.NewStreamHandler(h, eng, chunkCfg) // mp duplicate, have called it again later
 
 	sm, err := manager.NewFileSessionManager(*storePath + "/sessions")
 	if err != nil {
@@ -172,7 +173,7 @@ func main() {
 	}
 
 	// Setup protocol handler
-	chunk.NewStreamHandler(h, eng)
+	chunk.NewStreamHandler(h, eng, chunkCfg)
 
 	// Start DHT Republisher for persistent provider lifecycle
 	discovery.StartRepublisher(ctx, kdht, store, 12*time.Hour)
@@ -385,7 +386,7 @@ func main() {
 		// Setup Transfer Manager and start download
 		log.Printf("Downloading %d chunks from %d peers...", len(m.ChunkIDs), len(targetPeers))
 
-		tm := manager.NewTransferManager(sm, eng, t)
+		tm := manager.NewTransferManager(sm, eng, t, schedCfg)
 		if err := tm.Download(ctx, contentID, m.ChunkIDs, targetPeers); err != nil {
 			log.Fatalf("Download failed: %v", err)
 		}

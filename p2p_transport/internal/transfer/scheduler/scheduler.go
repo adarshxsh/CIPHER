@@ -5,13 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+	"time"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
 )
+
+type Config struct {
+	MaxAttempts int
+	Throttle    time.Duration
+}
 
 type Source struct {
 	PeerID    peer.ID
@@ -21,14 +27,26 @@ type Source struct {
 type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
+	Config      Config
 	MaxAttempts int
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, cfg ...Config) *Scheduler {
+	c := Config{MaxAttempts: maxAttempts}
+	if len(cfg) > 0 {
+		c = cfg[0]
+		if c.MaxAttempts == 0 {
+			c.MaxAttempts = maxAttempts
+		}
+	}
+	if c.MaxAttempts == 0 {
+		c.MaxAttempts = 3
+	}
 	return &Scheduler{
 		Transport:   t,
 		Engine:      eng,
-		MaxAttempts: maxAttempts,
+		Config:      c,
+		MaxAttempts: c.MaxAttempts,
 	}
 }
 
@@ -47,7 +65,7 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Config)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
