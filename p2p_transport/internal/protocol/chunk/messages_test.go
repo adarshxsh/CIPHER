@@ -105,3 +105,68 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+func TestParseError_Sanitization(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawMsg   string
+		expected string
+	}{
+		{
+			name:     "clean message",
+			rawMsg:   "file not found",
+			expected: "file not found",
+		},
+		{
+			name:     "newlines and tabs converted to spaces",
+			rawMsg:   "line1\nline2\r\nline3\ttab",
+			expected: "line1 line2  line3 tab",
+		},
+		{
+			name:     "ANSI escape sequences stripped",
+			rawMsg:   "\x1b[31mRed Alert\x1b[0m",
+			expected: "Red Alert",
+		},
+		{
+			name:     "control characters stripped",
+			rawMsg:   "bad\x00data\x07\x08here",
+			expected: "baddatahere",
+		},
+		{
+			name:     "invalid UTF-8 bytes stripped",
+			rawMsg:   "hello\xff\xfe\xfdworld",
+			expected: "helloworld",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := append([]byte{byte(chunk.ErrBadRequest)}, []byte(tt.rawMsg)...)
+			code, parsedMsg, err := chunk.ParseError(payload)
+			if err != nil {
+				t.Fatalf("ParseError failed: %v", err)
+			}
+			if code != chunk.ErrBadRequest {
+				t.Errorf("expected code %d, got %d", chunk.ErrBadRequest, code)
+			}
+			if parsedMsg != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, parsedMsg)
+			}
+		})
+	}
+}
+
+func TestParseError_TruncatesOversizedMessage(t *testing.T) {
+	oversized := make([]byte, 1000)
+	for i := range oversized {
+		oversized[i] = 'A'
+	}
+	payload := append([]byte{byte(chunk.ErrInternal)}, oversized...)
+	_, parsedMsg, err := chunk.ParseError(payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+	if len(parsedMsg) != chunk.MaxErrorMessageSize {
+		t.Errorf("expected sanitized message length %d, got %d", chunk.MaxErrorMessageSize, len(parsedMsg))
+	}
+}
