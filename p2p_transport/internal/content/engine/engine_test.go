@@ -71,3 +71,54 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 		t.Errorf("reassembled data does not match original data")
 	}
 }
+
+func TestContentEngine_IngestContentID(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-id-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 16 * 1024,
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	ctx := context.Background()
+	testData := []byte("hello cipher canonical content id test")
+	m, err := eng.Ingest(ctx, bytes.NewReader(testData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	mBytes, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("m.Serialize failed: %v", err)
+	}
+
+	expectedHash := dig.Sum(mBytes)
+	var expectedID core.ContentID
+	copy(expectedID[:], expectedHash[:])
+
+	if m.Descriptor.ID != expectedID {
+		t.Errorf("m.Descriptor.ID %x != expected SHA256 digest %x", m.Descriptor.ID, expectedID)
+	}
+
+	key, err := keys.Get(ctx, m.Descriptor.ID)
+	if err != nil {
+		t.Fatalf("failed to retrieve key using computed ContentID: %v", err)
+	}
+	if len(key) != 32 {
+		t.Errorf("retrieved key length = %d, expected 32", len(key))
+	}
+}

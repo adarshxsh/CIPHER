@@ -131,3 +131,34 @@ func TestChunkProtocol_InvalidPeer(t *testing.T) {
 		t.Errorf("Unexpected error msg: %v", err)
 	}
 }
+
+func TestChunkProtocol_SpoofedManifestRejected(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng1 := createTestEngine(t)
+	eng2 := createTestEngine(t)
+	chunk.NewStreamHandler(h1, eng1)
+
+	ctx := context.Background()
+	data := []byte("legitimate original content")
+	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("Ingest failed: %v", err)
+	}
+
+	// Store tampered/spoofed manifest bytes under m.Descriptor.ID
+	tamperedBytes := []byte(`{"version":1,"descriptor":{"id":"0000000000000000000000000000000000000000000000000000000000000000","type":"file","size":999999},"chunk_ids":[]}`)
+	if err := eng1.PutManifestBytes(ctx, m.Descriptor.ID, tamperedBytes); err != nil {
+		t.Fatalf("PutManifestBytes failed: %v", err)
+	}
+
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Resolve(ctx, m.Descriptor.ID)
+	if err == nil {
+		t.Fatalf("Expected Resolve to fail for spoofed manifest payload, but it succeeded")
+	}
+}
