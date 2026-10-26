@@ -2,6 +2,7 @@
 cd p2p_transport
 rm -rf store_a store_b test.mp4 out.mp4
 export CGO_ENABLED=0
+export CIPHER_ALLOW_LOCAL_IP=1
 go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
