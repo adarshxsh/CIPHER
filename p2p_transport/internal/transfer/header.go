@@ -2,13 +2,17 @@ package transfer
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
 
+var ErrInvalidHeader = errors.New("invalid header")
+
 const (
-	ProtocolVersion1 byte = 1
+	ProtocolVersion1    byte = 1
 	MsgTypeFileTransfer byte = 1
+	MaxFilenameLen           = 255
 )
 
 // Header represents the binary metadata sent before the file contents.
@@ -27,6 +31,15 @@ type Header struct {
 	Checksum [32]byte
 }
 
+// DecodeHeader reads and decodes a Header from the given reader.
+func DecodeHeader(r io.Reader) (*Header, error) {
+	var h Header
+	if err := h.ReadFrom(r); err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
 // WriteTo encodes and writes the header to the given writer.
 func (h *Header) WriteTo(w io.Writer) error {
 	// 1. Write Protocol Version
@@ -41,6 +54,9 @@ func (h *Header) WriteTo(w io.Writer) error {
 
 	// 3. Write Filename Length
 	filenameBytes := []byte(h.Filename)
+	if len(filenameBytes) > MaxFilenameLen {
+		return fmt.Errorf("%w: filename length exceeds maximum %d", ErrInvalidHeader, MaxFilenameLen)
+	}
 	filenameLen := uint16(len(filenameBytes))
 	if err := binary.Write(w, binary.BigEndian, filenameLen); err != nil {
 		return fmt.Errorf("failed to write filename length: %w", err)
@@ -80,6 +96,10 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	var filenameLen uint16
 	if err := binary.Read(r, binary.BigEndian, &filenameLen); err != nil {
 		return fmt.Errorf("failed to read filename length: %w", err)
+	}
+
+	if filenameLen > MaxFilenameLen {
+		return ErrInvalidHeader
 	}
 
 	// 4. Read Filename
