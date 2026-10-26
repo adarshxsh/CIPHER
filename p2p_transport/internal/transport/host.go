@@ -2,6 +2,7 @@ package transport
 
 import (
 	"cipher/internal/discovery"
+	"cipher/internal/protocol"
 	"context"
 
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	libp2p_protocol "github.com/libp2p/go-libp2p/core/protocol"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -28,9 +31,82 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		listenAddrs = append(listenAddrs, wsAddr)
 	}
 
+	scalingLimits := rcmgr.DefaultLimits
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+	limitConfig := rcmgr.PartialLimitConfig{
+		System: rcmgr.ResourceLimits{
+			Conns:         1024,
+			ConnsInbound:  1024,
+			ConnsOutbound: 1024,
+			Streams:         2048,
+			StreamsInbound:  2048,
+			StreamsOutbound: 2048,
+			FD:            512,
+			Memory:        256 * 1024 * 1024, // 256 MB
+		},
+		PeerDefault: rcmgr.ResourceLimits{
+			Conns:         16,
+			ConnsInbound:  16,
+			ConnsOutbound: 16,
+			Streams:         64,
+			StreamsInbound:  64,
+			StreamsOutbound: 64,
+			Memory:        rcmgr.DefaultLimit64,
+			FD:            rcmgr.DefaultLimit,
+		},
+		ProtocolDefault: rcmgr.ResourceLimits{
+			Streams:         1024,
+			StreamsInbound:  1024,
+			StreamsOutbound: 1024,
+			Memory:        128 * 1024 * 1024,
+		},
+		ProtocolPeerDefault: rcmgr.ResourceLimits{
+			Streams:         64,
+			StreamsInbound:  64,
+			StreamsOutbound: 64,
+			Memory:        32 * 1024 * 1024,
+		},
+		Protocol: map[libp2p_protocol.ID]rcmgr.ResourceLimits{
+			protocol.ChunkTransportProtocolID: {
+				Streams:         1024,
+				StreamsInbound:  1024,
+				StreamsOutbound: 1024,
+				Memory:        128 * 1024 * 1024,
+			},
+			protocol.FileTransferProtocolID: {
+				Streams:         512,
+				StreamsInbound:  512,
+				StreamsOutbound: 512,
+				Memory:        64 * 1024 * 1024,
+			},
+		},
+		ProtocolPeer: map[libp2p_protocol.ID]rcmgr.ResourceLimits{
+			protocol.ChunkTransportProtocolID: {
+				Streams:         64,
+				StreamsInbound:  64,
+				StreamsOutbound: 64,
+				Memory:        32 * 1024 * 1024,
+			},
+			protocol.FileTransferProtocolID: {
+				Streams:         32,
+				StreamsInbound:  32,
+				StreamsOutbound: 32,
+				Memory:        16 * 1024 * 1024,
+			},
+		},
+	}
+
+	limiter := rcmgr.NewFixedLimiter(limitConfig.Build(scalingLimits.AutoScale()))
+	rm, err := rcmgr.NewResourceManager(limiter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
+	}
+
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableRelay(),
+		libp2p.ResourceManager(rm),
 	}
 
 	if priv != nil {
