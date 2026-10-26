@@ -11,11 +11,19 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// NewDHT creates and returns a Kademlia DHT bound to the given host.
+// NewDHT creates and returns a Kademlia DHT bound to the given host with
+// explicit query concurrency bounds and routing table limits.
 // mode should be dht.ModeServer for peers (they help route/store records too,
 // matching your "providers" box — everyone participates).
-func NewDHT(h host.Host, mode dht.ModeOpt) (*dht.IpfsDHT, error) {
-	kdht, err := dht.New(h, dht.Mode(mode))
+func NewDHT(h host.Host, mode dht.ModeOpt, opts ...dht.Option) (*dht.IpfsDHT, error) {
+	defaultOpts := []dht.Option{
+		dht.Mode(mode),
+		dht.Concurrency(10), // explicit query concurrency bounds
+		dht.BucketSize(20),  // explicit routing table bucket size limits
+	}
+
+	allOpts := append(defaultOpts, opts...)
+	kdht, err := dht.New(h, allOpts...)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
