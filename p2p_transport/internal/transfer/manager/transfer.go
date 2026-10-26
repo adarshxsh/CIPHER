@@ -10,6 +10,7 @@ import (
 
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
+	"cipher/internal/reputation"
 	"cipher/internal/transfer/scheduler"
 	"cipher/internal/transport"
 )
@@ -26,17 +27,30 @@ type TransferManager struct {
 	SessionManager SessionManager
 	Engine         *engine.ContentEngine
 	Transport      *transport.Transport
+	Tracker        *reputation.Tracker
 }
 
-func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport) *TransferManager {
+func NewTransferManager(sm SessionManager, eng *engine.ContentEngine, t *transport.Transport, tracker ...*reputation.Tracker) *TransferManager {
+	var tr *reputation.Tracker
+	if len(tracker) > 0 && tracker[0] != nil {
+		tr = tracker[0]
+	} else {
+		tr = reputation.NewTracker()
+	}
+
 	return &TransferManager{
 		SessionManager: sm,
 		Engine:         eng,
 		Transport:      t,
+		Tracker:        tr,
 	}
 }
 
 func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentID, chunkIDs []core.ChunkID, peers []peer.ID) error {
+	if tm.Tracker == nil {
+		tm.Tracker = reputation.NewTracker()
+	}
+
 	if len(peers) == 0 {
 		return fmt.Errorf("no peers provided")
 	}
@@ -112,7 +126,7 @@ func (tm *TransferManager) Download(ctx context.Context, contentID core.ContentI
 	}
 
 	// 5. Run Scheduler
-	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3) // MaxAttempts = 3
+	sched := scheduler.NewScheduler(tm.Transport, tm.Engine, 3, tm.Tracker) // MaxAttempts = 3
 	
 	completions := make(chan scheduler.WorkerResult, len(tasks))
 	errCh := make(chan error, 1)
