@@ -153,7 +153,7 @@ func TestTheGauntlet(t *testing.T) {
 	mrand.Seed(time.Now().UnixNano())
 
 	for i := 0; i < iterations; i++ {
-		chunkSize := uint32(mrand.Intn(128*1024) + 1024) // 1KB to 129KB
+		chunkSize := uint32(mrand.Intn(32*1024) + 1024) // 1KB to 33KB
 		fileSize := mrand.Intn(2 * 1024 * 1024)          // 0 to 2MB
 
 		eng, tmpDir, _ := setupTestEngine(t, chunkSize)
