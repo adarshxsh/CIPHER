@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +61,8 @@ func main() {
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
+	showKey := flag.Bool("show-key", false, "Display cleartext decryption key in standard output")
+	keyOut := flag.String("key-out", "", "Path to write the cleartext decryption key file")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +126,11 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keysDir := filepath.Join(*storePath, "keys")
+	keys, err := engine.NewFSKeyProvider(keysDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	// Passing engineLogger isn't supported yet, removing it.
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
@@ -247,9 +254,23 @@ func main() {
 		}
 
 		key, _ := keys.Get(ctx, m.Descriptor.ID)
+
+		if *keyOut != "" {
+			if err := os.WriteFile(*keyOut, []byte(hex.EncodeToString(key)+"\n"), 0600); err != nil {
+				log.Printf("Warning: Failed to write key to output file %s: %v", *keyOut, err)
+			} else {
+				log.Printf("Decryption key written to %s", *keyOut)
+			}
+		}
+
+		keyStr := "[REDACTED]"
+		if *showKey {
+			keyStr = fmt.Sprintf("%x", key)
+		}
+
 		log.Printf("[✓] Ingest complete!")
 		log.Printf("    ContentID: %x", m.Descriptor.ID)
-		log.Printf("    Key: %x", key)
+		log.Printf("    Key: %s", keyStr)
 
 		log.Printf("\n--- To download this file on another peer (Peer B), run: ---")
 		wsAddr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/ws/p2p/%s", *wsPort, h.ID())
@@ -263,8 +284,8 @@ func main() {
 			"  -store ./store_b \\\n" +
 			"  -d \"%s\" \\\n" +
 			"  -fetch \"%x\" \\\n" +
-			"  -key \"%x\" \\\n" +
-			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, key)
+			"  -key \"%s\" \\\n" +
+			"  -reassemble \"downloaded_file\"\n", wsAddr, m.Descriptor.ID, keyStr)
 		log.Printf("-----------------------------------------------------------\n")
 	}
 
