@@ -49,6 +49,75 @@ func TestChaCha20Encryptor(t *testing.T) {
 	}
 }
 
+func TestChaCha20Encryptor_RandomNonceUniqueness(t *testing.T) {
+	enc := NewChaCha20Encryptor()
+
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	originalData := []byte("identical payload for both chunks")
+
+	chunk1 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     0,
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	chunk2 := &core.Chunk{
+		Header: core.ChunkHeader{
+			Index:     0, // Same index
+			PlainSize: uint32(len(originalData)),
+		},
+		Data: append([]byte(nil), originalData...),
+	}
+
+	if err := enc.EncryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to encrypt chunk1: %v", err)
+	}
+	if err := enc.EncryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to encrypt chunk2: %v", err)
+	}
+
+	// Verify nonce length
+	if len(chunk1.Header.Nonce) != 24 {
+		t.Fatalf("expected 24-byte nonce, got %d bytes", len(chunk1.Header.Nonce))
+	}
+
+	// Verify nonces are unique and non-zero
+	var zeroNonce [24]byte
+	if bytes.Equal(chunk1.Header.Nonce[:], zeroNonce[:]) {
+		t.Errorf("chunk1 nonce is all zeros")
+	}
+	if bytes.Equal(chunk2.Header.Nonce[:], zeroNonce[:]) {
+		t.Errorf("chunk2 nonce is all zeros")
+	}
+	if bytes.Equal(chunk1.Header.Nonce[:], chunk2.Header.Nonce[:]) {
+		t.Errorf("expected distinct 24-byte nonces for chunk1 and chunk2, but they were identical")
+	}
+
+	// Verify ciphertexts are distinct due to distinct random nonces
+	if bytes.Equal(chunk1.Data, chunk2.Data) {
+		t.Errorf("expected distinct ciphertexts, but got identical ciphertexts")
+	}
+
+	// Verify both decrypt back to original plaintext
+	if err := enc.DecryptChunk(key, chunk1); err != nil {
+		t.Fatalf("failed to decrypt chunk1: %v", err)
+	}
+	if !bytes.Equal(chunk1.Data, originalData) {
+		t.Errorf("chunk1 decrypted data mismatch")
+	}
+
+	if err := enc.DecryptChunk(key, chunk2); err != nil {
+		t.Fatalf("failed to decrypt chunk2: %v", err)
+	}
+	if !bytes.Equal(chunk2.Data, originalData) {
+		t.Errorf("chunk2 decrypted data mismatch")
+	}
+}
+
 func TestChaCha20Encryptor_Corruption(t *testing.T) {
 	enc := NewChaCha20Encryptor()
 	key := make([]byte, 32)
