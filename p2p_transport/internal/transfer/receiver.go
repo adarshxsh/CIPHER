@@ -20,7 +20,11 @@ import (
 func Receive(s network.Stream) error {
 	defer s.Close()
 
-	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	if s.Conn() != nil {
+		log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	} else {
+		log.Printf("Incoming stream. Preparing to receive...")
+	}
 
 	// 1. Read Header
 	var header Header
@@ -71,20 +75,29 @@ func Receive(s network.Stream) error {
 	duration := time.Since(startTime)
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
 
-	// 4. Verify Integrity
-	var computedChecksum [32]byte
-	copy(computedChecksum[:], hasher.Sum(nil))
+	// 4. Read Trailing Checksum Frame
+	var trailingChecksum [32]byte
+	if _, err := io.ReadFull(s, trailingChecksum[:]); err != nil {
+		return fmt.Errorf("failed to read trailing checksum: %w", err)
+	}
+
+	// 5. Verify Integrity
+	computedChecksum := hasher.Sum(nil)
 
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	var checksumErr error
+	if !bytes.Equal(computedChecksum, trailingChecksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", trailingChecksum, computedChecksum)
+		checksumErr = fmt.Errorf("checksum mismatch: expected %x, got %x", trailingChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")
@@ -93,5 +106,5 @@ func Receive(s network.Stream) error {
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
-	return nil
+	return checksumErr
 }
