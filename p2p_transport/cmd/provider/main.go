@@ -107,6 +107,7 @@ func main() {
 	keys := engine.NewLocalKeyProvider()
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+	eng.SetPublisherKey(priv)
 
 	// Apply testing flags
 	if *corruptProb > 0 {

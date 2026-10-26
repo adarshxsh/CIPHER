@@ -35,9 +35,9 @@ trap cleanup EXIT
 
 sleep 2
 
-CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
-PUB_ADDR=$(grep "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
+CONTENT_ID=$(grep -a "^ContentID" publisher.log | awk '{print $NF}')
+KEY=$(grep -a "^Decryption Key" publisher.log | awk '{print $NF}')
+PUB_ADDR=$(grep -a "127.0.0.1/tcp/45001/p2p/" publisher.log | head -n 1 | awk '{print $NF}')
 
 if [ -z "$CONTENT_ID" ] || [ -z "$KEY" ] || [ -z "$PUB_ADDR" ]; then
     echo "Error: Failed to parse publisher parameters from log:"
@@ -68,7 +68,7 @@ echo "[6/6] Testing Control Plane (DHT Provider Discovery)..."
 ./bin/bootstrap -p 45003 -identity ./bootstrap_identity.key > bootstrap.log 2>&1 &
 BOOT_PID=$!
 sleep 1
-BOOT_ADDR=$(grep "127.0.0.1/tcp/45003/p2p/" bootstrap.log | head -n 1 | awk '{print $NF}')
+BOOT_ADDR=$(grep -a "127.0.0.1/tcp/45003/p2p/" bootstrap.log | head -n 1 | awk '{print $NF}')
 echo "  - Bootstrap Node: $BOOT_ADDR"
 
 # Start Provider with bootstrap connection
