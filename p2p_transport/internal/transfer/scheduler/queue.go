@@ -1,8 +1,8 @@
 package scheduler
 
 import (
-	"sync"
 	"cipher/internal/content/core"
+	"sync"
 )
 
 type ChunkTask struct {

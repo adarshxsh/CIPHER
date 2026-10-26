@@ -28,13 +28,13 @@ const (
 type ErrorCode uint8
 
 const (
-	ErrContentNotFound  ErrorCode = 0x01
-	ErrChunkNotFound    ErrorCode = 0x02
-	ErrInvalidManifest  ErrorCode = 0x03
-	ErrPermissionDenied ErrorCode = 0x04
-	ErrInternal         ErrorCode = 0x05
-	ErrIntegrityMismatch ErrorCode = 0x06
-	ErrBadRequest       ErrorCode = 0x07
+	ErrContentNotFound    ErrorCode = 0x01
+	ErrChunkNotFound      ErrorCode = 0x02
+	ErrInvalidManifest    ErrorCode = 0x03
+	ErrPermissionDenied   ErrorCode = 0x04
+	ErrInternal           ErrorCode = 0x05
+	ErrIntegrityMismatch  ErrorCode = 0x06
+	ErrBadRequest         ErrorCode = 0x07
 	ErrUnsupportedMessage ErrorCode = 0x08
 )
 
@@ -47,7 +47,7 @@ type Message struct {
 
 func WriteMessage(w io.Writer, msg *Message) error {
 	buf := new(bytes.Buffer)
-	
+
 	// Envelope: Version (2), Type (1)
 	if err := binary.Write(buf, binary.LittleEndian, msg.Version); err != nil {
 		return err

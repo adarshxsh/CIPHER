@@ -13,10 +13,10 @@ import (
 	"cipher/internal/content/crypto"
 	"cipher/internal/content/engine"
 	"cipher/internal/content/manifest"
-	"cipher/internal/transport"
 	"cipher/internal/content/storage"
 	"cipher/internal/content/verifier"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transport"
 )
 
 func createTestEngine(t testing.TB) *engine.ContentEngine {
@@ -55,7 +55,7 @@ func TestChunkProtocol_Integration(t *testing.T) {
 
 	// Setup Handler on Peer 1 (Server)
 	chunk.NewStreamHandler(h1, eng1)
-	
+
 	// Ensure Peer 2 has the handler too (symmetric protocol requirement)
 	chunk.NewStreamHandler(h2, eng2)
 
@@ -64,7 +64,7 @@ func TestChunkProtocol_Integration(t *testing.T) {
 	dataSize := 1024 * 1024
 	data := make([]byte, dataSize)
 	rand.Read(data)
-	
+
 	m, err := eng1.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
 	if err != nil {
 		t.Fatalf("Ingest failed: %v", err)
@@ -97,7 +97,7 @@ func TestChunkProtocol_Integration(t *testing.T) {
 
 	// NOTE: We must give eng2 the decryption key to reassemble locally, as key transfer is out of scope.
 	// Since keys aren't exposed, let's just verify download succeeds!
-	
+
 	if len(m2.ChunkIDs) != 4 { // 1MB / 256KB = 4 chunks
 		t.Errorf("Expected 4 chunks, got %d", len(m2.ChunkIDs))
 	}
