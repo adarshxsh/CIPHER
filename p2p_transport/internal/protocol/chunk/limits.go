@@ -1,5 +1,14 @@
 package chunk
 
+import (
+	"time"
+)
+
+const (
+	// DefaultStreamDeadline limits the time spent waiting for a message exchange on a stream.
+	DefaultStreamDeadline = 15 * time.Second
+)
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
