@@ -1,9 +1,20 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
-	
+	"errors"
+	"fmt"
+	"io"
+
 	"cipher/internal/content/core"
+)
+
+const MaxManifestSize = 2*1024*1024 - 3
+
+var (
+	ErrManifestTooLarge = errors.New("manifest byte slice exceeds MaxManifestSize limit")
+	ErrTrailingData     = errors.New("unexpected trailing JSON tokens after manifest")
 )
 
 type ContentType string
@@ -47,9 +58,26 @@ func (m *Manifest) Serialize() ([]byte, error) {
 }
 
 func Deserialize(data []byte) (*Manifest, error) {
+	if len(data) > MaxManifestSize {
+		return nil, fmt.Errorf("%w: length %d exceeds max %d", ErrManifestTooLarge, len(data), MaxManifestSize)
+	}
+
+	reader := io.LimitReader(bytes.NewReader(data), int64(MaxManifestSize))
+	dec := json.NewDecoder(reader)
+
 	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return nil, err
 	}
+
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, ErrTrailingData
+		}
+		return nil, fmt.Errorf("invalid trailing data after manifest JSON: %w", err)
+	}
+
 	return &m, nil
 }
+
