@@ -18,13 +18,11 @@ const (
 // [2 bytes] Filename Length (N)
 // [N bytes] Filename
 // [8 bytes] File Size
-// [32 bytes] SHA-256 Checksum
 type Header struct {
 	Version  byte
 	Type     byte
 	Filename string
 	FileSize uint64
-	Checksum [32]byte
 }
 
 // WriteTo encodes and writes the header to the given writer.
@@ -54,11 +52,6 @@ func (h *Header) WriteTo(w io.Writer) error {
 	// 5. Write File Size
 	if err := binary.Write(w, binary.BigEndian, h.FileSize); err != nil {
 		return fmt.Errorf("failed to write file size: %w", err)
-	}
-
-	// 6. Write Checksum
-	if _, err := w.Write(h.Checksum[:]); err != nil {
-		return fmt.Errorf("failed to write checksum: %w", err)
 	}
 
 	return nil
@@ -92,11 +85,6 @@ func (h *Header) ReadFrom(r io.Reader) error {
 	// 5. Read File Size
 	if err := binary.Read(r, binary.BigEndian, &h.FileSize); err != nil {
 		return fmt.Errorf("failed to read file size: %w", err)
-	}
-
-	// 6. Read Checksum
-	if _, err := io.ReadFull(r, h.Checksum[:]); err != nil {
-		return fmt.Errorf("failed to read checksum: %w", err)
 	}
 
 	return nil
