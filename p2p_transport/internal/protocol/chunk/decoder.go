@@ -104,7 +104,7 @@ func DecodeFrameHeader(r io.Reader) (
 			return
 		}
 		err = fmt.Errorf(
-			"%w: failed to read frame header: %v",
+			"%w: failed to read frame header: %w",
 			ErrTruncatedFrame,
 			readErr,
 		)
@@ -208,7 +208,7 @@ func ReadFramePayload(
 
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, fmt.Errorf(
-			"%w: expected=%d bytes: %v",
+			"%w: expected=%d bytes: %w",
 			ErrTruncatedFrame,
 			payloadSize,
 			err,
