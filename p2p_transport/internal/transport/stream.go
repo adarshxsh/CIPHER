@@ -25,14 +25,54 @@ func SetupStreamHandler(h host.Host) {
 	})
 }
 
+const (
+	DefaultReadTimeout  = 30 * time.Second
+	DefaultWriteTimeout = 15 * time.Second
+)
+
+// Option defines a functional option for configuring a Transport instance.
+type Option func(*Transport)
+
+// WithReadTimeout returns an Option that configures the default read timeout for streams.
+func WithReadTimeout(d time.Duration) Option {
+	return func(t *Transport) {
+		t.defaultReadTimeout = d
+	}
+}
+
+// WithWriteTimeout returns an Option that configures the default write timeout for streams.
+func WithWriteTimeout(d time.Duration) Option {
+	return func(t *Transport) {
+		t.defaultWriteTimeout = d
+	}
+}
+
 // Transport wraps the libp2p host to provide a simpler abstraction for connection and stream management.
 type Transport struct {
-	host host.Host
+	host                host.Host
+	defaultReadTimeout  time.Duration
+	defaultWriteTimeout time.Duration
 }
 
 // NewTransport creates a new Transport abstraction.
-func NewTransport(h host.Host) *Transport {
-	return &Transport{host: h}
+func NewTransport(h host.Host, opts ...Option) *Transport {
+	t := &Transport{
+		host:                h,
+		defaultReadTimeout:  DefaultReadTimeout,
+		defaultWriteTimeout: DefaultWriteTimeout,
+	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
+}
+
+func (t *Transport) DefaultReadTimeout() time.Duration {
+	return t.defaultReadTimeout
+}
+
+func (t *Transport) DefaultWriteTimeout() time.Duration {
+	return t.defaultWriteTimeout
 }
 
 // Connect dials the target peer and establishes the initial connection (likely a relayed connection).
@@ -84,6 +124,13 @@ func (t *Transport) OpenStream(ctx context.Context, target peer.ID, pid libp2p_p
 	s, err := t.host.NewStream(streamCtx, target, pid)
 	if err != nil {
 		return nil, fmt.Errorf("NewStream failed: %w", err)
+	}
+
+	if t.defaultReadTimeout > 0 {
+		_ = s.SetReadDeadline(time.Now().Add(t.defaultReadTimeout))
+	}
+	if t.defaultWriteTimeout > 0 {
+		_ = s.SetWriteDeadline(time.Now().Add(t.defaultWriteTimeout))
 	}
 
 	return s, nil

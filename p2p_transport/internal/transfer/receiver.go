@@ -17,14 +17,24 @@ import (
 // This is actually redundant since we alr have a client.go in the protocol, and this is just an older version of it
 
 // Receive accepts an incoming file transfer from the remote peer.
-func Receive(s network.Stream) error {
+func Receive(s network.Stream, opts ...TransferOption) error {
 	defer s.Close()
+
+	cfg := transferConfig{
+		readTimeout:  DefaultTransferReadTimeout,
+		writeTimeout: DefaultTransferWriteTimeout,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
 
+	dr := newDeadlineReader(s, cfg.readTimeout)
+
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err := header.ReadFrom(dr); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -54,7 +64,7 @@ func Receive(s network.Stream) error {
 	multiWriter := io.MultiWriter(outFile, hasher)
 
 	pr := &progressReader{
-		r:     io.LimitReader(s, int64(header.FileSize)),
+		r:     io.LimitReader(dr, int64(header.FileSize)),
 		total: header.FileSize,
 		last:  0,
 	}
