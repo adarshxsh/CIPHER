@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"cipher/internal/content/core"
 )
@@ -205,9 +206,49 @@ func BuildError(code ErrorCode, msg string) *Message {
 	}
 }
 
+// SanitizeErrorMessage strips or escapes control characters (\n, \r, \t, ANSI escape codes, etc.)
+// and safely truncates error messages exceeding MaxErrorMessageSize (512 bytes) without panic.
+func SanitizeErrorMessage(msg string) string {
+	if len(msg) > MaxErrorMessageSize {
+		msg = msg[:MaxErrorMessageSize]
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(msg))
+
+	for i := 0; i < len(msg); i++ {
+		c := msg[i]
+		switch c {
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		case 0x1b: // ESC / ANSI escape code
+			builder.WriteString(`\x1b`)
+		default:
+			if c < 0x20 || c == 0x7f {
+				fmt.Fprintf(&builder, "\\x%02x", c)
+			} else {
+				builder.WriteByte(c)
+			}
+		}
+	}
+
+	return builder.String()
+}
+
 func ParseError(payload []byte) (ErrorCode, string, error) {
 	if len(payload) < 1 {
 		return 0, "", errors.New("invalid payload length for ERROR")
 	}
-	return ErrorCode(payload[0]), string(payload[1:]), nil
+
+	code := ErrorCode(payload[0])
+	rawMsg := payload[1:]
+	if len(rawMsg) > MaxErrorMessageSize {
+		rawMsg = rawMsg[:MaxErrorMessageSize]
+	}
+
+	return code, SanitizeErrorMessage(string(rawMsg)), nil
 }

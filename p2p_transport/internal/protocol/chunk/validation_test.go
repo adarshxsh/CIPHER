@@ -129,3 +129,33 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateErrorPayload_EnforcesMaxErrorMessageSize(t *testing.T) {
+	// Valid error payload: 1 byte code + 512 bytes error string
+	validMsg := make([]byte, chunk.MaxErrorMessageSize)
+	validPayload := append([]byte{byte(chunk.ErrInternal)}, validMsg...)
+
+	if err := chunk.ValidateErrorPayload(validPayload); err != nil {
+		t.Fatalf("512 byte error payload should validate: %v", err)
+	}
+
+	errMsg := chunk.BuildError(chunk.ErrInternal, string(validMsg))
+	if err := chunk.ValidateMessage(errMsg); err != nil {
+		t.Fatalf("ValidateMessage should accept 512 byte error payload: %v", err)
+	}
+
+	// Invalid error payload: 1 byte code + 513 bytes error string (exceeds MaxErrorMessageSize)
+	invalidMsg := make([]byte, chunk.MaxErrorMessageSize+1)
+	invalidPayload := append([]byte{byte(chunk.ErrInternal)}, invalidMsg...)
+
+	err := chunk.ValidateErrorPayload(invalidPayload)
+	if !errors.Is(err, chunk.ErrInvalidErrorMessage) {
+		t.Fatalf("expected ErrInvalidErrorMessage for 513 byte message, got %v", err)
+	}
+
+	overLimitMsg := chunk.BuildError(chunk.ErrInternal, string(invalidPayload))
+	err = chunk.ValidateMessage(overLimitMsg)
+	if err == nil {
+		t.Fatalf("expected error for oversized error message payload, got nil")
+	}
+}
