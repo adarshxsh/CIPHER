@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -31,23 +32,36 @@ func NewStreamHandler(h host.Host, eng *engine.ContentEngine) *StreamHandler {
 
 func (h *StreamHandler) handleStream(s network.Stream) {
 	defer s.Close()
-	log.Printf("[Chunk Protocol] New stream from %s", s.Conn().RemotePeer())
+	remotePeer := s.Conn().RemotePeer()
+	log.Printf("[Chunk Protocol] New stream from %s", remotePeer)
+
+	messageCount := 0
 
 	for {
 		msg, err := ReadMessage(s)
 		if err != nil {
 			if err == io.EOF || err.Error() == "stream reset" {
-				log.Printf("[Chunk Protocol] Stream closed by %s", s.Conn().RemotePeer())
+				log.Printf("[Chunk Protocol] Stream closed by %s", remotePeer)
 				return
 			}
 			log.Printf("[Chunk Protocol] Error reading message: %v", err)
 			return
 		}
 
-		if msg.Version != CurrentMessageVersion {
-			// Older or incompatible version
-			log.Printf("[Chunk Protocol] Unsupported version %d", msg.Version)
-			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version"))
+		messageCount++
+		if messageCount > MaxMessagesPerStream {
+			log.Printf("[Chunk Protocol] Rate limit error: stream from %s exceeded max messages per stream (%d)", remotePeer, MaxMessagesPerStream)
+			WriteMessage(s, BuildError(ErrBadRequest, "rate limit exceeded: max messages per stream exceeded"))
+			return
+		}
+
+		if err := ValidateMessage(msg); err != nil {
+			log.Printf("[Chunk Protocol] Invalid message from %s: %v", remotePeer, err)
+			if errors.Is(err, ErrInvalidMessageVersion) || errors.Is(err, ErrInvalidMessageType) {
+				WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message version or type"))
+			} else {
+				WriteMessage(s, BuildError(ErrBadRequest, "invalid message envelope or payload"))
+			}
 			return
 		}
 
@@ -55,10 +69,15 @@ func (h *StreamHandler) handleStream(s network.Stream) {
 		case MsgRequestManifest:
 			h.handleRequestManifest(s, msg)
 		case MsgRequestChunk:
-			h.handleRequestChunk(s, msg)
+			h.handleRequestChunk(s, msg, &messageCount)
+		case MsgError:
+			code, msgStr, _ := ParseError(msg.Payload)
+			log.Printf("[Chunk Protocol] Remote peer %s sent error: [%d] %s", remotePeer, code, msgStr)
+			return
 		default:
 			log.Printf("[Chunk Protocol] Unsupported message type: %d", msg.Type)
 			WriteMessage(s, BuildError(ErrUnsupportedMessage, "unsupported message type"))
+			return
 		}
 	}
 }
@@ -84,7 +103,7 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 	}
 }
 
-func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
+func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message, messageCount *int) {
 	chunkID, err := ParseRequestChunk(msg.Payload)
 	if err != nil {
 		WriteMessage(s, BuildError(ErrBadRequest, "invalid payload for REQUEST_CHUNK"))
@@ -121,6 +140,20 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		log.Printf("[Chunk Protocol] Error reading ACK: %v", err)
 		return
 	}
+
+	*messageCount++
+	if *messageCount > MaxMessagesPerStream {
+		log.Printf("[Chunk Protocol] Rate limit error: stream from %s exceeded max messages per stream (%d)", s.Conn().RemotePeer(), MaxMessagesPerStream)
+		WriteMessage(s, BuildError(ErrBadRequest, "rate limit exceeded: max messages per stream exceeded"))
+		return
+	}
+
+	if err := ValidateMessage(ackMsg); err != nil {
+		log.Printf("[Chunk Protocol] Invalid ACK/message from %s: %v", s.Conn().RemotePeer(), err)
+		WriteMessage(s, BuildError(ErrBadRequest, "invalid ACK message"))
+		return
+	}
+
 	if ackMsg.Type == MsgError {
 		code, msgStr, _ := ParseError(ackMsg.Payload)
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)

@@ -90,18 +90,51 @@ func TestProtocolCompatibility_MalformedMessage(t *testing.T) {
 	}
 }
 
-func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
-	msg := &chunk.Message{
-		Version: chunk.CurrentMessageVersion,
-		Type:    0x99, // Unknown type
-		Payload: []byte{},
-	}
-	var buf bytes.Buffer
-	chunk.WriteMessage(&buf, msg)
+func TestSanitizeErrorMessage_EscapesControlCharacters(t *testing.T) {
+	input := "Line 1\nLine 2\r\tWith \x1b[31mANSI\x00 and null"
+	expected := `Line 1\nLine 2\r\tWith \x1b[31mANSI\x00 and null`
 
-	parsedMsg, _ := chunk.ReadMessage(&buf)
-	if parsedMsg.Type != 0x99 {
-		t.Errorf("Expected type 0x99, got %v", parsedMsg.Type)
+	got := chunk.SanitizeErrorMessage(input)
+	if got != expected {
+		t.Errorf("SanitizeErrorMessage failed:\nexpected: %q\ngot:      %q", expected, got)
 	}
-	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
+}
+
+func TestParseError_SanitizesControlCharacters(t *testing.T) {
+	// Payload with ErrorCode (1 byte) + unsanitized string with newlines and control chars
+	payload := append([]byte{byte(chunk.ErrBadRequest)}, []byte("Failed to process\n[LOG INJECTION ATTEMPT]\r\t\x00")...)
+
+	code, msgStr, err := chunk.ParseError(payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if code != chunk.ErrBadRequest {
+		t.Errorf("expected error code %d, got %d", chunk.ErrBadRequest, code)
+	}
+
+	expectedMsg := `Failed to process\n[LOG INJECTION ATTEMPT]\r\t\x00`
+	if msgStr != expectedMsg {
+		t.Errorf("expected sanitized message %q, got %q", expectedMsg, msgStr)
+	}
+}
+
+func TestParseError_TruncatesOversizedErrorMessages(t *testing.T) {
+	// Create string exceeding 512 bytes
+	longMsg := bytes.Repeat([]byte("A"), 600)
+	payload := append([]byte{byte(chunk.ErrInternal)}, longMsg...)
+
+	_, msgStr, err := chunk.ParseError(payload)
+	if err != nil {
+		t.Fatalf("ParseError failed: %v", err)
+	}
+
+	if len(msgStr) != chunk.MaxErrorMessageSize {
+		t.Errorf("expected truncated string length %d, got %d", chunk.MaxErrorMessageSize, len(msgStr))
+	}
+
+	expectedEnding := chunk.TruncationIndicator
+	if !bytes.HasSuffix([]byte(msgStr), []byte(expectedEnding)) {
+		t.Errorf("expected truncated string to end with %q, got ending %q", expectedEnding, msgStr[len(msgStr)-len(expectedEnding):])
+	}
 }
