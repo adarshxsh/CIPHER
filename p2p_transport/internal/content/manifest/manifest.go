@@ -1,8 +1,10 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+	"errors"
+
 	"cipher/internal/content/core"
 )
 
@@ -52,4 +54,26 @@ func Deserialize(data []byte) (*Manifest, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// Digest computes the canonical SHA-256 digest of the manifest structure
+// with a zeroed Descriptor.ID field.
+func (m *Manifest) Digest() (core.ContentID, error) {
+	if m == nil {
+		return core.ContentID{}, errors.New("nil manifest")
+	}
+
+	origID := m.Descriptor.ID
+	m.Descriptor.ID = core.ContentID{}
+	defer func() {
+		m.Descriptor.ID = origID
+	}()
+
+	data, err := json.Marshal(m)
+	if err != nil {
+		return core.ContentID{}, err
+	}
+
+	hash := sha256.Sum256(data)
+	return core.ContentID(hash), nil
 }

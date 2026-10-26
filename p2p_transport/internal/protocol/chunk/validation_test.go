@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cipher/internal/content/core"
+	"cipher/internal/content/manifest"
 	"cipher/internal/protocol/chunk"
 )
 
@@ -127,5 +128,60 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 	err = chunk.ValidateChunkForRequest(requestedChunk, chunkMsg.Payload)
 	if !errors.Is(err, chunk.ErrChunkMismatch) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
+	}
+}
+
+func TestValidateManifestForRequest_CanonicalDigestValidation(t *testing.T) {
+	m := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 2048,
+		},
+		ChunkIDs: []core.ChunkID{{0x01}, {0x02}},
+	}
+
+	validID, err := m.Digest()
+	if err != nil {
+		t.Fatalf("m.Digest failed: %v", err)
+	}
+	m.Descriptor.ID = validID
+
+	data, err := m.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	// 1. Valid manifest matching requested ContentID
+	msg := chunk.BuildManifest(validID, data)
+	if err := chunk.ValidateManifestForRequest(validID, msg.Payload); err != nil {
+		t.Fatalf("Expected valid manifest to pass validation: %v", err)
+	}
+
+	// 2. Spoofed manifest: Header matches requested ContentID, but payload is tampered
+	tamperedManifest := &manifest.Manifest{
+		Version: 1,
+		Descriptor: manifest.ContentDescriptor{
+			Type: manifest.TypeFile,
+			Size: 99999, // tampered size
+		},
+		ChunkIDs: []core.ChunkID{{0xFF}},
+	}
+	tamperedBytes, err := tamperedManifest.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+
+	spoofedMsg := chunk.BuildManifest(validID, tamperedBytes) // Header says validID
+	err = chunk.ValidateManifestForRequest(validID, spoofedMsg.Payload)
+	if !errors.Is(err, chunk.ErrContentMismatch) {
+		t.Fatalf("Expected ErrContentMismatch for spoofed manifest, got %v", err)
+	}
+
+	// 3. Malformed JSON payload
+	malformedMsg := chunk.BuildManifest(validID, []byte("{invalid-json"))
+	err = chunk.ValidateManifestForRequest(validID, malformedMsg.Payload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("Expected ErrInvalidManifestPayload for malformed JSON, got %v", err)
 	}
 }
