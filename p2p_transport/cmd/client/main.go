@@ -34,6 +34,8 @@ func main() {
 	fetchID := flag.String("fetch", "", "ContentID to fetch (hex)")
 	resumeID := flag.String("resume", "", "ContentID to resume downloading (hex)")
 	keyHex := flag.String("key", "", "Decryption key (32-byte hex) for reassembly")
+	keyFile := flag.String("key-file", "", "Path to decryption key file")
+	exportKeyFile := flag.String("export-key-file", "", "Path to export raw decryption key to file")
 	reassembleOut := flag.String("out", "", "Output path to reassemble the decrypted file")
 
 	port := flag.Int("p", 5001, "Port for the client to listen on (TCP)")
@@ -151,7 +153,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewFSKeyProvider(*storePath)
+	if err != nil {
+		log.Fatalf("Failed to initialize key provider: %v", err)
+	}
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
 
@@ -205,12 +210,36 @@ func main() {
 	}
 
 	// 5. Store decryption key if provided
-	if *keyHex != "" {
+	var resolvedKey []byte
+	if *keyFile != "" {
+		kBytes, err := engine.LoadKeyFromFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to load key from file: %v", err)
+		}
+		resolvedKey = kBytes
+	} else if envKey := os.Getenv("CIPHER_DECRYPTION_KEY"); envKey != "" {
+		envKeyTrim := strings.TrimSpace(envKey)
+		if len(envKeyTrim) == 64 {
+			kBytes, err := hex.DecodeString(envKeyTrim)
+			if err != nil {
+				log.Fatalf("Invalid hex in CIPHER_DECRYPTION_KEY env var: %v", err)
+			}
+			resolvedKey = kBytes
+		} else if len(envKey) == 32 {
+			resolvedKey = []byte(envKey)
+		} else {
+			log.Fatalf("Invalid CIPHER_DECRYPTION_KEY env var length (must be 64 hex chars or 32 raw bytes)")
+		}
+	} else if *keyHex != "" {
 		kBytes, err := hex.DecodeString(*keyHex)
 		if err != nil || len(kBytes) != 32 {
 			log.Fatalf("Invalid key format (must be 32-byte hex)")
 		}
-		keys.Put(ctx, contentID, kBytes)
+		resolvedKey = kBytes
+	}
+
+	if len(resolvedKey) > 0 {
+		keys.Put(ctx, contentID, resolvedKey)
 	}
 
 	// 6. Data Plane: Resolve Manifest
@@ -231,8 +260,8 @@ func main() {
 
 	// 8. Content Engine: Decrypt & Reassemble
 	if *reassembleOut != "" {
-		if *keyHex == "" {
-			log.Printf("Warning: No decryption key provided (-key). Attempting reassembly with cached keys...")
+		if len(resolvedKey) == 0 {
+			log.Printf("Warning: No explicit key provided (-key-file/CIPHER_DECRYPTION_KEY). Attempting reassembly with cached keys...")
 		}
 		outF, err := os.Create(*reassembleOut)
 		if err != nil {
@@ -244,5 +273,15 @@ func main() {
 			log.Fatalf("Reassembly failed: %v", err)
 		}
 		log.Printf("[✓] Content decrypted and reassembled to: %s", *reassembleOut)
+
+		if *exportKeyFile != "" {
+			key, err := keys.Get(ctx, contentID)
+			if err == nil {
+				if err := engine.ExportKeyToFile(*exportKeyFile, key); err != nil {
+					log.Fatalf("Failed to export key to file: %v", err)
+				}
+				log.Printf("Exported decryption key to %s", *exportKeyFile)
+			}
+		}
 	}
 }

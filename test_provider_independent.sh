@@ -40,14 +40,13 @@ echo "Bootstrap Multiaddr: $BOOT_ADDR"
 
 echo "\n[Step 4/6] Publisher ingests content into Provider store and EXITS..."
 # Seed is set to false so the publisher explicitly terminates after ingestion
-./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -file test_orig.dat > publisher.log 2>&1
+./bin/publisher -seed=false -identity ./store_provider/pub.key -store ./store_provider -export-key-file ./store_provider/export.key -file test_orig.dat > publisher.log 2>&1
 
 CONTENT_ID=$(grep "^ContentID" publisher.log | awk '{print $NF}')
-KEY=$(grep "^Decryption Key" publisher.log | awk '{print $NF}')
 
 echo "Content Published:"
 echo "  - ContentID:      $CONTENT_ID"
-echo "  - Decryption Key: $KEY"
+echo "  - Key file:       ./store_provider/export.key"
 
 # Verify publisher exited cleanly (ran synchronously above)
 echo "✓ Verified: Publisher process completed and exited."
@@ -61,7 +60,7 @@ PROV_ID=$(grep "Provider Peer ID:" provider.log | awk '{print $NF}')
 echo "Provider running with Peer ID: $PROV_ID"
 
 echo "\nRunning Client 1 (DHT Discovery only — NO Publisher in network)..."
-./bin/client -p 48020 -ws-port 0 -identity ./store_client1/client.key -store ./store_client1 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_recov1.dat > client1.log 2>&1
+./bin/client -p 48020 -ws-port 0 -identity ./store_client1/client.key -store ./store_client1 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file ./store_provider/export.key -out test_recov1.dat > client1.log 2>&1
 
 RECOV1_HASH=$(shasum -a 256 test_recov1.dat | awk '{print $1}')
 echo "Client 1 Downloaded SHA-256: $RECOV1_HASH"
@@ -85,7 +84,7 @@ PROV_PID=$!
 sleep 2
 
 echo "Running Client 2 against restarted Provider via DHT..."
-./bin/client -p 48030 -ws-port 0 -identity ./store_client2/client.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key "$KEY" -out test_recov2.dat > client2.log 2>&1
+./bin/client -p 48030 -ws-port 0 -identity ./store_client2/client.key -store ./store_client2 -bootstrap "$BOOT_ADDR" -fetch "$CONTENT_ID" -key-file ./store_provider/export.key -out test_recov2.dat > client2.log 2>&1
 
 RECOV2_HASH=$(shasum -a 256 test_recov2.dat | awk '{print $1}')
 echo "Client 2 Downloaded SHA-256: $RECOV2_HASH"
