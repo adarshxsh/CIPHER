@@ -25,7 +25,7 @@ func BenchmarkContentEngine_Ingest(b *testing.B) {
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(tmpDir)
 
 	if err := storage.NewFSStorage(tmpDir); err != nil {
 		b.Fatalf("failed to init storage: %v", err)
@@ -63,7 +63,7 @@ func BenchmarkContentEngine_Reassemble(b *testing.B) {
 	config := core.EngineConfig{ChunkSize: 256 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(tmpDir)
 	
 	store := storage.NewFSStore(tmpDir)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)

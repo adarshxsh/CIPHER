@@ -28,7 +28,7 @@ func TestContentEngine_EndToEnd(t *testing.T) {
 
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(tmpDir)
 
 	if err := storage.NewFSStorage(tmpDir); err != nil {
 		t.Fatalf("failed to init storage: %v", err)

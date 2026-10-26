@@ -1,26 +1,30 @@
 #!/bin/bash
-cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/p2p_transport"
+rm -rf store_a store_b test.mp4 out.mp4 key.bin peer_a.log peer_b.log
 export CGO_ENABLED=0
 go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
 
-./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 > peer_a.log 2>&1 &
+./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 --key-out key.bin > peer_a.log 2>&1 &
 PEER_A_PID=$!
 
 sleep 3
 
 CONTENT_ID=$(grep "ContentID:" peer_a.log | awk '{print $NF}')
-KEY=$(grep "Key:" peer_a.log | awk '{print $NF}')
+KEY_FINGERPRINT=$(grep "Key Fingerprint:" peer_a.log | awk '{print $NF}')
 ADDR=$(grep "127.0.0.1/tcp/47891/p2p/" peer_a.log | head -n 1 | awk '{print $NF}')
 
-echo "Content ID: $CONTENT_ID"
-echo "Key:        $KEY"
-echo "Address:    $ADDR"
+echo "Content ID:       $CONTENT_ID"
+echo "Key Fingerprint: $KEY_FINGERPRINT"
+echo "Address:          $ADDR"
 
-./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4
+./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" --key-file key.bin -reassemble out.mp4 > peer_b.log 2>&1 &
+PEER_B_PID=$!
 
-kill $PEER_A_PID 2>/dev/null || true
+sleep 3
+
+kill $PEER_A_PID $PEER_B_PID 2>/dev/null || true
 echo "--- out.mp4 ---"
 cat out.mp4

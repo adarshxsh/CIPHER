@@ -44,6 +44,8 @@ func main() {
 	allowPush := flag.Bool("allow-push", true, "Enable /cipher/push/1.0.0 remote ingestion protocol")
 	pushAuthPolicy := flag.String("push-auth-policy", "open", "Push authorization policy: 'open' or 'allowlist'")
 	pushAllowedPublishers := flag.String("push-allowed-publishers", "", "Comma-separated list of allowed publisher peer IDs (for allowlist policy)")
+	keyFile := flag.String("key-file", "", "Path to key file (or '-' for stdin) to import content encryption key")
+	keyOut := flag.String("key-out", "", "Path to file where content decryption key will be exported")
 
 	flag.Parse()
 
@@ -104,9 +106,23 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 32 * 1024}
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys := storage.NewFSKeyProvider(*storePath)
 	store := storage.NewFSStore(*storePath)
 	eng := engine.NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	if *keyFile != "" {
+		kBytes, err := storage.LoadKeyFromFile(*keyFile)
+		if err != nil {
+			log.Fatalf("Failed to load key file: %v", err)
+		}
+		log.Printf("Loaded key from file: %s (fingerprint: %s...)", *keyFile, storage.KeyFingerprint(kBytes))
+		if *keyOut != "" {
+			if err := storage.ExportKeyToFile(*keyOut, kBytes); err != nil {
+				log.Fatalf("Failed to export key to file: %v", err)
+			}
+			log.Printf("Exported key to file: %s", *keyOut)
+		}
+	}
 
 	// Apply testing flags
 	if *corruptProb > 0 {
