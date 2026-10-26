@@ -52,7 +52,7 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
-		return nil, fmt.Errorf("%w: failed to read frame header: %v", ErrTruncatedFrame, err)
+		return nil, fmt.Errorf("%w: failed to read frame header: %w", ErrTruncatedFrame, err)
 	}
 
 	frameSize := binary.LittleEndian.Uint32(header[:frameLengthSize])
@@ -119,7 +119,7 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, fmt.Errorf(
-			"%w: expected=%d bytes: %v",
+			"%w: expected=%d bytes: %w",
 			ErrTruncatedFrame,
 			declaredSize,
 			err,
@@ -178,7 +178,7 @@ func DecodeFrameHeader(r io.Reader) (
 			return
 		}
 		err = fmt.Errorf(
-			"%w: failed to read frame header: %v",
+			"%w: failed to read frame header: %w",
 			ErrTruncatedFrame,
 			readErr,
 		)
@@ -292,7 +292,7 @@ func ReadFramePayload(
 
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, fmt.Errorf(
-			"%w: expected=%d bytes: %v",
+			"%w: expected=%d bytes: %w",
 			ErrTruncatedFrame,
 			payloadSize,
 			err,
