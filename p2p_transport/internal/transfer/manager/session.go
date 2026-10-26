@@ -5,12 +5,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"cipher/internal/content/core"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
+const (
+	DefaultMaxSessionFileSize int64 = 1024 * 1024 // 1 MB
+	DefaultMaxSessionEntries  int   = 100
+)
+
+type SessionOption func(*FileSessionManager)
+
+// WithMaxFileSize sets the maximum size in bytes for session files parsed during List.
+func WithMaxFileSize(size int64) SessionOption {
+	return func(m *FileSessionManager) {
+		if size > 0 {
+			m.maxFileSize = size
+		}
+	}
+}
+
+// WithMaxEntries sets the maximum number of recent session entries parsed during List.
+func WithMaxEntries(entries int) SessionOption {
+	return func(m *FileSessionManager) {
+		if entries > 0 {
+			m.maxEntries = entries
+		}
+	}
+}
 
 type SessionStatus string
 
@@ -53,14 +79,26 @@ type SessionManager interface {
 
 // FileSessionManager implements SessionManager by writing JSON to disk.
 type FileSessionManager struct {
-	dir string
+	dir         string
+	maxFileSize int64
+	maxEntries  int
 }
 
-func NewFileSessionManager(dir string) (*FileSessionManager, error) {
+func NewFileSessionManager(dir string, opts ...SessionOption) (*FileSessionManager, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	return &FileSessionManager{dir: dir}, nil
+	m := &FileSessionManager{
+		dir:         dir,
+		maxFileSize: DefaultMaxSessionFileSize,
+		maxEntries:  DefaultMaxSessionEntries,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	return m, nil
 }
 
 func (m *FileSessionManager) getPath(id core.ContentID) string {
@@ -112,6 +150,11 @@ func (m *FileSessionManager) Delete(id core.ContentID) error {
 	return nil
 }
 
+type sessionFileEntry struct {
+	name    string
+	modTime time.Time
+}
+
 func (m *FileSessionManager) List() ([]*TransferSession, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -120,17 +163,56 @@ func (m *FileSessionManager) List() ([]*TransferSession, error) {
 		}
 		return nil, err
 	}
-	var sessions []*TransferSession
+
+	maxSize := m.maxFileSize
+	if maxSize <= 0 {
+		maxSize = DefaultMaxSessionFileSize
+	}
+
+	maxEntries := m.maxEntries
+	if maxEntries <= 0 {
+		maxEntries = DefaultMaxSessionEntries
+	}
+
+	var candidates []sessionFileEntry
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
-			b, err := os.ReadFile(filepath.Join(m.dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			var s TransferSession
-			if err := json.Unmarshal(b, &s); err == nil {
-				sessions = append(sessions, &s)
-			}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.Size() > maxSize {
+			continue
+		}
+		candidates = append(candidates, sessionFileEntry{
+			name:    entry.Name(),
+			modTime: info.ModTime(),
+		})
+	}
+
+	// Sort candidates by modification timestamp (most recent first).
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].modTime.Equal(candidates[j].modTime) {
+			return candidates[i].name < candidates[j].name
+		}
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	if len(candidates) > maxEntries {
+		candidates = candidates[:maxEntries]
+	}
+
+	var sessions []*TransferSession
+	for _, c := range candidates {
+		b, err := os.ReadFile(filepath.Join(m.dir, c.name))
+		if err != nil {
+			continue
+		}
+		var s TransferSession
+		if err := json.Unmarshal(b, &s); err == nil {
+			sessions = append(sessions, &s)
 		}
 	}
 	return sessions, nil
