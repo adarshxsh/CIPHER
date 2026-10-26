@@ -2,6 +2,7 @@ package chunk_test
 
 import (
 	"bytes"
+	"io"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -105,3 +106,72 @@ func TestProtocolCompatibility_UnsupportedMessage(t *testing.T) {
 	}
 	// Handler test will ensure it replies with ERR_UNSUPPORTED_MESSAGE
 }
+
+type nopWriter struct{}
+
+func (*nopWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func TestWriteMessage_ZeroAllocations(t *testing.T) {
+	msg := chunk.BuildRequestManifest(core.ContentID{0x01})
+	var nw nopWriter
+	var w io.Writer = &nw
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := chunk.WriteMessage(w, msg); err != nil {
+			t.Fatalf("WriteMessage failed: %v", err)
+		}
+	})
+
+	if allocs != 0 {
+		t.Errorf("expected 0 allocations for WriteMessage, got %f", allocs)
+	}
+}
+
+func TestReadMessage_SingleFrameBufferAllocation(t *testing.T) {
+	msg := chunk.BuildRequestManifest(core.ContentID{0x01})
+	var buf bytes.Buffer
+	if err := chunk.WriteMessage(&buf, msg); err != nil {
+		t.Fatalf("WriteMessage failed: %v", err)
+	}
+	encoded := buf.Bytes()
+
+	r := bytes.NewReader(encoded)
+	readMsg, err := chunk.ReadMessage(r)
+	if err != nil {
+		t.Fatalf("ReadMessage failed: %v", err)
+	}
+
+	// Verify that Payload points directly into the frame buffer slice
+	if len(readMsg.Payload) == 0 {
+		t.Fatalf("expected non-empty payload")
+	}
+}
+
+func TestParseChunk_ZeroCopyPayloadSubSlicing(t *testing.T) {
+	chunkObj := &core.Chunk{
+		Header: core.ChunkHeader{Version: 1, Index: 2},
+		Data:   []byte("test-payload-ciphertext-bytes"),
+	}
+	msg, err := chunk.BuildChunk(chunkObj)
+	if err != nil {
+		t.Fatalf("BuildChunk failed: %v", err)
+	}
+
+	parsedChunk, err := chunk.ParseChunk(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParseChunk failed: %v", err)
+	}
+
+	if !bytes.Equal(parsedChunk.Data, chunkObj.Data) {
+		t.Fatalf("chunk data content mismatch")
+	}
+
+	// Verify zero-copy sub-slicing: parsedChunk.Data MUST point directly into msg.Payload
+	expectedOffset := len(msg.Payload) - len(chunkObj.Data)
+	if &parsedChunk.Data[0] != &msg.Payload[expectedOffset] {
+		t.Errorf("parsedChunk.Data is not a direct sub-slice view of msg.Payload")
+	}
+}
+

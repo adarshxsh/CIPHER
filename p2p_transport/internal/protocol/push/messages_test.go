@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"crypto/rand"
+	"io"
 	"testing"
 
 	"cipher/internal/content/core"
@@ -128,3 +129,118 @@ func TestFrameSizeLimits(t *testing.T) {
 		t.Fatalf("expected error for oversized message, got nil")
 	}
 }
+
+type nopWriter struct{}
+
+func (*nopWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func TestWritePushMessage_ZeroAllocations(t *testing.T) {
+	msg := BuildPushBatchComplete(core.ContentID{0x01})
+	var nw nopWriter
+	var w io.Writer = &nw
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := WritePushMessage(w, msg); err != nil {
+			t.Fatalf("WritePushMessage failed: %v", err)
+		}
+	})
+
+	if allocs != 0 {
+		t.Errorf("expected 0 allocations for WritePushMessage, got %f", allocs)
+	}
+}
+
+func TestReadPushMessage_SingleFrameBufferAllocation(t *testing.T) {
+	msg := BuildPushBatchComplete(core.ContentID{0x01})
+	var buf bytes.Buffer
+	if err := WritePushMessage(&buf, msg); err != nil {
+		t.Fatalf("WritePushMessage failed: %v", err)
+	}
+	encoded := buf.Bytes()
+
+	r := bytes.NewReader(encoded)
+	readMsg, err := ReadPushMessage(r)
+	if err != nil {
+		t.Fatalf("ReadPushMessage failed: %v", err)
+	}
+
+	if len(readMsg.Payload) == 0 {
+		t.Fatalf("expected non-empty payload")
+	}
+}
+
+func TestParsePushChunk_ZeroCopyPayloadSubSlicing(t *testing.T) {
+	var contentID core.ContentID
+	var chunkID core.ChunkID
+	contentID[0] = 0x11
+	chunkID[0] = 0x22
+
+	chunkObj := &core.Chunk{
+		Header: core.ChunkHeader{Version: 1, ID: chunkID, Index: 1},
+		Data:   []byte("test-push-ciphertext-payload"),
+	}
+
+	msg, err := BuildPushChunk(contentID, chunkObj)
+	if err != nil {
+		t.Fatalf("BuildPushChunk failed: %v", err)
+	}
+
+	_, parsedChunk, err := ParsePushChunk(msg.Payload)
+	if err != nil {
+		t.Fatalf("ParsePushChunk failed: %v", err)
+	}
+
+	if !bytes.Equal(parsedChunk.Data, chunkObj.Data) {
+		t.Fatalf("chunk data content mismatch")
+	}
+
+	// Verify zero-copy sub-slicing: parsedChunk.Data MUST point directly into msg.Payload
+	expectedOffset := len(msg.Payload) - len(chunkObj.Data)
+	if &parsedChunk.Data[0] != &msg.Payload[expectedOffset] {
+		t.Errorf("parsedChunk.Data is not a direct sub-slice view of msg.Payload")
+	}
+}
+
+func BenchmarkWritePushMessage(b *testing.B) {
+	msg := BuildPushBatchComplete(core.ContentID{0x01})
+	var nw nopWriter
+	var w io.Writer = &nw
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = WritePushMessage(w, msg)
+	}
+}
+
+func BenchmarkReadPushMessage(b *testing.B) {
+	msg := BuildPushBatchComplete(core.ContentID{0x01})
+	var buf bytes.Buffer
+	_ = WritePushMessage(&buf, msg)
+	data := buf.Bytes()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(data)
+		_, _ = ReadPushMessage(r)
+	}
+}
+
+func BenchmarkParsePushChunk(b *testing.B) {
+	var contentID core.ContentID
+	chunkObj := &core.Chunk{
+		Header: core.ChunkHeader{Version: 1, Index: 1},
+		Data:   make([]byte, 32768),
+	}
+	msg, _ := BuildPushChunk(contentID, chunkObj)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = ParsePushChunk(msg.Payload)
+	}
+}
+
