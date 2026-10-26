@@ -41,8 +41,14 @@ type Encryptor interface {
 	DecryptChunk(key []byte, chunk *Chunk) error
 }
 
+type KeyHandle interface {
+	Bytes() []byte
+	Release()
+}
+
 type KeyProvider interface {
 	Get(ctx context.Context, id ContentID) ([]byte, error)
+	GetHandle(ctx context.Context, id ContentID) (KeyHandle, error)
 	Put(ctx context.Context, id ContentID, key []byte) error
 	Delete(ctx context.Context, id ContentID) error
 }

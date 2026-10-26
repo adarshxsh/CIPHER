@@ -69,9 +69,6 @@ const (
 	// ChunkResponse carries a binary ChunkHeader plus encrypted chunk data.
 	MaxChunkResponseSize = MaxMessagePayloadSize
 
-	// KeyReveal normally contains a key and small identifying fields.
-	MaxKeyRevealSize = 256
-
 	// MaxProtocolErrorSize limits encoded protocol error responses.
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
