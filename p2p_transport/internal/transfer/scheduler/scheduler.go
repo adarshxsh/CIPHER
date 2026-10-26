@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	
+
 	"github.com/libp2p/go-libp2p/core/peer"
+
 	"cipher/internal/content/core"
 	"cipher/internal/content/engine"
 	"cipher/internal/protocol/chunk"
+	"cipher/internal/transfer/reputation"
 	"cipher/internal/transport"
 )
 
@@ -19,45 +21,61 @@ type Source struct {
 }
 
 type Scheduler struct {
-	Transport   *transport.Transport
-	Engine      *engine.ContentEngine
-	MaxAttempts int
+	Transport         *transport.Transport
+	Engine            *engine.ContentEngine
+	MaxAttempts       int
+	ReputationManager *reputation.ReputationManager
 }
 
-func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
+func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, rep ...*reputation.ReputationManager) *Scheduler {
+	var r *reputation.ReputationManager
+	if len(rep) > 0 && rep[0] != nil {
+		r = rep[0]
+	} else {
+		r = reputation.NewReputationManager()
+	}
 	return &Scheduler{
-		Transport:   t,
-		Engine:      eng,
-		MaxAttempts: maxAttempts,
+		Transport:         t,
+		Engine:            eng,
+		MaxAttempts:       maxAttempts,
+		ReputationManager: r,
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
-	
+
 	// Start workers
 	activeWorkers := 0
 	for _, source := range sources {
-		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
+		if s.ReputationManager != nil && s.ReputationManager.IsQuarantined(source.PeerID) {
+			log.Printf("[Scheduler] Skipping quarantined source %s", source.PeerID)
+			continue
+		}
+
+		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine, s.ReputationManager)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
+			if s.ReputationManager != nil {
+				s.ReputationManager.RecordTransientFailure(source.PeerID)
+			}
 			continue
 		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.ReputationManager)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
-	
+
 	if activeWorkers == 0 {
 		return fmt.Errorf("no active workers could be started")
 	}
-	
+
 	pendingTasks := len(tasks)
-	
+
 	for pendingTasks > 0 && activeWorkers > 0 {
 		select {
 		case <-ctx.Done():
@@ -68,7 +86,6 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 					activeWorkers--
 					continue
 				}
-				
 				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
 				if errors.Is(res.Error, chunk.ErrRemoteChunkNotFound) {
 					if res.Task.MissedPeers == nil {
@@ -97,10 +114,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 			}
 		}
 	}
-	
+
 	if pendingTasks > 0 {
 		return fmt.Errorf("all workers died, %d chunks remaining", pendingTasks)
 	}
-	
+
 	return nil
 }
