@@ -1,12 +1,12 @@
 #!/bin/bash
 cd p2p_transport
-rm -rf store_a store_b test.mp4 out.mp4
+rm -rf store_a store_b test.mp4 out.mp4 peer_a.log
 export CGO_ENABLED=0
 go build -o bin/peer ./cmd/peer
 
 echo "Testing plaintext transfer..." > test.mp4
 
-./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 > peer_a.log 2>&1 &
+./bin/peer -p 47891 -ws-port 0 -identity ./store_a/identity.key -store ./store_a -ingest test.mp4 -show-decryption-key > peer_a.log 2>&1 &
 PEER_A_PID=$!
 
 sleep 3
@@ -19,7 +19,7 @@ echo "Content ID: $CONTENT_ID"
 echo "Key:        $KEY"
 echo "Address:    $ADDR"
 
-./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4
+timeout 10s ./bin/peer -p 47892 -ws-port 0 -store ./store_b -identity ./store_b/identity.key -d "$ADDR" -fetch "$CONTENT_ID" -key "$KEY" -reassemble out.mp4 || true
 
 kill $PEER_A_PID 2>/dev/null || true
 echo "--- out.mp4 ---"
