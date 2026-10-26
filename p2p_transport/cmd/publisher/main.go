@@ -234,12 +234,19 @@ func main() {
 		}
 	}
 
-	key, _ := keys.Get(ctx, m.Descriptor.ID)
+	keyHandle, _ := keys.GetHandle(ctx, m.Descriptor.ID)
+	var keyBytes []byte
+	if keyHandle != nil {
+		keyBytes = keyHandle.Bytes()
+	}
 
 	fmt.Println("\n================ CIPHER PUBLISHER ================")
 	fmt.Printf("File Ingested : %s\n", *filePath)
 	fmt.Printf("ContentID     : %x\n", m.Descriptor.ID)
-	fmt.Printf("Decryption Key: %x\n", key)
+	fmt.Printf("Decryption Key: %x\n", keyBytes)
+	if keyHandle != nil {
+		keyHandle.Release()
+	}
 	fmt.Printf("Chunks Total  : %d (%d KB per chunk)\n", len(m.ChunkIDs), *chunkSizeKB)
 	fmt.Printf("Publisher ID  : %s\n", h.ID().String())
 	fmt.Println("Addresses:")

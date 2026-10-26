@@ -1,6 +1,10 @@
 package core
 
-import "context"
+import (
+	"context"
+	"runtime"
+	"sync"
+)
 
 type ChunkID [32]byte
 type ContentID [32]byte
@@ -36,13 +40,59 @@ type Digest interface {
 	Algorithm() string
 }
 
+// KeyHandle represents a protected key memory handle with explicit release hooks.
+type KeyHandle interface {
+	Bytes() []byte
+	Release()
+}
+
+type localKeyHandle struct {
+	mu  sync.Mutex
+	key []byte
+}
+
+func NewKeyHandle(key []byte) KeyHandle {
+	if key == nil {
+		return &localKeyHandle{}
+	}
+	k := make([]byte, len(key))
+	copy(k, key)
+	return &localKeyHandle{key: k}
+}
+
+func (h *localKeyHandle) Bytes() []byte {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.key
+}
+
+func (h *localKeyHandle) Release() {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.key != nil {
+		Wipe(h.key)
+		h.key = nil
+	}
+}
+
+// Wipe overwrites the provided slice with zeros and prevents compiler dead-store optimization.
+func Wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+	runtime.KeepAlive(b)
+}
+
 type Encryptor interface {
-	EncryptChunk(key []byte, chunk *Chunk) error
-	DecryptChunk(key []byte, chunk *Chunk) error
+	EncryptChunk(key KeyHandle, chunk *Chunk) error
+	DecryptChunk(key KeyHandle, chunk *Chunk) error
 }
 
 type KeyProvider interface {
-	Get(ctx context.Context, id ContentID) ([]byte, error)
+	GetHandle(ctx context.Context, id ContentID) (KeyHandle, error)
 	Put(ctx context.Context, id ContentID, key []byte) error
 	Delete(ctx context.Context, id ContentID) error
 }

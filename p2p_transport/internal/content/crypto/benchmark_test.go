@@ -28,9 +28,11 @@ func BenchmarkChaCha20Encryptor(b *testing.B) {
 	b.SetBytes(int64(chunkSize))
 	b.ResetTimer()
 
+	keyHandle := core.NewKeyHandle(key)
+
 	for i := 0; i < b.N; i++ {
 		// Encrypt in place
-		err := enc.EncryptChunk(key, chunk)
+		err := enc.EncryptChunk(keyHandle, chunk)
 		if err != nil {
 			b.Fatalf("Encrypt failed: %v", err)
 		}
