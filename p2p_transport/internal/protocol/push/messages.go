@@ -78,6 +78,21 @@ func WritePushMessage(w io.Writer, msg *PushMessage) error {
 	return err
 }
 
+func MaxPushPayloadSizeForMessage(t PushMessageType) uint32 {
+	switch t {
+	case MsgPushManifest:
+		return MaxManifestSize
+	case MsgPushChunk:
+		return MaxChunkSize
+	case MsgPushManifestAck, MsgPushChunkAck, MsgPushBatchComplete, MsgPushBatchCompleteAck:
+		return 1024
+	case MsgPushError:
+		return 2048
+	default:
+		return MaxMessageSize - 3
+	}
+}
+
 func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 	var size uint32
 	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
@@ -91,22 +106,24 @@ func ReadPushMessage(r io.Reader) (*PushMessage, error) {
 		return nil, errors.New("message frame too short")
 	}
 
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r, data); err != nil {
+	var header [3]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(data)
-	msg := &PushMessage{}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Version); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &msg.Type); err != nil {
-		return nil, err
+	msg := &PushMessage{
+		Version: binary.LittleEndian.Uint16(header[0:2]),
+		Type:    PushMessageType(header[2]),
 	}
 
-	msg.Payload = make([]byte, buf.Len())
-	if _, err := buf.Read(msg.Payload); err != nil && err != io.EOF {
+	payloadSize := size - 3
+	maxAllowed := MaxPushPayloadSizeForMessage(msg.Type)
+	if payloadSize > maxAllowed {
+		return nil, fmt.Errorf("push message type %d payload size %d exceeds limit %d", msg.Type, payloadSize, maxAllowed)
+	}
+
+	msg.Payload = make([]byte, payloadSize)
+	if _, err := io.ReadFull(r, msg.Payload); err != nil {
 		return nil, err
 	}
 
