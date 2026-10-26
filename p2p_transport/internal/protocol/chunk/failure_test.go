@@ -4,12 +4,71 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"testing"
 
+	"github.com/libp2p/go-libp2p/core/network"
+
+	"cipher/internal/content/core"
 	"cipher/internal/content/manifest"
+	"cipher/internal/protocol"
 	"cipher/internal/protocol/chunk"
 	"cipher/internal/transport"
 )
+
+func TestChunkProtocol_IntegrityMismatch_ClosesStream(t *testing.T) {
+	h1, h2 := setupMockNetwork(t)
+	eng2 := createTestEngine(t)
+
+	// Custom stream handler on h1 returning corrupted chunk payload
+	h1.SetStreamHandler(protocol.ChunkTransportProtocolID, func(s network.Stream) {
+		defer s.Close()
+		req, err := chunk.ReadMessage(s)
+		if err != nil {
+			return
+		}
+		if req.Type == chunk.MsgRequestChunk {
+			var chunkID core.ChunkID
+			copy(chunkID[:], req.Payload)
+			badChunk := &core.Chunk{
+				Header: core.ChunkHeader{
+					Version:    1,
+					Index:      0,
+					ID:         chunkID,
+					CipherSize: 15,
+				},
+				Data: []byte("corrupted data!"),
+			}
+			msg, _ := chunk.BuildChunk(badChunk)
+			_ = chunk.WriteMessage(s, msg)
+		}
+	})
+
+	ctx := context.Background()
+	client, err := chunk.NewClient(ctx, transport.NewTransport(h2), h1.ID(), eng2)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	var dummyChunkID core.ChunkID
+	copy(dummyChunkID[:], []byte("12345678901234567890123456789012"))
+
+	_, err = client.FetchChunk(ctx, dummyChunkID)
+	if err == nil {
+		t.Fatal("Expected FetchChunk to fail on hash mismatch")
+	}
+
+	if !errors.Is(err, chunk.ErrIntegrityMismatch) {
+		t.Fatalf("Expected errors.Is(err, chunk.ErrIntegrityMismatch) to be true, got: %v", err)
+	}
+
+	// Verify stream is reset/closed by attempting another fetch over same client stream
+	_, err = client.FetchChunk(ctx, dummyChunkID)
+	if err == nil {
+		t.Fatal("Expected subsequent FetchChunk to fail because stream was reset")
+	}
+}
 
 func TestChunkProtocol_InterruptedTransfer(t *testing.T) {
 	h1, h2 := setupMockNetwork(t)

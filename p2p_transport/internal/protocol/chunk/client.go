@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -16,6 +17,9 @@ import (
 )
 
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
+
+// ErrIntegrityMismatch is returned when chunk payload validation fails due to a hash mismatch.
+var ErrIntegrityMismatch = errors.New("chunk integrity mismatch")
 
 type Client struct {
 	stream network.Stream
@@ -104,6 +108,10 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 		if code == ErrChunkNotFound {
 			return nil, ErrRemoteChunkNotFound
 		}
+		if code == ErrCodeIntegrityMismatch {
+			_ = c.stream.Reset()
+			return nil, fmt.Errorf("%w: remote integrity error (code %d): %s", ErrIntegrityMismatch, code, msg)
+		}
 		return nil, fmt.Errorf("remote error (code %d): %s", code, msg)
 	}
 
@@ -119,9 +127,10 @@ func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Ch
 	// Verify Hash matches ChunkID
 	hash := c.digest.Sum(chunk.Data)
 	if hash != core.Hash(chunkID) {
-		errMsg := BuildError(ErrIntegrityMismatch, "chunk hash mismatch")
-		WriteMessage(c.stream, errMsg)
-		return nil, fmt.Errorf("corrupted chunk %x received", chunkID)
+		errMsg := BuildError(ErrCodeIntegrityMismatch, "chunk hash mismatch")
+		_ = WriteMessage(c.stream, errMsg)
+		_ = c.stream.Reset()
+		return nil, fmt.Errorf("%w: corrupted chunk %x received", ErrIntegrityMismatch, chunkID)
 	}
 
 	// Set the expected ChunkID

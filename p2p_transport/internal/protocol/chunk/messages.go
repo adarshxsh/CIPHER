@@ -28,14 +28,14 @@ const (
 type ErrorCode uint8
 
 const (
-	ErrContentNotFound  ErrorCode = 0x01
-	ErrChunkNotFound    ErrorCode = 0x02
-	ErrInvalidManifest  ErrorCode = 0x03
-	ErrPermissionDenied ErrorCode = 0x04
-	ErrInternal         ErrorCode = 0x05
-	ErrIntegrityMismatch ErrorCode = 0x06
-	ErrBadRequest       ErrorCode = 0x07
-	ErrUnsupportedMessage ErrorCode = 0x08
+	ErrContentNotFound       ErrorCode = 0x01
+	ErrChunkNotFound         ErrorCode = 0x02
+	ErrInvalidManifest       ErrorCode = 0x03
+	ErrPermissionDenied      ErrorCode = 0x04
+	ErrInternal              ErrorCode = 0x05
+	ErrCodeIntegrityMismatch ErrorCode = 0x06
+	ErrBadRequest            ErrorCode = 0x07
+	ErrUnsupportedMessage    ErrorCode = 0x08
 )
 
 // Message is the symmetric envelope for all protocol communications.

@@ -298,7 +298,7 @@ func isKnownErrorCode(code ErrorCode) bool {
 		ErrInvalidManifest,
 		ErrPermissionDenied,
 		ErrInternal,
-		ErrIntegrityMismatch,
+		ErrCodeIntegrityMismatch,
 		ErrBadRequest,
 		ErrUnsupportedMessage:
 		return true
