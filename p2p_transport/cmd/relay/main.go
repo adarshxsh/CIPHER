@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"cipher/internal/identity"
+	"cipher/internal/transport"
 
 	"github.com/libp2p/go-libp2p"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	golog "github.com/ipfs/go-log/v2"
 )
@@ -26,6 +28,13 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
+	relayLimits := transport.BuildProfileLimits(transport.ProfileRelay)
+	limiter := rcmgr.NewFixedLimiter(relayLimits)
+	rm, err := rcmgr.NewResourceManager(limiter)
+	if err != nil {
+		log.Fatalf("Failed to create resource manager for relay: %v", err)
+	}
+
 	// Listen on TCP 4001, UDP 4002 (QUIC), and TCP 4004 (WebSocket)
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(
@@ -35,6 +44,7 @@ func main() {
 		),
 		libp2p.Identity(priv),
 		libp2p.EnableNATService(),
+		libp2p.ResourceManager(rm),
 	}
 
 	h, err := libp2p.New(opts...)

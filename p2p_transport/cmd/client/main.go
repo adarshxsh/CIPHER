@@ -49,6 +49,8 @@ func main() {
 	cancelID := flag.String("cancel", "", "ContentID to cancel and delete the transfer session")
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) for testing")
+	profileFlag := flag.String("profile", string(transport.ProfileClient), "Node resource profile (bootstrap, relay, client, default)")
+	limitConfigPath := flag.String("limits-config", "", "Path to custom resource limits JSON config file")
 
 	flag.Parse()
 
@@ -117,7 +119,16 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		*relayAddr,
+		*forceRelay,
+		transport.WithNodeProfile(transport.NodeProfile(*profileFlag)),
+		transport.WithLimitConfigFile(*limitConfigPath),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create client libp2p node: %v", err)
 	}

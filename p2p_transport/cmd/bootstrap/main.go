@@ -28,6 +28,8 @@ func main() {
 	)
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	profileFlag := flag.String("profile", string(transport.ProfileBootstrap), "Node resource profile (bootstrap, relay, client, default)")
+	limitConfigPath := flag.String("limits-config", "", "Path to custom resource limits JSON config file")
 
 	// parse the cmd line args passed
 	flag.Parse()
@@ -46,7 +48,16 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, "", false)
+	h, kdht, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		"",
+		false,
+		transport.WithNodeProfile(transport.NodeProfile(*profileFlag)),
+		transport.WithLimitConfigFile(*limitConfigPath),
+	)
 	if err != nil {
 		log.Fatalf(
 			"Failed to create bootstrap node: %v",

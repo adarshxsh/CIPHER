@@ -58,6 +58,8 @@ func main() {
 	bootstrapAddr := flag.String("bootstrap", "", "Bootstrap peer multiaddress")
 
 	identityPath := flag.String("identity", "", "Custom path to identity key file (optional)")
+	profileFlag := flag.String("profile", string(transport.ProfileDefault), "Node resource profile (bootstrap, relay, client, default)")
+	limitConfigPath := flag.String("limits-config", "", "Path to custom resource limits JSON config file")
 	throttle := flag.String("throttle", "", "Throttle speed (e.g., 2MB) per second")
 	corruptProb := flag.Float64("test-corrupt-prob", 0.0, "Probability (0.0 to 1.0) of sending a corrupt chunk for testing")
 	flag.Parse()
@@ -77,7 +79,16 @@ func main() {
 		log.Fatalf("Failed to load or create identity: %v", err)
 	}
 
-	h, kdht, err := transport.NewNode(ctx, *port, *wsPort, priv, *relayAddr, *forceRelay)
+	h, kdht, err := transport.NewNode(
+		ctx,
+		*port,
+		*wsPort,
+		priv,
+		*relayAddr,
+		*forceRelay,
+		transport.WithNodeProfile(transport.NodeProfile(*profileFlag)),
+		transport.WithLimitConfigFile(*limitConfigPath),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p node: %v", err)
 	}
