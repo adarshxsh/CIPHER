@@ -81,6 +81,8 @@ func ValidateMessagePayload(messageType MessageType, payload []byte) error {
 		return ValidateAckPayload(payload)
 	case MsgError:
 		return ValidateErrorPayload(payload)
+	case MsgClose:
+		return ValidateClosePayload(payload)
 	default:
 		return fmt.Errorf("message: %w: %d", ErrInvalidMessageType, messageType)
 	}
@@ -217,6 +219,13 @@ func ValidateErrorPayload(payload []byte) error {
 		)
 	}
 
+	return nil
+}
+
+func ValidateClosePayload(payload []byte) error {
+	if len(payload) > MaxErrorMessageSize {
+		return fmt.Errorf("close: payload exceeds maximum size: %d", len(payload))
+	}
 	return nil
 }
 

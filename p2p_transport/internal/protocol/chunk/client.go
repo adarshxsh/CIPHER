@@ -18,38 +18,96 @@ import (
 var ErrRemoteChunkNotFound = fmt.Errorf("remote error: chunk not found")
 
 type Client struct {
-	stream network.Stream
-	engine *engine.ContentEngine
-	digest core.Digest
+	stream    network.Stream
+	transport *transport.Transport
+	peerID    peer.ID
+	engine    *engine.ContentEngine
+	digest    core.Digest
+	closed    bool
 }
 
 // NewClient creates a new chunk client that communicates with a remote peer over the chunk transport protocol.
 func NewClient(ctx context.Context, t *transport.Transport, peerID peer.ID, eng *engine.ContentEngine) (*Client, error) {
-	stream, err := t.OpenStream(ctx, peerID, protocol.ChunkTransportProtocolID)
-	if err != nil {
+	c := &Client{
+		transport: t,
+		peerID:    peerID,
+		engine:    eng,
+		digest:    verifier.NewSHA256Digest(),
+	}
+	if err := c.reopenStream(ctx); err != nil {
 		return nil, err
 	}
-	return &Client{
-		stream: stream,
-		engine: eng,
-		digest: verifier.NewSHA256Digest(),
-	}, nil
+	return c, nil
+}
+
+func (c *Client) reopenStream(ctx context.Context) error {
+	if c.closed {
+		return fmt.Errorf("client is closed")
+	}
+	if c.stream != nil {
+		_ = c.stream.Close()
+		c.stream = nil
+	}
+	if c.transport == nil {
+		return fmt.Errorf("no transport available to reopen stream")
+	}
+	s, err := c.transport.OpenStream(ctx, c.peerID, protocol.ChunkTransportProtocolID)
+	if err != nil {
+		return err
+	}
+	c.stream = s
+	return nil
 }
 
 func (c *Client) Close() error {
-	return c.stream.Close()
+	c.closed = true
+	if c.stream != nil {
+		err := c.stream.Close()
+		c.stream = nil
+		return err
+	}
+	return nil
 }
 
 // Resolve requests the manifest for a given content ID from the remote peer and returns the raw manifest data.
 func (c *Client) Resolve(ctx context.Context, id core.ContentID) ([]byte, error) {
+	return c.resolveInternal(ctx, id, true)
+}
+
+func (c *Client) resolveInternal(ctx context.Context, id core.ContentID, allowRetry bool) ([]byte, error) {
+	if c.stream == nil {
+		if err := c.reopenStream(ctx); err != nil {
+			return nil, fmt.Errorf("failed to open stream: %w", err)
+		}
+	}
+
 	req := BuildRequestManifest(id)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.resolveInternal(ctx, id, false)
+			}
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_MANIFEST: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.resolveInternal(ctx, id, false)
+			}
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.Type == MsgClose {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.resolveInternal(ctx, id, false)
+			}
+		}
+		return nil, fmt.Errorf("stream closed by remote peer (MsgClose)")
 	}
 
 	if resp.Type == MsgError {
@@ -89,14 +147,43 @@ func (c *Client) Download(ctx context.Context, chunkIDs []core.ChunkID) error {
 // FetchChunk requests and reads a single chunk from the remote peer, and validates its integrity.
 // It DOES NOT store the chunk in the engine, nor does it handle retries or session state.
 func (c *Client) FetchChunk(ctx context.Context, chunkID core.ChunkID) (*core.Chunk, error) {
+	return c.fetchChunkInternal(ctx, chunkID, true)
+}
+
+func (c *Client) fetchChunkInternal(ctx context.Context, chunkID core.ChunkID, allowRetry bool) (*core.Chunk, error) {
+	if c.stream == nil {
+		if err := c.reopenStream(ctx); err != nil {
+			return nil, fmt.Errorf("failed to open stream: %w", err)
+		}
+	}
+
 	req := BuildRequestChunk(chunkID)
 	if err := WriteMessage(c.stream, req); err != nil {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.fetchChunkInternal(ctx, chunkID, false)
+			}
+		}
 		return nil, fmt.Errorf("failed to send REQUEST_CHUNK: %w", err)
 	}
 
 	resp, err := ReadMessage(c.stream)
 	if err != nil {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.fetchChunkInternal(ctx, chunkID, false)
+			}
+		}
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.Type == MsgClose {
+		if allowRetry {
+			if err := c.reopenStream(ctx); err == nil {
+				return c.fetchChunkInternal(ctx, chunkID, false)
+			}
+		}
+		return nil, fmt.Errorf("stream closed by remote peer (MsgClose)")
 	}
 
 	if resp.Type == MsgError {
