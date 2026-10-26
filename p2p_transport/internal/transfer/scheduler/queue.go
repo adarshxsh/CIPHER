@@ -1,9 +1,14 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
 	"sync"
+
 	"cipher/internal/content/core"
 )
+
+var ErrQueueClosed = errors.New("queue closed")
 
 type ChunkTask struct {
 	Index       int
@@ -13,35 +18,99 @@ type ChunkTask struct {
 }
 
 type ChunkQueue struct {
-	tasks []ChunkTask
-	mu    sync.Mutex
+	ch        chan ChunkTask
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func NewChunkQueue(tasks []ChunkTask) *ChunkQueue {
-	return &ChunkQueue{
-		tasks: tasks,
+	capacity := len(tasks)
+	if capacity < 100 {
+		capacity = 100
 	}
+	return NewChunkQueueWithCapacity(tasks, capacity)
+}
+
+func NewChunkQueueWithCapacity(tasks []ChunkTask, capacity int) *ChunkQueue {
+	if capacity < len(tasks) {
+		capacity = len(tasks)
+	}
+	if capacity < 1 {
+		capacity = 1
+	}
+
+	q := &ChunkQueue{
+		ch:     make(chan ChunkTask, capacity),
+		closed: make(chan struct{}),
+	}
+	for _, t := range tasks {
+		q.ch <- t
+	}
+	return q
 }
 
 func (q *ChunkQueue) Next() (ChunkTask, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.tasks) == 0 {
+	return q.NextWithContext(context.Background())
+}
+
+func (q *ChunkQueue) NextWithContext(ctx context.Context) (ChunkTask, bool) {
+	if err := ctx.Err(); err != nil {
 		return ChunkTask{}, false
 	}
-	task := q.tasks[0]
-	q.tasks = q.tasks[1:]
-	return task, true
+	select {
+	case task, ok := <-q.ch:
+		return task, ok
+	case <-q.closed:
+		select {
+		case task, ok := <-q.ch:
+			return task, ok
+		default:
+			return ChunkTask{}, false
+		}
+	case <-ctx.Done():
+		return ChunkTask{}, false
+	}
 }
 
 func (q *ChunkQueue) Push(task ChunkTask) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.tasks = append(q.tasks, task)
+	_ = q.PushWithContext(context.Background(), task)
+}
+
+func (q *ChunkQueue) PushWithContext(ctx context.Context, task ChunkTask) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-q.closed:
+		return ErrQueueClosed
+	default:
+	}
+
+	select {
+	case q.ch <- task:
+		return nil
+	case <-q.closed:
+		return ErrQueueClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (q *ChunkQueue) Close() {
+	q.closeOnce.Do(func() {
+		close(q.closed)
+	})
+}
+
+func (q *ChunkQueue) IsClosed() bool {
+	select {
+	case <-q.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (q *ChunkQueue) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.tasks)
+	return len(q.ch)
 }
