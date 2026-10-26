@@ -60,7 +60,7 @@ func NewNode(ctx context.Context, listenPort int, wsPort int, priv crypto.PrivKe
 		return nil, nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
 
-	setupNetworkMonitor(h)
+	setupNetworkMonitor(ctx, h)
 
 	kdht, err := discovery.NewDHT(h, dht.ModeServer) // Start DHT in server mode
 
@@ -78,14 +78,23 @@ func (t *holePunchTracer) Trace(evt *holepunch.Event) {
 	log.Printf("[DCUtR] Hole Punch Event: %s (Remote: %s)", evt.Type, evt.Remote)
 }
 
-func setupNetworkMonitor(h host.Host) {
+func setupNetworkMonitor(ctx context.Context, h host.Host) {
 	// Subscribe to reachability changes
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
 	if err == nil {
 		go func() {
-			for e := range sub.Out() {
-				evt := e.(event.EvtLocalReachabilityChanged)
-				log.Printf("[AutoNAT] Reachability changed to: %s", evt.Reachability.String())
+			defer sub.Close()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case e, ok := <-sub.Out():
+					if !ok {
+						return
+					}
+					evt := e.(event.EvtLocalReachabilityChanged)
+					log.Printf("[AutoNAT] Reachability changed to: %s", evt.Reachability.String())
+				}
 			}
 		}()
 	}
