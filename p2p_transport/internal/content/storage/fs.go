@@ -12,6 +12,13 @@ import (
 	"cipher/internal/content/core"
 )
 
+const (
+	// MaxChunkPayloadSize enforces a strict 2 MiB boundary for chunk payload reads.
+	MaxChunkPayloadSize int64 = 2 * 1024 * 1024
+	// MaxManifestSize enforces boundary for stored manifest bytes.
+	MaxManifestSize int64 = 2*1024*1024 - 3
+)
+
 // FSStorage implements core.ChunkSource and core.ChunkSink using local filesystem.
 type FSStorage struct {
 	baseDir string
@@ -94,24 +101,32 @@ func (s *FSStorage) GetChunk(ctx context.Context, id core.ChunkID) (*core.Chunk,
 	}
 	defer f.Close()
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat chunk file: %w", err)
+	}
+
+	headerSize := int64(binary.Size(core.ChunkHeader{}))
+	if info.Size() < headerSize {
+		return nil, fmt.Errorf("chunk file too small: %d bytes (header requires %d bytes)", info.Size(), headerSize)
+	}
+
+	payloadSize := info.Size() - headerSize
+	if payloadSize > MaxChunkPayloadSize {
+		return nil, fmt.Errorf("chunk payload size exceeds maximum limit (%d > %d)", payloadSize, MaxChunkPayloadSize)
+	}
+
 	chunk := &core.Chunk{}
 	if err := binary.Read(f, binary.LittleEndian, &chunk.Header); err != nil {
 		return nil, fmt.Errorf("failed to read chunk header: %w", err)
 	}
 
-	// Calculate data size from file info minus header size, or use chunk.Header.CipherSize
-	// Note: It's either PlainSize or CipherSize depending on if it's encrypted.
-	// But actually, we just read the rest of the file.
-	data, err := io.ReadAll(f)
-	if err != nil {
+	data := make([]byte, payloadSize)
+	if _, err := io.ReadFull(io.LimitReader(f, payloadSize), data); err != nil {
 		return nil, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validation: length of data should match either CipherSize or PlainSize
-	// (usually CipherSize since it's stored encrypted).
-	// We won't enforce strictly here since the Engine decryptor will validate it.
 	chunk.Data = data
-
 	return chunk, nil
 }
 
@@ -122,10 +137,27 @@ func (s *FSStorage) manifestPath(id core.ContentID) string {
 
 func (s *FSStorage) GetManifestBytes(ctx context.Context, id core.ContentID) ([]byte, error) {
 	path := s.manifestPath(id)
-	data, err := os.ReadFile(path)
+
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("manifest not found: %w", err)
 	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat manifest file: %w", err)
+	}
+
+	if info.Size() > MaxManifestSize {
+		return nil, fmt.Errorf("manifest size exceeds maximum limit (%d > %d)", info.Size(), MaxManifestSize)
+	}
+
+	data := make([]byte, info.Size())
+	if _, err := io.ReadFull(io.LimitReader(f, info.Size()), data); err != nil {
+		return nil, fmt.Errorf("failed to read manifest data: %w", err)
+	}
+
 	return data, nil
 }
 
