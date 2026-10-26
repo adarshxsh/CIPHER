@@ -122,7 +122,12 @@ func (h *StreamHandler) handleRequestChunk(s network.Stream, msg *Message) {
 		return
 	}
 	if ackMsg.Type == MsgError {
-		code, msgStr, _ := ParseError(ackMsg.Payload)
+		code, msgStr, err := ParseError(ackMsg.Payload)
+		if err != nil {
+			log.Printf("[Chunk Protocol] Invalid error message payload: %v", err)
+			s.Close()
+			return
+		}
 		log.Printf("[Chunk Protocol] Client reported error on chunk %x: [%d] %s", chunkID, code, msgStr)
 		return
 	}
