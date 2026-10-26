@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -78,7 +79,25 @@ func (h *StreamHandler) handleRequestManifest(s network.Stream, msg *Message) {
 		return
 	}
 
-	resp := BuildManifest(contentID, manifestData)
+	providerID := h.host.ID()
+	now := time.Now().Unix()
+	attestationData := FormatAttestationData(contentID, providerID, now)
+
+	privKey := h.host.Peerstore().PrivKey(providerID)
+	if privKey == nil {
+		log.Printf("[Chunk Protocol] Private key for host %s not found in peerstore", providerID)
+		WriteMessage(s, BuildError(ErrInternal, "failed to sign manifest attestation"))
+		return
+	}
+
+	sig, err := privKey.Sign(attestationData)
+	if err != nil {
+		log.Printf("[Chunk Protocol] Error signing manifest attestation: %v", err)
+		WriteMessage(s, BuildError(ErrInternal, "failed to sign manifest attestation"))
+		return
+	}
+
+	resp := BuildManifest(contentID, manifestData, now, providerID, sig)
 	if err := WriteMessage(s, resp); err != nil {
 		log.Printf("[Chunk Protocol] Error writing MANIFEST response: %v", err)
 	}

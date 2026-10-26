@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/libp2p/go-libp2p/core/peer"
+
 	"cipher/internal/content/core"
 )
 
@@ -117,22 +119,93 @@ func ParseRequestManifest(payload []byte) (core.ContentID, error) {
 	return id, nil
 }
 
-func BuildManifest(id core.ContentID, data []byte) *Message {
-	payload := append(id[:], data...)
+type ManifestResponse struct {
+	ContentID  core.ContentID
+	Timestamp  int64
+	ProviderID peer.ID
+	Signature  []byte
+	Data       []byte
+}
+
+func FormatAttestationData(id core.ContentID, providerID peer.ID, timestamp int64) []byte {
+	buf := new(bytes.Buffer)
+	buf.Write(id[:])
+	buf.WriteString(providerID.String())
+	binary.Write(buf, binary.LittleEndian, timestamp)
+	return buf.Bytes()
+}
+
+func BuildManifest(id core.ContentID, data []byte, timestamp int64, providerID peer.ID, signature []byte) *Message {
+	buf := new(bytes.Buffer)
+	buf.Write(id[:])
+	binary.Write(buf, binary.LittleEndian, timestamp)
+	peerIDStr := providerID.String()
+	binary.Write(buf, binary.LittleEndian, uint16(len(peerIDStr)))
+	buf.WriteString(peerIDStr)
+	binary.Write(buf, binary.LittleEndian, uint16(len(signature)))
+	buf.Write(signature)
+	buf.Write(data)
 	return &Message{
 		Version: CurrentMessageVersion,
 		Type:    MsgManifest,
-		Payload: payload,
+		Payload: buf.Bytes(),
 	}
 }
 
-func ParseManifest(payload []byte) (core.ContentID, []byte, error) {
-	var id core.ContentID
-	if len(payload) < 32 {
-		return id, nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
+func ParseManifest(payload []byte) (*ManifestResponse, error) {
+	minHeaderLen := 32 + 8 + 2 + 2 // 44 bytes
+	if len(payload) < minHeaderLen {
+		return nil, fmt.Errorf("invalid payload length for MANIFEST: %d", len(payload))
 	}
-	copy(id[:], payload[:32])
-	return id, payload[32:], nil
+
+	resp := &ManifestResponse{}
+	copy(resp.ContentID[:], payload[:32])
+
+	buf := bytes.NewReader(payload[32:])
+	if err := binary.Read(buf, binary.LittleEndian, &resp.Timestamp); err != nil {
+		return nil, fmt.Errorf("failed to read timestamp: %w", err)
+	}
+
+	var peerIDLen uint16
+	if err := binary.Read(buf, binary.LittleEndian, &peerIDLen); err != nil {
+		return nil, fmt.Errorf("failed to read peer ID length: %w", err)
+	}
+
+	if buf.Len() < int(peerIDLen) {
+		return nil, fmt.Errorf("payload truncated reading peer ID")
+	}
+	peerIDBytes := make([]byte, peerIDLen)
+	if _, err := buf.Read(peerIDBytes); err != nil {
+		return nil, fmt.Errorf("failed to read peer ID: %w", err)
+	}
+	pIDStr := string(peerIDBytes)
+	if pIDStr != "" {
+		pID, err := peer.Decode(pIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid peer ID in MANIFEST: %w", err)
+		}
+		resp.ProviderID = pID
+	}
+
+	var sigLen uint16
+	if err := binary.Read(buf, binary.LittleEndian, &sigLen); err != nil {
+		return nil, fmt.Errorf("failed to read signature length: %w", err)
+	}
+
+	if buf.Len() < int(sigLen) {
+		return nil, fmt.Errorf("payload truncated reading signature")
+	}
+	resp.Signature = make([]byte, sigLen)
+	if _, err := buf.Read(resp.Signature); err != nil {
+		return nil, fmt.Errorf("failed to read signature: %w", err)
+	}
+
+	resp.Data = make([]byte, buf.Len())
+	if _, err := buf.Read(resp.Data); err != nil {
+		return nil, fmt.Errorf("failed to read manifest data: %w", err)
+	}
+
+	return resp, nil
 }
 
 func BuildRequestChunk(id core.ChunkID) *Message {
