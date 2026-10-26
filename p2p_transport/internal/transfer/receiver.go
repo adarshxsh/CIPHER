@@ -20,7 +20,11 @@ import (
 func Receive(s network.Stream) error {
 	defer s.Close()
 
-	log.Printf("Incoming stream from %s. Preparing to receive...", s.Conn().RemotePeer())
+	remotePeer := "unknown"
+	if s.Conn() != nil {
+		remotePeer = s.Conn().RemotePeer().String()
+	}
+	log.Printf("Incoming stream from %s. Preparing to receive...", remotePeer)
 
 	// 1. Read Header
 	var header Header
@@ -61,35 +65,49 @@ func Receive(s network.Stream) error {
 
 	received, err := io.Copy(multiWriter, pr)
 	if err != nil {
+		outFile.Close()
+		os.Remove(outPath)
 		return fmt.Errorf("failed to receive file data: %w", err)
 	}
 
 	if uint64(received) != header.FileSize {
+		outFile.Close()
+		os.Remove(outPath)
 		return fmt.Errorf("received size mismatch: expected %d, got %d", header.FileSize, received)
+	}
+
+	// 4. Read Trailing 32-Byte SHA-256 Checksum Frame
+	var trailingChecksum [32]byte
+	if _, err := io.ReadFull(s, trailingChecksum[:]); err != nil {
+		outFile.Close()
+		os.Remove(outPath)
+		return fmt.Errorf("failed to read trailing checksum: %w", err)
 	}
 
 	duration := time.Since(startTime)
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
 
-	// 4. Verify Integrity
+	// 5. Verify Integrity
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
-	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
-		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+	if !bytes.Equal(computedChecksum[:], trailingChecksum[:]) {
+		outFile.Close()
+		os.Remove(outPath)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", trailingChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
 	connType := "Direct"
-	if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		connType = "Relay"
+	if s.Conn() != nil && s.Conn().RemoteMultiaddr() != nil {
+		if _, err := s.Conn().RemoteMultiaddr().ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+			connType = "Relay"
+		}
 	}
 
 	log.Printf("\nTransfer Complete (Receiver)")
 	log.Printf("Path       : %s", connType)
-	log.Printf("Integrity  : %s", integrityStr)
+	log.Printf("Integrity  : VERIFIED")
 	log.Printf("Duration   : %s", duration.Round(time.Millisecond))
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
