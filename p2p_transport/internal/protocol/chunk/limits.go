@@ -76,8 +76,8 @@ const (
 	MaxProtocolErrorSize = MaxErrorMessageSize + 128
 
 	// Manifest responses can be larger than request payloads but remain bound
-	// by the frame cap.
-	MaxManifestSize = MaxMessagePayloadSize
+	// by protocol limits (64KB).
+	MaxManifestSize = 64 * 1024
 )
 
 const (

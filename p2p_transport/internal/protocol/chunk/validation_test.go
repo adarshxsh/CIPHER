@@ -129,3 +129,46 @@ func TestValidateResponseForRequestHelpers(t *testing.T) {
 		t.Fatalf("expected ErrChunkMismatch, got %v", err)
 	}
 }
+
+func TestValidateManifestPayload_EnforcesBounds(t *testing.T) {
+	// 1. Under minimum (less than ContentIDSize)
+	shortPayload := make([]byte, chunk.ContentIDSize-1)
+	err := chunk.ValidateManifestPayload(shortPayload)
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) {
+		t.Fatalf("expected ErrInvalidManifestPayload for short payload, got %v", err)
+	}
+
+	// 2. Minimum valid size (32 bytes)
+	minPayload := make([]byte, chunk.ContentIDSize)
+	if err := chunk.ValidateManifestPayload(minPayload); err != nil {
+		t.Fatalf("expected valid payload of 32 bytes to pass, got %v", err)
+	}
+
+	// 3. Exactly MaxManifestSize (64KB)
+	maxPayload := make([]byte, chunk.MaxManifestSize)
+	if err := chunk.ValidateManifestPayload(maxPayload); err != nil {
+		t.Fatalf("expected valid payload of MaxManifestSize to pass, got %v", err)
+	}
+
+	// 4. Over MaxManifestSize (64KB + 1)
+	oversizedPayload := make([]byte, chunk.MaxManifestSize+1)
+	err = chunk.ValidateManifestPayload(oversizedPayload)
+	if err == nil {
+		t.Fatalf("expected error for payload > MaxManifestSize, got nil")
+	}
+	if !errors.Is(err, chunk.ErrInvalidManifestPayload) && !errors.Is(err, chunk.ErrInvalidPayloadLength) {
+		t.Fatalf("expected ErrInvalidManifestPayload or ErrInvalidPayloadLength, got %v", err)
+	}
+
+	// 5. Check ValidateMessagePayload for MsgManifest
+	msg := &chunk.Message{
+		Version: chunk.CurrentMessageVersion,
+		Type:    chunk.MsgManifest,
+		Payload: oversizedPayload,
+	}
+	err = chunk.ValidateMessage(msg)
+	if err == nil {
+		t.Fatalf("expected error for ValidateMessage on oversized manifest, got nil")
+	}
+}
+
