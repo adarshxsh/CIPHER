@@ -72,13 +72,23 @@ func Receive(s network.Stream) error {
 	throughputMB := (float64(received) / (1024 * 1024)) / duration.Seconds()
 
 	// 4. Verify Integrity
+	var expectedChecksum [32]byte
+	if header.Checksum != [32]byte{} {
+		expectedChecksum = header.Checksum
+	} else {
+		if _, err := io.ReadFull(s, expectedChecksum[:]); err != nil {
+			return fmt.Errorf("failed to read trailing checksum: %w", err)
+		}
+	}
+
 	var computedChecksum [32]byte
 	copy(computedChecksum[:], hasher.Sum(nil))
 
 	integrityStr := "VERIFIED"
-	if !bytes.Equal(computedChecksum[:], header.Checksum[:]) {
+	if !bytes.Equal(computedChecksum[:], expectedChecksum[:]) {
 		integrityStr = "FAILED"
-		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", header.Checksum, computedChecksum)
+		log.Printf("[WARNING] Checksum mismatch! Expected %x, got %x", expectedChecksum, computedChecksum)
+		return fmt.Errorf("checksum mismatch: expected %x, got %x", expectedChecksum, computedChecksum)
 	}
 
 	// Determine Connection Type
