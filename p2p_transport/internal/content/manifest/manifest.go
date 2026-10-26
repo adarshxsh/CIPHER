@@ -1,8 +1,10 @@
 package manifest
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	
+	"fmt"
+
 	"cipher/internal/content/core"
 )
 
@@ -52,4 +54,28 @@ func Deserialize(data []byte) (*Manifest, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// ComputeDigest computes the canonical SHA-256 digest ContentID of the manifest
+// with the Descriptor.ID field normalized to zero bytes.
+func (m *Manifest) ComputeDigest() core.ContentID {
+	mCopy := *m
+	mCopy.Descriptor.ID = core.ContentID{}
+	data, err := json.Marshal(&mCopy)
+	if err != nil {
+		return core.ContentID{}
+	}
+	hash := sha256.Sum256(data)
+	var id core.ContentID
+	copy(id[:], hash[:])
+	return id
+}
+
+// ComputeDigestFromBytes deserializes the manifest payload and computes its canonical SHA-256 digest ContentID.
+func ComputeDigestFromBytes(payload []byte) (core.ContentID, error) {
+	m, err := Deserialize(payload)
+	if err != nil {
+		return core.ContentID{}, fmt.Errorf("failed to deserialize manifest: %w", err)
+	}
+	return m.ComputeDigest(), nil
 }
