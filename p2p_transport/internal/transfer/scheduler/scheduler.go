@@ -22,6 +22,7 @@ type Scheduler struct {
 	Transport   *transport.Transport
 	Engine      *engine.ContentEngine
 	MaxAttempts int
+	Reputation  *ReputationManager
 }
 
 func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int) *Scheduler {
@@ -29,25 +30,49 @@ func NewScheduler(t *transport.Transport, eng *engine.ContentEngine, maxAttempts
 		Transport:   t,
 		Engine:      eng,
 		MaxAttempts: maxAttempts,
+		Reputation:  NewReputationManager(),
+	}
+}
+
+func NewSchedulerWithReputation(t *transport.Transport, eng *engine.ContentEngine, maxAttempts int, rep *ReputationManager) *Scheduler {
+	if rep == nil {
+		rep = NewReputationManager()
+	}
+	return &Scheduler{
+		Transport:   t,
+		Engine:      eng,
+		MaxAttempts: maxAttempts,
+		Reputation:  rep,
 	}
 }
 
 func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source, completions chan<- WorkerResult) error {
 	queue := NewChunkQueue(tasks)
 	results := make(chan WorkerResult, len(sources)*2)
+
+	if s.Reputation == nil {
+		s.Reputation = NewReputationManager()
+	}
 	
-	// Start workers
+	// Start workers for non-blacklisted sources
 	activeWorkers := 0
 	for _, source := range sources {
+		peerIDStr := source.PeerID.String()
+		if s.Reputation.IsBlacklisted(peerIDStr) {
+			log.Printf("[Scheduler] Skipping blacklisted source %s at setup", peerIDStr)
+			continue
+		}
+
 		client, err := chunk.NewClient(ctx, s.Transport, source.PeerID, s.Engine)
 		if err != nil {
 			log.Printf("[Scheduler] Warning: Failed to connect to source %s: %v", source.PeerID, err)
+			s.Reputation.RecordTimeout(peerIDStr)
 			continue
 		}
 		activeWorkers++
 		go func(src Source, c *chunk.Client) {
 			defer c.Close()
-			runWorker(ctx, src, c, s.Engine, queue, results)
+			runWorker(ctx, src, c, s.Engine, queue, results, s.Reputation)
 			results <- WorkerResult{Error: fmt.Errorf("worker_done")} // Special signal
 		}(source, client)
 	}
@@ -67,6 +92,10 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				if res.Error.Error() == "worker_done" {
 					activeWorkers--
 					continue
+				}
+
+				if res.PeerID != "" {
+					s.Reputation.RecordFailure(res.PeerID, res.Error)
 				}
 				
 				// If provider returned ErrChunkNotFound, this is an expected candidate miss in a partial-replica CDN
@@ -92,6 +121,9 @@ func (s *Scheduler) Run(ctx context.Context, tasks []ChunkTask, sources []Source
 				}
 			} else {
 				// Success
+				if res.PeerID != "" {
+					s.Reputation.RecordSuccess(res.PeerID)
+				}
 				completions <- res
 				pendingTasks--
 			}
