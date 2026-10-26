@@ -31,7 +31,10 @@ func main() {
 	config := core.EngineConfig{ChunkSize: 256 * 1024} // 256KB chunks for manual testing
 	enc := crypto.NewChaCha20Encryptor()
 	dig := verifier.NewSHA256Digest()
-	keys := engine.NewLocalKeyProvider()
+	keys, err := engine.NewEncryptedFileKeyProvider("")
+	if err != nil {
+		log.Fatalf("Failed to initialize encrypted key store: %v", err)
+	}
 
 	storeDir := "./test_files/content_store"
 	if err := storage.NewFSStorage(storeDir); err != nil {
