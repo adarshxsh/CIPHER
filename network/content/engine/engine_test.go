@@ -1,0 +1,155 @@
+package engine
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"math/rand"
+	"os"
+	"runtime"
+	"testing"
+	"time"
+
+	"cipher/network/content/core"
+	"cipher/network/content/crypto"
+	"cipher/network/content/manifest"
+	"cipher/network/content/storage"
+	"cipher/network/content/verifier"
+)
+
+func TestContentEngine_EndToEnd(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 32 * 1024, // 32KB
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create random data larger than one chunk
+	originalData := make([]byte, 100*1024+500) // ~100.5 KB
+	rand.Seed(time.Now().UnixNano())
+	rand.Read(originalData)
+
+	ctx := context.Background()
+
+	// Ingest
+	reader := bytes.NewReader(originalData)
+	m, err := eng.Ingest(ctx, reader, manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Verify Manifest
+	if m.Descriptor.Size != uint64(len(originalData)) {
+		t.Errorf("manifest size %d != expected %d", m.Descriptor.Size, len(originalData))
+	}
+
+	expectedChunks := (len(originalData) + int(config.ChunkSize) - 1) / int(config.ChunkSize)
+	if len(m.ChunkIDs) != expectedChunks {
+		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
+	}
+
+	// Reassemble
+	var outBuf bytes.Buffer
+	if err := eng.Reassemble(ctx, m, &outBuf); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	if !bytes.Equal(originalData, outBuf.Bytes()) {
+		t.Errorf("reassembled data does not match original data")
+	}
+}
+
+type errWriter struct{}
+
+func (w *errWriter) Write(p []byte) (n int, err error) {
+	return 0, os.ErrPermission
+}
+
+func TestContentEngine_ReassembleWriteError(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	data := make([]byte, 50*1024)
+	ctx := context.Background()
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	err = eng.Reassemble(ctx, m, &errWriter{})
+	if err == nil {
+		t.Fatalf("expected error on write failure, got nil")
+	}
+}
+
+func TestContentEngine_ReassembleMemoryBounded(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-mem-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	payloadSize := 10 * 1024 * 1024 // 10MB across ~320 chunks
+	data := make([]byte, payloadSize)
+	rand.Read(data)
+
+	ctx := context.Background()
+	m, err := eng.Ingest(ctx, bytes.NewReader(data), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	runtime.GC()
+	var mBefore runtime.MemStats
+	runtime.ReadMemStats(&mBefore)
+
+	if err := eng.Reassemble(ctx, m, io.Discard); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	runtime.GC()
+	var mAfter runtime.MemStats
+	runtime.ReadMemStats(&mAfter)
+
+	t.Logf("HeapAlloc before: %d, after: %d", mBefore.HeapAlloc, mAfter.HeapAlloc)
+}
