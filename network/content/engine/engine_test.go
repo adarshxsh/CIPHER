@@ -1,0 +1,144 @@
+package engine
+
+import (
+	"bytes"
+	"context"
+	"math/rand"
+	"os"
+	"testing"
+	"time"
+
+	"cipher/network/content/core"
+	"cipher/network/content/crypto"
+	"cipher/network/content/manifest"
+	"cipher/network/content/storage"
+	"cipher/network/content/verifier"
+)
+
+func TestContentEngine_EndToEnd(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{
+		ChunkSize: 32 * 1024, // 32KB
+	}
+
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create random data larger than one chunk
+	originalData := make([]byte, 100*1024+500) // ~100.5 KB
+	rand.Seed(time.Now().UnixNano())
+	rand.Read(originalData)
+
+	ctx := context.Background()
+
+	// Ingest
+	reader := bytes.NewReader(originalData)
+	m, err := eng.Ingest(ctx, reader, manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Verify Manifest
+	if m.Descriptor.Size != uint64(len(originalData)) {
+		t.Errorf("manifest size %d != expected %d", m.Descriptor.Size, len(originalData))
+	}
+
+	expectedChunks := (len(originalData) + int(config.ChunkSize) - 1) / int(config.ChunkSize)
+	if len(m.ChunkIDs) != expectedChunks {
+		t.Errorf("manifest chunks %d != expected %d", len(m.ChunkIDs), expectedChunks)
+	}
+
+	// Reassemble
+	var outBuf bytes.Buffer
+	if err := eng.Reassemble(ctx, m, &outBuf); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	if !bytes.Equal(originalData, outBuf.Bytes()) {
+		t.Errorf("reassembled data does not match original data")
+	}
+}
+
+type chunkWriter struct {
+	writeCount int
+	totalBytes int
+	written    []byte
+}
+
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	w.writeCount++
+	w.totalBytes += len(p)
+	w.written = append(w.written, p...)
+	return len(p), nil
+}
+
+func TestContentEngine_ReassembleStreaming(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "content-engine-stream-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := core.EngineConfig{ChunkSize: 32 * 1024}
+	enc := crypto.NewChaCha20Encryptor()
+	dig := verifier.NewSHA256Digest()
+	keys := NewLocalKeyProvider()
+
+	if err := storage.NewFSStorage(tmpDir); err != nil {
+		t.Fatalf("failed to init storage: %v", err)
+	}
+	store := storage.NewFSStore(tmpDir)
+
+	eng := NewContentEngine(config, enc, dig, store, store, keys, store)
+
+	// Create data that spans 3 chunks
+	originalData := make([]byte, 80*1024) // 80 KB -> 32KB + 32KB + 16KB
+	rand.Seed(time.Now().UnixNano())
+	rand.Read(originalData)
+
+	ctx := context.Background()
+
+	m, err := eng.Ingest(ctx, bytes.NewReader(originalData), manifest.TypeFile)
+	if err != nil {
+		t.Fatalf("failed to ingest: %v", err)
+	}
+
+	// Test nil manifest & nil writer errors
+	if err := eng.Reassemble(ctx, nil, &bytes.Buffer{}); err == nil {
+		t.Error("expected error for nil manifest")
+	}
+	if err := eng.Reassemble(ctx, m, nil); err == nil {
+		t.Error("expected error for nil writer")
+	}
+
+	// Reassemble with streaming writer
+	cw := &chunkWriter{}
+	if err := eng.Reassemble(ctx, m, cw); err != nil {
+		t.Fatalf("failed to reassemble: %v", err)
+	}
+
+	if cw.writeCount != len(m.ChunkIDs) {
+		t.Errorf("expected %d write calls (one per chunk), got %d", len(m.ChunkIDs), cw.writeCount)
+	}
+
+	if cw.totalBytes != len(originalData) {
+		t.Errorf("expected %d total bytes written, got %d", len(originalData), cw.totalBytes)
+	}
+
+	if !bytes.Equal(originalData, cw.written) {
+		t.Errorf("reassembled streaming data does not match original data")
+	}
+}
