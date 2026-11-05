@@ -1,0 +1,202 @@
+package discovery
+
+import (
+	"cipher/network/content/core"
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	// DefaultMaxRepublishWorkers is the default number of concurrent workers used to republish manifests.
+	DefaultMaxRepublishWorkers = 10
+	// DefaultRepublishItemTimeout is the default per-item timeout for individual DHT provider announcements.
+	DefaultRepublishItemTimeout = 15 * time.Second
+)
+
+// StorageProviderNamespace is a well-known identifier used by nodes offering storage capacity
+// over the /cipher/push/1.0.0 protocol to register on the Kademlia DHT.
+var StorageProviderNamespace = core.ContentID{
+	0x43, 0x49, 0x50, 0x48, 0x45, 0x52, 0x5f, 0x53, // "CIPHER_S"
+	0x54, 0x4f, 0x52, 0x41, 0x47, 0x45, 0x5f, 0x50, // "TORAGE_P"
+	0x52, 0x4f, 0x56, 0x49, 0x44, 0x45, 0x52, 0x5f, // "ROVIDER_"
+	0x53, 0x45, 0x52, 0x56, 0x49, 0x43, 0x45, 0x01, // "SERVICE\x01"
+}
+
+// Provide announces to the DHT that this node can provide the content identified by the given ContentID.
+func Provide(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID) error {
+
+	cid, err := contentIDToCID(id)
+	if err != nil {
+		return fmt.Errorf("failed to convert ContentID to CID: %w", err)
+	}
+
+	if err := kdht.Provide(ctx, cid, true); err != nil {
+		return fmt.Errorf("failed to provide content: %w", err)
+	}
+
+	return nil
+}
+
+// RegisterStorageProvider announces to the DHT that this node is an active storage provider.
+func RegisterStorageProvider(ctx context.Context, kdht *dht.IpfsDHT) error {
+	return Provide(ctx, kdht, StorageProviderNamespace)
+}
+
+// StartStorageProviderHeartbeat periodically re-announces the storage provider service to the DHT.
+func StartStorageProviderHeartbeat(ctx context.Context, kdht *dht.IpfsDHT, interval time.Duration) {
+	go func() {
+		// Initial announcement
+		if err := RegisterStorageProvider(ctx, kdht); err != nil {
+			fmt.Printf("[DHT] Warning: Failed to register storage provider on DHT: %v\n", err)
+		} else {
+			fmt.Printf("[DHT] Successfully registered storage provider service on DHT\n")
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := RegisterStorageProvider(ctx, kdht); err != nil {
+					fmt.Printf("[DHT] Warning: Failed to refresh storage provider registration: %v\n", err)
+				}
+			}
+		}
+	}()
+}
+
+// FindStorageProviders queries the DHT for active peers offering storage provider services.
+func FindStorageProviders(ctx context.Context, kdht *dht.IpfsDHT, limit int) ([]peer.AddrInfo, error) {
+	return FindProviders(ctx, kdht, StorageProviderNamespace, limit)
+}
+
+// FindProviders searches the DHT for peers that can provide the content identified by the given ContentID.
+func FindProviders(ctx context.Context, kdht *dht.IpfsDHT, id core.ContentID, PROVIDER_LIMIT int) ([]peer.AddrInfo, error) {
+
+	if PROVIDER_LIMIT <= 0 {
+		return nil, fmt.Errorf("provider limit must be greater than zero")
+	}
+
+	cid, err := contentIDToCID(id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert ContentID to CID: %w", err)
+	}
+
+	providerCh := kdht.FindProvidersAsync(ctx, cid, PROVIDER_LIMIT)
+
+	var providers []peer.AddrInfo
+
+	for p := range providerCh {
+		providers = append(providers, p)
+
+		if len(providers) >= PROVIDER_LIMIT {
+			break
+		}
+	}
+
+	return providers, nil
+
+}
+
+// StartRepublisher begins a background loop that re-announces all locally available manifests to the DHT.
+func StartRepublisher(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore, interval time.Duration) {
+	var running atomic.Bool
+
+	run := func() {
+		if !running.CompareAndSwap(false, true) {
+			fmt.Printf("[DHT Republisher] Republish run already in progress, skipping tick\n")
+			return
+		}
+		defer running.Store(false)
+
+		republishAll(ctx, kdht, store)
+	}
+
+	go func() {
+		// Republish immediately on startup
+		run()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
+}
+
+func republishAll(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore) {
+	republishAllBounded(ctx, kdht, store, DefaultMaxRepublishWorkers, DefaultRepublishItemTimeout)
+}
+
+func republishAllBounded(ctx context.Context, kdht *dht.IpfsDHT, store core.ManifestStore, workers int, itemTimeout time.Duration) {
+	if workers <= 0 {
+		workers = DefaultMaxRepublishWorkers
+	}
+	if itemTimeout <= 0 {
+		itemTimeout = DefaultRepublishItemTimeout
+	}
+
+	manifests, err := store.ListManifests(ctx)
+	if err != nil {
+		fmt.Printf("[DHT Republisher] Failed to list manifests: %v\n", err)
+		return
+	}
+
+	if len(manifests) == 0 {
+		return
+	}
+
+	fmt.Printf("[DHT Republisher] Re-announcing %d manifests...\n", len(manifests))
+
+	jobs := make(chan core.ContentID, len(manifests))
+	for _, id := range manifests {
+		jobs <- id
+	}
+	close(jobs)
+
+	numWorkers := workers
+	if len(manifests) < numWorkers {
+		numWorkers = len(manifests)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				itemCtx, itemCancel := context.WithTimeout(ctx, itemTimeout)
+				err := Provide(itemCtx, kdht, id)
+				itemCancel()
+
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					fmt.Printf("[DHT Republisher] Failed to provide %x: %v\n", id, err)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+}
