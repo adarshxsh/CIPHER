@@ -313,7 +313,8 @@ func main() {
 			fmt.Sprintf("%.1f KB", float64(totalReplicas*32)),
 			"SATISFIED [✓]",
 		)
-		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+\n")
+		fmt.Println("+------------------------------------+---------------+-------------+---------------+----------------------+")
+		fmt.Println()
 
 		if *challengeProviders && len(targetPeers) > 0 {
 			log.Sub("Availability").Info("Starting Availability challenge engine (Interval: %v, Rounds: %d, Continuous Loop: %t)...",
