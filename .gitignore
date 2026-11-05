@@ -1,21 +1,48 @@
+# Binaries
 bin/
-test_files/
-downloads/
-# Manual test files
-content_store/
+
+# OS Artifacts
+.DS_Store
+
+# Temporary Test Data
+*.bin
+*.dat
+*.log
+*.tmp
+*.key
+*.mp4
+my_file.txt
 sample.txt
 restored.txt
 test_manifest.json
+
+# Storage Directories
+*store*
+store/
+store_*/
+p1_store/
+p2_store/
+p3_store/
+content_store/
+client_store/
 test_files/
-*.mp4
-
-# Test Artifacts
-.gocache/
-store*
+downloads/
 .finalStore
-*.bin
-*.log
-run_*.sh
-temp
+temp/
 
-my_file.txt
+# Generated build and test output
+build/
+dist/
+out/
+coverage/
+challenge-coverage*
+
+# Common dependency caches
+node_modules/
+target/
+.gocache/
+cache/
+
+# Test completion signals
+.*_done
+
