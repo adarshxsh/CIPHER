@@ -1,7 +1,7 @@
 package discovery
 
 import (
-	"cipher/internal/content/core"
+	"cipher/network/content/core"
 	"context"
 	"testing"
 	"time"
