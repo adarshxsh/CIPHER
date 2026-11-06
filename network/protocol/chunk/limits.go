@@ -1,5 +1,7 @@
 package chunk
 
+import "time"
+
 const (
 	// ProtocolVersion identifies the current chunk protocol format.
 	ProtocolVersion uint8 = 1
@@ -90,6 +92,12 @@ const (
 	MaxTransactionsPerStream = 1
 	MaxMessagesPerStream     = 4
 )
+
+// StreamTimeout bounds the lifetime of one chunk-protocol stream. A stream
+// carries a single transaction, so this is the budget for one request, its
+// response and the trailing ACK/TICKET. A peer that stalls past it is cut off
+// instead of pinning a handler goroutine and its buffers forever.
+const StreamTimeout = 30 * time.Second
 
 const (
 	// MaxSupportedChunkCount prevents absurd chunk indexes and

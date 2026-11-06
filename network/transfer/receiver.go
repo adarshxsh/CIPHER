@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -24,12 +25,19 @@ func Receive(s network.Stream) error {
 
 	// 1. Read Header
 	var header Header
-	if err := header.ReadFrom(s); err != nil {
+	if err := header.Decode(s); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
 	if header.Version != ProtocolVersion1 || header.Type != MsgTypeFileTransfer {
 		return fmt.Errorf("unsupported protocol version (%d) or message type (%d)", header.Version, header.Type)
+	}
+
+	// The filename comes from the remote peer. Only a bare file name is
+	// accepted; "../x", "/etc/x" or "a/b" would let the sender write outside
+	// the downloads directory.
+	if !isSafeFilename(header.Filename) {
+		return fmt.Errorf("rejected unsafe filename %q", header.Filename)
 	}
 
 	// 2. Setup Downloads Directory
@@ -39,7 +47,7 @@ func Receive(s network.Stream) error {
 	}
 
 	outPath := filepath.Join(downloadsDir, header.Filename)
-	log.Printf("Receiving: %s (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
+	log.Printf("Receiving: %q (%.2f MB) into %s", header.Filename, float64(header.FileSize)/(1024*1024), outPath)
 
 	outFile, err := os.Create(outPath)
 	if err != nil {
@@ -94,4 +102,15 @@ func Receive(s network.Stream) error {
 	log.Printf("Throughput : %.2f MB/s", throughputMB)
 
 	return nil
+}
+
+// isSafeFilename reports whether name is a single, local path element.
+func isSafeFilename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) {
+		return false
+	}
+	return filepath.IsLocal(name) && filepath.Base(name) == name
 }

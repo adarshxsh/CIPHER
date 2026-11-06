@@ -27,8 +27,8 @@ type Header struct {
 	Checksum [32]byte
 }
 
-// WriteTo encodes and writes the header to the given writer.
-func (h *Header) WriteTo(w io.Writer) error {
+// Encode writes the header to w in the wire format above.
+func (h *Header) Encode(w io.Writer) error {
 	// 1. Write Protocol Version
 	if err := binary.Write(w, binary.BigEndian, h.Version); err != nil {
 		return fmt.Errorf("failed to write version: %w", err)
@@ -64,8 +64,8 @@ func (h *Header) WriteTo(w io.Writer) error {
 	return nil
 }
 
-// ReadFrom decodes and reads the header from the given reader.
-func (h *Header) ReadFrom(r io.Reader) error {
+// Decode reads a header in the wire format above from r.
+func (h *Header) Decode(r io.Reader) error {
 	// 1. Read Protocol Version
 	if err := binary.Read(r, binary.BigEndian, &h.Version); err != nil {
 		return fmt.Errorf("failed to read version: %w", err)
