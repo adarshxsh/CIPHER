@@ -275,3 +275,21 @@ func ReadFramePayload(
 
 	return payload, nil
 }
+
+// ReadValidatedMessage reads one frame with DecodeFrame, so the payload is
+// only allocated after its declared size passed the per-type limit, and then
+// runs the structural payload checks for that message type.
+func ReadValidatedMessage(r io.Reader) (*Message, error) {
+	frame, err := DecodeFrame(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateMessagePayload(frame.MessageType, frame.Payload); err != nil {
+		return nil, err
+	}
+	return &Message{
+		Version: frame.Version,
+		Type:    frame.MessageType,
+		Payload: frame.Payload,
+	}, nil
+}

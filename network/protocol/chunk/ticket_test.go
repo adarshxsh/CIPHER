@@ -242,7 +242,7 @@ func TestChunkProtocol_TicketPayment_RejectedInvalidSignature(t *testing.T) {
 	// Give handler a moment to process the rejected ticket and terminate stream
 	time.Sleep(30 * time.Millisecond)
 
-	// Subsequent chunk fetch must fail because provider closed the stream on ticket rejection
+	// Subsequent chunk fetch must fail: the provider refuses a peer whose ticket it rejected
 	_, err = client.FetchChunk(ctx, m.ChunkIDs[1])
 	if err == nil {
 		t.Fatal("Expected error on subsequent chunk fetch after forged ticket, got nil")
